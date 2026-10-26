@@ -568,7 +568,7 @@ impl Pdf {
                 let old = wd.get(b"F").and_then(Object::as_i64).unwrap_or(4);
                 wd.set("F", (old & !(2 | 4 | 32)) | flags);
                 if f.kind == "Btn" && f.flags & 65536 != 0 {
-                    buttons::project(&mut doc, &icon_source, &fields, w, &rect, s, &face, font)?;
+                    buttons::project(&mut doc, &icon_source, &fields, w, &rect, s, (&face, font))?;
                     continue;
                 }
                 if !changed {

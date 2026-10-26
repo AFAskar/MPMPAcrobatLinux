@@ -8,9 +8,9 @@ pub(super) fn project(
     widget: &Widget,
     rect: &[f64],
     state: &Value,
-    face: &ttf_parser::Face<'_>,
-    font: ObjectId,
+    font: (&ttf_parser::Face<'_>, ObjectId),
 ) -> Result<()> {
+    let (face, font) = font;
     let icon = state["icon"]["field"].as_str();
     let caption = state["caption"].as_str();
     if icon.is_none() && caption.is_none() {
@@ -163,8 +163,7 @@ mod tests {
             &fields["Target"].widgets[0],
             &[0., 0., 20., 20.],
             &json!({"icon":{"field":"Empty"},"caption":"","captions":{"0":"","1":"","2":""}}),
-            &face,
-            (999, 0),
+            (&face, (999, 0)),
         )
         .unwrap();
         let wd = doc.get_dictionary(target).unwrap();
