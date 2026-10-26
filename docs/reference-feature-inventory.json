@@ -1,0 +1,41 @@
+{
+  "2014": {
+    "document_script_files": 25,
+    "api_usage": {
+      "app.execDialog": 32,
+      "app.popUpMenuEx": 1,
+      "app.setTimeOut": 8,
+      "getTemplate(": 27,
+      ".spawn(": 11,
+      "toSource(": 49,
+      "saveAs(": 0,
+      "util.readFileIntoStream": 2
+    }
+  },
+  "2024": {
+    "document_script_files": 27,
+    "api_usage": {
+      "app.execDialog": 32,
+      "app.popUpMenuEx": 1,
+      "app.setTimeOut": 8,
+      "getTemplate(": 27,
+      ".spawn(": 11,
+      "toSource(": 54,
+      "saveAs(": 0,
+      "util.readFileIntoStream": 2
+    }
+  },
+  "ashnar": {
+    "document_script_files": 25,
+    "api_usage": {
+      "app.execDialog": 32,
+      "app.popUpMenuEx": 1,
+      "app.setTimeOut": 8,
+      "getTemplate(": 27,
+      ".spawn(": 11,
+      "toSource(": 49,
+      "saveAs(": 0,
+      "util.readFileIntoStream": 2
+    }
+  }
+}
