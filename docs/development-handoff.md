@@ -1,6 +1,6 @@
 # Implementation handoff
 
-Prepared on 2026-10-26 (UTC+3). The qualified Acrobat harness is committed as `04ef77a` (`feat(testing): add qualified Windows Acrobat reference harness`). The subsequent documentation commit is the implementation starting HEAD; identify it with `git rev-parse HEAD`. Its scope is the testing environment, not a native reader implementation.
+Prepared on 2026-10-26 (UTC+3). The qualified Acrobat harness is committed as `04ef77a` (`feat(testing): add qualified Windows Acrobat reference harness`). The initial documentation baseline is `94d0a26`; submodule registration is `6ffa46f`. The latest documentation commit is the current implementation starting HEAD; identify it with `git rev-parse HEAD`. Its scope is the testing environment, not a native reader implementation.
 
 ## Current state
 
@@ -10,6 +10,12 @@ Prepared on 2026-10-26 (UTC+3). The qualified Acrobat harness is committed as `0
 - No Cargo workspace, native desktop application, PDF engine integration or native compatibility layer exists yet.
 
 Local evidence is intentionally excluded from Git: `output/testing/qualification-final.json`, `output/testing/connectivity-recheck-1793015176.json`, and the run reports referenced by the readiness audit. A fresh clone needs authorized local fixtures and a configured VM; these are not bundled or downloaded automatically. Existing ignored files on this machine are preserved.
+
+## Source reference
+
+`2024_MPMBs-Character-Record-Sheet/` is a Git submodule pinned to upstream commit `5d6e57c861643ca77764131bd5dc865389879667`. Initialize it with `git submodule update --init --recursive`; confirm its revision with `git submodule status`. The existing local checkout was reused without source changes. No upstream commits are imported into the parent repository’s history.
+
+Treat this checkout as reference-only. Do not edit, commit inside it, or pull a newer revision during ordinary development. A deliberate reference upgrade should update the gitlink in its own parent-repository commit and document the new revision. Public upstream source and locally extracted document scripts are separate: the latter stay under ignored output paths. Paid PDFs remain excluded.
 
 ## Before changing PDF behavior
 

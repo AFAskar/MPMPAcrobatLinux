@@ -10,3 +10,5 @@ Read `docs/testing-environment.md` before changing or testing PDF behavior.
 - The reference MPMB PDFs are paid Patreon content. Never commit or redistribute the PDFs or extracted document scripts; do not force-add ignored fixtures.
 - Keep private character data, generated PDFs, logs and VM checkpoints out of Git. The 2024 source checkout is reference material; the 2014 embedded scripts can be extracted with `tools/acrobat/run inventory`.
 - Restore a VM checkpoint only while Windows is cleanly shut down. The checkpoint tool retains pre-restore state.
+
+- The 2024 source is a pinned reference submodule. Initialize with `git submodule update --init --recursive`; do not edit it or advance it with `git pull`/`--remote`. Deliberate reference upgrades require a separate parent-repository commit.

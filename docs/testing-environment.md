@@ -94,3 +94,7 @@ A restore returns the guest files to checkpoint time. Run `up`, `readiness`, `im
 The 4 GiB smoke took 144.904 seconds and had a minimum of 6886.5 MiB host RAM available. The preceding 6 GiB smoke took 217.855 seconds with a minimum of 5200.3 MiB available. These are separate end-to-end runs, including startup and verification, not a controlled engine-speed comparison. The completed 4 GiB readiness suite took 1715.552 seconds. No host OOM or new Reader crash was recorded during that qualification interval. Keep suites serialized; extra coding agents do not improve desktop-test throughput.
 
 The acceptance scope is the named workflows in `docs/testing-readiness-audit.md`. It establishes a usable reference for development, not exhaustive MPMB API coverage or compatibility of an as-yet-unimplemented Linux reader. Arbitrary URL imports, every add-on, every modal workflow, and all printing/export options require additional cases as development reaches them.
+
+## Pinned upstream source
+
+The public 2024 source checkout is a reference submodule pinned to `5d6e57c861643ca77764131bd5dc865389879667`. Run `git submodule update --init --recursive` after cloning, then inspect `git submodule status`. Keep it unchanged while comparing behavior with the qualified fixtures. Submodule initialization does not retrieve the local-only paid PDFs, filled character, evidence or VM state. Extracted 2014 document scripts continue to live under ignored `output/testing/inventory`, not in the source submodule.
