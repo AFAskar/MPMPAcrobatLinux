@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+acrobat_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+mpmb_python="${MPMB_PYTHON:-python3}"
+if ! "$mpmb_python" -c 'import pypdf' >/dev/null 2>&1; then
+  mpmb_python="$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3"
+fi
+if ! "$mpmb_python" -c 'import pypdf' >/dev/null 2>&1; then
+  echo 'Install tools/acrobat/requirements.txt in a Python environment and set MPMB_PYTHON.' >&2
+  exit 1
+fi
+mpmb_command="${1:-preflight}"
+if (($#)); then shift; fi
+if [[ "$mpmb_command" =~ ^(readiness|stability|smoke|imports|workflows|vm|up)$ && -z "${MPMB_INHIBITED:-}" ]] && command -v systemd-inhibit >/dev/null; then
+  exec systemd-inhibit --what=sleep --mode=block --who='MPMB reference tests' --why='Keep the Windows reference VM running during tests' env MPMB_INHIBITED=1 "$0" "$mpmb_command" "$@"
+fi
+case "$mpmb_command" in
+  control|bootstrap|preflight|inventory|readiness|verify|vm|up|wildshape|dialog_probe|render|stability|spells|smoke|imports|workflows) exec "$mpmb_python" "$acrobat_dir/$mpmb_command.py" "$@" ;;
+  *) echo 'Commands: up control bootstrap preflight inventory readiness verify vm wildshape dialog_probe' >&2; exit 2 ;;
+esac

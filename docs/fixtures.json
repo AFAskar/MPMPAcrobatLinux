@@ -1,0 +1,40 @@
+[
+  {
+    "file": "MPMB's Character Record Sheet (v14.2.0+261023) [Printer Friendly - Redesign]_2014_.pdf",
+    "sha256": "37990dea7054964a3f7045c601dfb54dc46407a3a24033c5d8f3076007d21e55",
+    "pages": 7,
+    "sample": {
+      "PC Name": "",
+      "Player Name": "",
+      "Class and Levels": "",
+      "Character Level": "",
+      "Str": "",
+      "Str Mod": ""
+    },
+    "export_mapping_entry_count": 4173,
+    "canonical_field_count": 3634
+  },
+  {
+    "file": "MPMB's Character Record Sheet (v24.2.0+261023) [Printer Friendly - Redesign]_2024_.pdf",
+    "sha256": "9fe013ddede34cf9e630524a651050b990ff8782339c748e0a4ab109a87f961b",
+    "pages": 6,
+    "sample": {
+      "PC Name": "",
+      "Player Name": "",
+      "Class and Levels": "",
+      "Character Level": "",
+      "Str": "",
+      "Str Mod": ""
+    },
+    "export_mapping_entry_count": 4165,
+    "canonical_field_count": 3627
+  },
+  {
+    "file": "Ashnar_TestingCharacter_.pdf",
+    "sha256": "a5600c5c59706a838a509ed8322cd9783089a0517db865f9b8c920dbb6387d50",
+    "pages": 6,
+    "sheet_version": "14.0.2-beta+251205",
+    "export_mapping_entry_count": 4716,
+    "canonical_field_count": 4241
+  }
+]
