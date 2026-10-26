@@ -1,6 +1,8 @@
 # Linux-native MPMB reader
 
-The goal is a native Rust PDF reader that executes the original MPMB scripts with Acrobat-compatible behavior. This initial repository contains the qualified testing environment and development handoff. The native reader has not been implemented yet.
+The goal is a native Rust PDF reader that executes the original MPMB scripts with Acrobat-compatible behavior. The repository now includes an experimental native Rust reader, an Acrobat API bridge for original embedded scripts, and the qualified Windows reference harness. The defined first vertical slice works; full MPMB compatibility remains in progress.
+
+The compatibility target is all MPMB behavior in the three authorized PDFs under `Testing/`, including every predefined class choice and real table usage. That target is **not yet met**. Passing the first milestone or selected generated workflows does not establish full MPMB compatibility; general Acrobat JavaScript coverage is not the acceptance target.
 
 Start with [AGENTS.md](AGENTS.md), the [development handoff](docs/development-handoff.md), and the [Acrobat environment guide](docs/testing-environment.md).
 
@@ -41,6 +43,20 @@ The MPMB reference PDFs were acquired as paid Patreon content. They are not incl
 
 Generated evidence under `output/`, VM state, credentials and build outputs are also ignored. The small synthetic sentinel under `Testing/addons/` is test instrumentation, not an MPMB sheet.
 
+## Native application
+
+```bash
+tools/native/setup-pdfium
+cargo build --locked
+tools/native/run "Testing/<authorized sheet filename>.pdf"
+cargo test --locked
+tools/native/acceptance
+tools/native/extended
+tools/native/generated
+```
+
+See [native build/run and architecture](docs/native-reader.md), the [compatibility matrix](docs/native-compatibility.json), and the [current handoff](docs/development-handoff.md). The application uses PDFium for rendering, QuickJS-NG for the original scripts, and one live JavaScript form state. It supports the tested initialization, editing/calculation, original class dialog, new-copy save and reopen workflows for both current sheets. Companion, wild-shape and spell generation pass the defined cases for both editions, including real Reader reopen/save. The 2024 wild-shape workflow uses an explicitly logged, user-approved runtime repair; original PDF scripts are preserved. Wider compatibility remains incomplete. Evidence and screenshots stay local under ignored `output/testing`.
+
 ## Implementation starting point
 
-The documentation commit containing this file is the implementation starting HEAD. Run `git log -5 --oneline` to see the focused baseline commits and `git status --short` to verify a clean working tree. The handoff identifies the harness commit and the next development milestone.
+The original documentation baseline preceded the native implementation. Run `git log -5 --oneline` to see the focused baseline commits and `git status --short` to verify a clean working tree. The handoff identifies the harness commit and the next development milestone.

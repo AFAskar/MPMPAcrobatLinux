@@ -1,5 +1,40 @@
 # Implementation handoff
 
+## Native implementation update — 2026-10-26
+
+A runnable Rust desktop application now opens and renders both supplied editions, executes their original 25/27 document scripts, edits fields and runs dependent calculations, handles the original class dialog, saves disposable copies, and reopens them natively and in real Windows Reader. See [native-reader.md](native-reader.md) for commands and architecture, and [native-compatibility.json](native-compatibility.json) for measured coverage. Full MPMB compatibility remains incomplete.
+
+PDFium was inspected first: its `execDialog` is a successful no-op and the public embedding interface cannot replace the needed Acrobat object model. PDFium therefore only renders temporary projections. QuickJS-NG owns the single authoritative form state. lopdf 0.46 preserves the input graph and projects values, widget appearances, changed actions, calculation order and a structural page journal. Earlier lopdf versions selected stale compressed objects in the incrementally saved regression character; do not downgrade without that regression.
+
+The native application includes field selection/editing, PDF widget actions and checkbox toggles, original native class/source/spell dialogs, toolbar commands and hierarchical popup menus, local UTF-8 script imports, new-copy saving and a close-save confirmation. Basic rich spans, alignment, wrapping and choice labels render in embedded Unicode appearances. Normal button icons use original PDF resources. Exact fonts, complete rich text, all dialog controls/layouts, bookmark persistence, template overlay, URL/binary imports, printing/export and the document `saveAs` API remain gaps.
+
+Both editions pass original wolf companion generation, wolf wild-shape generation, and Druid spell generation. All six outputs pass native save/reopen, independent canonical field/widget/appearance/script checks, and real Reader reopen/save. The generated page tree preserves inherited resources, field ancestors, renamed/shared logical fields, widgets and original calculation entries. Reader's canonical names require ASCII wrapper `/T` names; UTF-16 wrapper names caused a retained failed Reader run before the fix.
+
+The user explicitly authorized repair `mpmb-2024-261023-wildshape-pop-typo`. It replaces incorrect `pop` reads with the local `prop` in the loaded runtime function only, guarded by the exact Functions2 fingerprint and expected source markers. Original embedded script bytes are preserved. Diagnostics and the UI disclose the repair. `MPMB_STRICT_ORIGINAL_SCRIPTS=1` or `--strict-original-scripts` retains the original failure; a fresh strict probe confirms the failure and an empty repair list. This repaired workflow is not strict original-script compatibility.
+
+Imports and the supplied Ashnar regression also pass native execution, save/reopen, complete imported-payload retention and remembered-spell retention. A prior real Reader roundtrip passed for Ashnar. All 4,241 canonical values in the fresh native Ashnar output match its real-Reader saved counterpart; original embedded scripts match as well. Full comparison evidence is `native-validation-1793047420184139528/ashnar-comparison.json`. Its private values and source scripts remain local. A new lifecycle suite hides/reveals a shared page, removes/readds a companion, preserves character data, and saves/reopens a changed Calculate action and calculation ordering on both editions. The earlier additional Reader run failed at a read-only global desktop lock. After access was restored and the reference was freshly qualified, both lifecycle/action cases passed actual Reader reopen/save; the earlier failure remains preserved separately.
+
+Fresh validation: 23 focused Rust tests, `cargo fmt --check`, and `cargo clippy --locked -- -D warnings` pass. Native desktop smoke opens actual reader/class-dialog windows for both editions; their captures were inspected. Builds use one job. No parallel agents were used.
+
+Current ignored evidence under `output/testing/`:
+
+- Oracle qualification: `readiness-1793046363.json` (24/24), `class-audit-up.log` and `class-audit-preflight.log` (27/27).
+- Native milestone: `native-acceptance-1793047033548639856/acceptance.json`; fresh Reader milestone pair: `native-validation-1793047420184139528/base-acrobat.json`.
+- Generated workflows: `native-generated-1793039821424735227/generated.json` and `generated-acrobat.json` (six native and six real Reader passes).
+- Full generated comparisons: `native-generated-1793039821424735227/full-comparisons.json` and per-case comparison JSON/PNG files. All 2014 canonical values match Reader. Each 2024 case differs in `CurrentEvals.Stringified`. Page/widget counts and embedded scripts match. Two hidden widgets per case differ only in the Print flag. Some Reader-regenerated appearance content and rendered pixels differ; appearance identity is not claimed.
+- Imports/Ashnar: `native-extended-1793046987407518666/extended.json`; fresh Ashnar Reader evidence is linked by `native-validation-1793047420184139528/validation.json`.
+- Page lifecycle and changed-action persistence: `native-lifecycle-1793040281629132421/lifecycle.json`; fresh qualified Reader run: `native-lifecycle-1793040281629132421/acrobat-1793047420204771017/generated-acrobat.json`. The older `generated-acrobat.json` and `native-lifecycle-actions-acrobat-run.log` retain the prior infrastructure failure.
+- Actual desktop captures: `native-desktop-1793040011023215282/`.
+- Strict original 2024 failure: `native-strict-1793045376527449608/expectation.json`.
+
+Repository and reference access have been restored. The pending action-persistence fix is committed as `1875724`, the core regressions as `58e588d`, the generated/lifecycle regressions as `49ecb23`, and the source-derived class/scope audit as `62badfa`. They follow the five original focused implementation commits. The earlier sandbox-blocked oracle attempt remains retained failure evidence; it must not be counted as a pass.
+
+The user's clarified acceptance target is **all MPMB behavior in all three supplied paid PDFs**, including any predefined class and real table usage. General Acrobat JavaScript completeness is not the target. This goal remains **not achieved**. The new [MPMB audit](mpmb-compatibility-audit.md) records 38 passing base-class fixture cases at six levels (228 checkpoints), 19 excluded/ambiguous definitions not exercised, and unexercised subclass/feature/table workflows. The original MPMB print workflow demonstrably fails in all three PDFs because its required print APIs are absent. Do not turn a passing milestone or base-class progression smoke into a full-compatibility claim.
+
+The historical environment-only baseline below describes the earlier starting point.
+
+## Historical environment baseline
+
 Prepared on 2026-10-26 (UTC+3). The qualified Acrobat harness is committed as `04ef77a` (`feat(testing): add qualified Windows Acrobat reference harness`). The initial documentation baseline is `94d0a26`; submodule registration is `6ffa46f`. The latest documentation commit is the current implementation starting HEAD; identify it with `git rev-parse HEAD`. Its scope is the testing environment, not a native reader implementation.
 
 ## Current state
