@@ -1,0 +1,61 @@
+# Local reference checkout; its source is not maintained by this repository.
+/2024_MPMBs-Character-Record-Sheet/
+
+# Original/private character PDFs and all generated reference evidence.
+*.pdf
+*.PDF
+/output/
+*.log
+
+# Python environments and caches.
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Rust and native build outputs. Keep Cargo.lock trackable.
+target/
+/build/
+/dist/
+CMakeFiles/
+CMakeCache.txt
+compile_commands.json
+
+# Local VM disks, installation media, firmware state and checkpoints.
+/VirtualMachines/
+/checkpoints/
+/MPMB-Testing/
+*.qcow
+*.qcow2
+*.vhd
+*.vhdx
+*.vdi
+*.vmdk
+*.iso
+*.nvram
+
+# Local credentials and environment overrides; examples may be committed.
+.env
+.env.*
+!.env.example
+!.env.sample
+.ssh/
+mpmb_win_vm
+mpmb_win_vm.pub
+*.key
+*.pem
+/auth.json
+/.codex/auth.json
+/credentials.json
+
+# Editor and desktop temporary files.
+*.swp
+*.swo
+*~
+.DS_Store
