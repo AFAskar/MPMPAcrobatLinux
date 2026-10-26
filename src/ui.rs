@@ -163,6 +163,9 @@ pub fn main() -> Result<()> {
         field_names: pdf.fields.keys().cloned().collect(),
         menu_images: BTreeMap::new(),
         render_revision: 0,
+        unsaved: false,
+        confirm_close: false,
+        allow_close: false,
         smoke,
         smoke_phase: 0,
         pdf,
@@ -199,6 +202,9 @@ struct Reader {
     field_names: Vec<String>,
     menu_images: BTreeMap<String, egui::TextureHandle>,
     render_revision: u64,
+    unsaved: bool,
+    confirm_close: bool,
+    allow_close: bool,
     smoke: Option<PathBuf>,
     smoke_phase: u8,
     pdf: Pdf,
@@ -215,6 +221,9 @@ struct Reader {
 }
 impl Reader {
     fn result(&mut self, r: Result<()>) {
+        if r.is_ok() {
+            self.unsaved = true;
+        }
         self.status = match r {
             Ok(_) => "Completed".into(),
             Err(e) => format!("{e:#}"),
@@ -224,6 +233,49 @@ impl Reader {
 }
 impl eframe::App for Reader {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        if self.smoke.is_none()
+            && !self.allow_close
+            && ctx.input(|i| i.viewport().close_requested())
+            && self.unsaved
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.confirm_close = true;
+        }
+        if self.confirm_close {
+            egui::Window::new("Save your changes?")
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.label("The current document has changes. Save a new copy before closing.");
+                    ui.text_edit_singleline(&mut self.save_path);
+                    ui.horizontal(|ui| {
+                        if ui.button("Save and close").clicked() {
+                            let r =
+                                self.rt
+                                    .ready()
+                                    .and_then(|_| self.rt.snapshot())
+                                    .and_then(|s| {
+                                        self.pdf.save_new(&s, std::path::Path::new(&self.save_path))
+                                    });
+                            let saved = r.is_ok();
+                            self.result(r);
+                            if saved {
+                                self.unsaved = false;
+                                self.allow_close = true;
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            }
+                        }
+                        if ui.button("Discard changes").clicked() {
+                            self.allow_close = true;
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                        if ui.button("Cancel").clicked() {
+                            self.confirm_close = false;
+                        }
+                    });
+                    ui.label(&self.status);
+                });
+        }
         if let Some(dir) = self.smoke.clone() {
             if self.texture.is_some() && self.smoke_phase == 0 {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
@@ -328,7 +380,7 @@ impl eframe::App for Reader {
                         .ready()
                         .and_then(|_| self.rt.snapshot())
                         .and_then(|s| self.pdf.save_new(&s, std::path::Path::new(&self.save_path)));
-                    self.result(r)
+                    let saved=r.is_ok();self.result(r);if saved{self.unsaved=false;}
                 }
             });
             ui.menu_button("MPMB tools",|ui|{match self.rt.eval("__host.menuItems()"){
