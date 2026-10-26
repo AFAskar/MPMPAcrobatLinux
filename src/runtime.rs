@@ -224,4 +224,8 @@ mod tests {
             r#"var f=getField('A');f.type='checkbox';f.exportValues=['True'];f.setAction('MouseDown',"globalThis.down=event.target.name");f.setAction('MouseUp',"globalThis.up=event.target.valueAsString");__host.activate('A');down==='A'&&up==='True'&&f.isBoxChecked(0)===1"#,
         );
     }
+    #[test]
+    fn modified_actions_are_in_the_authoritative_snapshot() {
+        host("getField('B').setAction('Calculate','event.value=42');calculateNow();var s=JSON.parse(__host.snapshot());s.B.value==='42'&&s.B.actions.C==='event.value=42'&&s.A.actions===undefined");
+    }
 }

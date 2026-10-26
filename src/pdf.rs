@@ -540,6 +540,22 @@ impl Pdf {
                     dict.set("TU", pdf_string(v));
                 }
             }
+            if let Some(actions) = s["actions"].as_object() {
+                for (key, code) in actions {
+                    let code = code
+                        .as_str()
+                        .context("Field action must be JavaScript text")?;
+                    if ["C", "V", "K", "F"].contains(&key.as_str()) {
+                        update_action(&mut doc, f.id, key, code)?;
+                    } else if ["U", "D", "Fo", "Bl"].contains(&key.as_str()) {
+                        for w in &f.widgets {
+                            update_action(&mut doc, w.id, key, code)?;
+                        }
+                    } else {
+                        bail!("Unsupported persisted field action {key}")
+                    }
+                }
+            }
             for (widget_index, w) in f.widgets.iter().enumerate() {
                 let display = s["display"].as_i64().unwrap_or(f.display as i64);
                 let flags = match display {
@@ -621,5 +637,57 @@ impl Pdf {
         file.write_all(&bytes)?;
         file.sync_all()?;
         Ok(())
+    }
+}
+
+fn update_action(doc: &mut Document, id: ObjectId, key: &str, code: &str) -> Result<()> {
+    let mut aa = doc
+        .get_dictionary(id)?
+        .get(b"AA")
+        .ok()
+        .and_then(|v| resolved(doc, v).ok())
+        .and_then(|v| v.as_dict().ok())
+        .cloned()
+        .unwrap_or_default();
+    if code.is_empty() {
+        aa.remove(key.as_bytes());
+    } else {
+        aa.set(key, dictionary! {"S"=>"JavaScript","JS"=>pdf_string(code)});
+    }
+    doc.get_dictionary_mut(id)?.set("AA", aa);
+    Ok(())
+}
+#[cfg(test)]
+mod action_tests {
+    use super::*;
+    #[test]
+    fn changed_action_retains_unrelated_actions_and_does_not_modify_shared_source() {
+        let mut doc = Document::new();
+        let shared=doc.add_object(dictionary!{"C"=>dictionary!{"S"=>"JavaScript","JS"=>Object::string_literal("event.value=1")},"F"=>dictionary!{"S"=>"JavaScript","JS"=>Object::string_literal("event.value='formatted'")}});
+        let field = doc.add_object(dictionary! {"AA"=>shared});
+        update_action(&mut doc, field, "C", "event.value=2").unwrap();
+        let aa = doc
+            .get_dictionary(field)
+            .unwrap()
+            .get(b"AA")
+            .unwrap()
+            .as_dict()
+            .unwrap();
+        assert_eq!(action(&doc, aa.get(b"C").unwrap()), "event.value=2");
+        assert!(aa.has(b"F"));
+        assert_eq!(
+            action(&doc, doc.get_dictionary(shared).unwrap().get(b"C").unwrap()),
+            "event.value=1"
+        );
+        update_action(&mut doc, field, "C", "").unwrap();
+        let aa = doc
+            .get_dictionary(field)
+            .unwrap()
+            .get(b"AA")
+            .unwrap()
+            .as_dict()
+            .unwrap();
+        assert!(!aa.has(b"C"));
+        assert!(aa.has(b"F"));
     }
 }

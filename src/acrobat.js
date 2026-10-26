@@ -42,7 +42,7 @@ var __host = (function () {
       insertItemAt(label,exp,i){this.items.splice(i===undefined?this.items.length:i,0,exp===undefined?label:[exp,label])},
       deleteItemAt(i){this.items.splice(i,1)},
       checkThisBox(i,on){this.value=on?(this.exportValues[i]||'Yes'):'Off'},isBoxChecked(i){return String(this.value)===(this.exportValues[i]||'Yes')?1:0},
-      setAction(type,code){this._actions[({Calculate:'C',Validate:'V',Keystroke:'K',Format:'F',MouseUp:'U',MouseDown:'D',OnFocus:'Fo',OnBlur:'Bl'})[type]||type]=code},
+      setAction(type,code){const key=({Calculate:'C',Validate:'V',Keystroke:'K',Format:'F',MouseUp:'U',MouseDown:'D',OnFocus:'Fo',OnBlur:'Bl'})[type];if(!key)return unsupported('Field.setAction '+type);code=String(code);if(this._actions[key]!==code){this._actions[key]=code;this._modifiedActions=this._modifiedActions||{};this._modifiedActions[key]=code;revision++;}},
       setFocus(){data.focus=n},getArray(){return [this]},
       buttonGetIcon(face=0){if(face!==0)return unsupported('Field.buttonGetIcon non-normal face');return this._icon||{field:n,face:0}},
       buttonSetIcon(icon,face=0){if(face!==0)return unsupported('Field.buttonSetIcon non-normal face');if(!icon||typeof icon.field!=='string')return unsupported('Field.buttonSetIcon external icon');this._icon=Object.assign({},icon);revision++},
@@ -178,7 +178,7 @@ var __host = (function () {
   }
   return {activate,pageWidgets,menuItems,popup,applyQualifiedRepairs,get revision(){return revision},recordError(e){errors.push(e)},fields,names,data,menus,gaps,errors,source,unsupported,gap,calculateNow,edit,advance,execDialog,invokeMenu,command,spawn,removeField,deletePages,
     ready(){let n=0;while(!globalThis.calculate||!app.calculate||globalThis.delay){let t=Array.from(timers.values()).sort((a,b)=>a.at-b.at)[0];if(!t||++n>100)throw Error('Document calculations suspended without a resumable timer');advance(Math.max(0,t.at-clock));}return true},
-    snapshot(){let o={__structure:journal,__order:data.order};for(const n of names){let f=fields[n];o[n]={value:Array.isArray(f.value)?f.value:f.valueAsString,icon:f._icon,caption:f._caption,captions:f._captions,widgets:f._widgets,currentValueIndices:f.currentValueIndices,textSize:f.textSize,alignment:f.alignment,multiline:f.multiline,textColor:f.textColor,textFont:f.textFont,richValue:f.richValue,formatted:f._formatted===undefined?f.value:f._formatted,display:f.display,userName:f.userName,submitName:f.submitName,readonly:f.readonly,items:f.items};}return JSON.stringify(o)},
+    snapshot(){let o={__structure:journal,__order:data.order};for(const n of names){let f=fields[n];o[n]={value:Array.isArray(f.value)?f.value:f.valueAsString,icon:f._icon,caption:f._caption,captions:f._captions,actions:f._modifiedActions,widgets:f._widgets,currentValueIndices:f.currentValueIndices,textSize:f.textSize,alignment:f.alignment,multiline:f.multiline,textColor:f.textColor,textFont:f.textFont,richValue:f.richValue,formatted:f._formatted===undefined?f.value:f._formatted,display:f.display,userName:f.userName,submitName:f.submitName,readonly:f.readonly,items:f.items};}return JSON.stringify(o)},
     timer(code,ms){let id=++timerId;timers.set(id,{id,code:String(code),at:clock+Math.max(1,Number(ms)||1)});return id},clear(id){timers.delete(id)},
     diagnostics(){return JSON.stringify({gaps,errors,repairs,timers:timers.size,field_count:names.length,menus:Object.keys(menus)})}
   };
