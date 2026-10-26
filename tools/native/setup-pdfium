@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/../.."
+# Pinned binary distribution. Keep its license bundle with the local library.
+mkdir -p output/deps
+curl --fail --location --retry 2 'https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F8111/pdfium-v8-linux-x64.tgz' -o output/deps/pdfium.tgz
+echo '01986cb383a89e3a908173c9af4aa97abd470a8f72d6cda6b7f1e391a7e36df1  output/deps/pdfium.tgz' | sha256sum --check
+tar -xzf output/deps/pdfium.tgz -C output/deps
