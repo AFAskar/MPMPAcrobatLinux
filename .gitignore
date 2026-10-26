@@ -1,6 +1,3 @@
-# Local reference checkout; its source is not maintained by this repository.
-/2024_MPMBs-Character-Record-Sheet/
-
 # Original/private character PDFs and all generated reference evidence.
 *.pdf
 *.PDF
