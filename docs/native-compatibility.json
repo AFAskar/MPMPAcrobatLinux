@@ -1172,7 +1172,7 @@
     "native_print_regression": "output/testing/native-printing-1793082799007399331/printing.json"
   },
   "attachment_workflows": {
-    "status": "defined native existing-file listing/export/menu/persistence passes; Reader and desktop opening pending",
+    "status": "defined native exports plus independent Reader metadata/menu/persistence pass; desktop launching and Reader file-export interaction unqualified",
     "native": "output/testing/native-attachments-1793100475546677964/attachments.json",
     "scope": "Read EmbeddedFiles name tree and stream bytes; dataObjects/getDataObject descriptors; original built-in FAQ menu and getFAQ export; original AddFolderJavaScript helper export; exact payload hashes and native save/reopen with original scripts and field inventory preserved.",
     "native_exports": {
@@ -1188,7 +1188,8 @@
       "Non-PDF attachment launching",
       "Creation/modification date descriptor fidelity and encrypted attachment authorization"
     ],
-    "reference": "https://opensource.adobe.com/dc-acrobat-sdk-docs/library/jsapiref/doc.html#exportdataobject"
+    "reference": "https://opensource.adobe.com/dc-acrobat-sdk-docs/library/jsapiref/doc.html#exportdataobject",
+    "reader": "output/testing/native-attachments-1793100475546677964/reader-attachments-1793103051862982338/reader-attachments.json"
   },
   "class_feature_choices": {
     "status": "defined native Fighter Archery/Dueling menu and attack/persistence cases pass in all three fixtures; Reader pending",
@@ -1200,6 +1201,19 @@
       "Only two Fighter styles and three attack states; other styles/features/classes unqualified",
       "Reader mechanical and popup interaction comparisons pending",
       "No proof yet of ASI/feat, multiclass or spell-choice coverage"
+    ]
+  },
+  "controlled_reader_printing": {
+    "status": "nine defined operational PDF-output cases passed; complete appearance equivalence and physical printing unqualified",
+    "report": "output/testing/native-printing-1793082799007399331/reader-print-output-1793101441773008623/print-output.json",
+    "readiness": "output/testing/readiness-1793100140.json",
+    "cases": 9,
+    "physical_jobs": 0,
+    "scope": "Original PrintTheSheet; all/selected/generated companion ranges for all three fixtures; checked Microsoft Print to PDF selector and scoped save picker; independently inspect static outputs, page counts and every rendered page for printable/nonprintable sentinels.",
+    "differences": [
+      "Native PDF outputs retain 595.274 x 792.004 pt source media; Windows virtual printer used configured A4 (595.32 x 841.92 pt).",
+      "Most Windows form-font text is outlined; OCR/render validation supplements text extraction.",
+      "A material skill-label appearance failure was subsequently found visually; this printing test is not an appearance-fidelity certificate."
     ]
   }
 }
