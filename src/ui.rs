@@ -35,12 +35,7 @@ pub fn main() -> Result<()> {
             let runtime = Runtime::new(
                 &pdf,
                 scenario["dialogs"].as_array().cloned().unwrap_or_default(),
-                scenario["alerts"]
-                    .as_array()
-                    .unwrap_or(&vec![])
-                    .iter()
-                    .filter_map(|v| v.as_i64().map(|v| v as i32))
-                    .collect(),
+                scenario["alerts"].as_array().cloned().unwrap_or_default(),
                 false,
                 scenario["print_output_dir"].as_str().map(PathBuf::from),
                 scenario["attachment_output_dir"]
@@ -150,7 +145,11 @@ pub fn main() -> Result<()> {
         } else {
             vec![]
         },
-        if smoke.is_some() { vec![1, 1] } else { vec![] },
+        if smoke.is_some() {
+            vec![json!(1), json!(1)]
+        } else {
+            vec![]
+        },
         true,
         None,
         None,

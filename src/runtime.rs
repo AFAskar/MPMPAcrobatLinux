@@ -53,6 +53,40 @@ fn select_dialog_options(request: &Value, reply: &mut Value) -> Result<()> {
     }
     Ok(())
 }
+fn scripted_alert_response(request: &Value, reply: &Value) -> Result<Value> {
+    if let Some(title) = reply.get("title") {
+        if title.as_str() != request["cTitle"].as_str() {
+            bail!("scripted alert title does not match the actual request")
+        }
+    }
+    let button = reply
+        .as_i64()
+        .or_else(|| reply["button"].as_i64())
+        .context("scripted alert requires a button code")?;
+    let kind = request["nType"].as_i64().unwrap_or(0);
+    let allowed: &[i64] = match kind {
+        0 => &[1],
+        1 => &[1, 2],
+        2 => &[3, 4],
+        3 => &[2, 3, 4],
+        _ => bail!("unsupported alert type {kind}"),
+    };
+    if !allowed.contains(&button) {
+        bail!(
+            "alert type {kind} does not offer button code {button}: {}",
+            request["cTitle"]
+        )
+    }
+    let checked = reply
+        .get("checked")
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| {
+            request["oCheckbox"]["bInitialValue"]
+                .as_bool()
+                .unwrap_or(false)
+        });
+    Ok(json!({"button":button,"checked":checked}))
+}
 // Probe button paths use the labels shown by the original dialog, including
 // parent menus. Resolve to a real enabled control; never manufacture a choice.
 fn select_dialog_button(request: &Value, reply: &mut Value) -> Result<()> {
@@ -116,7 +150,7 @@ impl Runtime {
     pub fn new(
         pdf: &Arc<Pdf>,
         dialogs: Vec<Value>,
-        alerts: Vec<i32>,
+        alerts: Vec<Value>,
         interactive: bool,
         print_output_dir: Option<std::path::PathBuf>,
         attachment_output_dir: Option<std::path::PathBuf>,
@@ -156,6 +190,10 @@ impl Runtime {
             if let Some(dir)=&trace_dir{std::fs::create_dir_all(dir).map_err(|e|e.to_string())?;let mut count=trace_count.lock().unwrap();*count+=1;std::fs::write(dir.join(format!("dialog-{:03}.json",*count)),&s).map_err(|e|e.to_string())?;}
             if let Some(mut reply)=queue.lock().unwrap().pop_front(){
                 if let Some(title)=reply["title"].as_str(){if request["description"]["name"].as_str()!=Some(title){return Err(format!("Expected dialog {title}, received {}",request["description"]["name"]))}}
+                if let Some(header)=reply["header"].as_str(){
+                    fn find_header(node:&Value)->Option<&str>{if node["item_id"]=="head"{return node["name"].as_str()}node["elements"].as_array().and_then(|v|v.iter().find_map(find_header))}
+                    if find_header(&request["description"])!=Some(header){return Err(format!("Expected dialog header {header}"))}
+                }
                 select_dialog_options(&request,&mut reply).map_err(|e|e.to_string())?;
                 select_dialog_button(&request,&mut reply).map_err(|e|e.to_string())?;
                 eprintln!("Dialog: {} [scripted response]",request["description"]["name"]);
@@ -166,10 +204,12 @@ impl Runtime {
           })().map_err(|e|Exception::throw_message(&ctx,&e))
         })?)?;
         let aq=Arc::new(Mutex::new(VecDeque::from(alerts)));
+        let alert_trace_dir=std::env::var_os("MPMB_DIALOG_TRACE_DIR").map(std::path::PathBuf::from);let alert_count=Arc::new(Mutex::new(0usize));
         ctx.globals().set("__alert",Function::new(ctx.clone(),move|ctx:Ctx,s:String|->rquickjs::Result<String>{
           (||->std::result::Result<String,String>{
             let v:Value=serde_json::from_str(&s).map_err(|e|e.to_string())?;
-            if let Some(reply)=aq.lock().unwrap().pop_front(){eprintln!("Alert [scripted response]: {}",v["cTitle"]);return Ok(json!({"button":reply,"checked":v["oCheckbox"]["bInitialValue"].as_bool().unwrap_or(false)}).to_string())}
+            if let Some(dir)=&alert_trace_dir{std::fs::create_dir_all(dir).map_err(|e|e.to_string())?;let mut count=alert_count.lock().unwrap();*count+=1;std::fs::write(dir.join(format!("alert-{:03}.json",*count)),&s).map_err(|e|e.to_string())?;}
+            if let Some(reply)=aq.lock().unwrap().pop_front(){eprintln!("Alert [scripted response]: {}",v["cTitle"]);return scripted_alert_response(&v,&reply).map(|v|v.to_string()).map_err(|e|e.to_string())}
             if !interactive{return Err(format!("Unanswered alert: {}",v["cTitle"]))}
             crate::ui::alert(&v).map(|v|v.to_string()).map_err(|e|e.to_string())
           })().map_err(|e|Exception::throw_message(&ctx,&e))
@@ -298,6 +338,27 @@ mod tests {
             &mut json!({"button_path":["Fighting Style","Absent"]})
         )
         .is_err());
+    }
+    #[test]
+    fn scripted_alerts_require_a_real_button_and_matching_title() {
+        let request = json!({"cTitle":"Creating a Sidekick Works Differently","nType":2,"oCheckbox":{"bInitialValue":true}});
+        assert!(scripted_alert_response(&request, &json!(1)).is_err());
+        assert_eq!(
+            scripted_alert_response(
+                &request,
+                &json!({"title":"Creating a Sidekick Works Differently","button":4})
+            )
+            .unwrap(),
+            json!({"button":4,"checked":true})
+        );
+        assert!(
+            scripted_alert_response(&request, &json!({"title":"Other warning","button":4}))
+                .is_err()
+        );
+        assert_eq!(
+            scripted_alert_response(&request, &json!(3)).unwrap()["button"],
+            3
+        );
     }
     fn host(test: &str) {
         let engine = Engine::new().unwrap();

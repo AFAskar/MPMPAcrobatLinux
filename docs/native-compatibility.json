@@ -1231,5 +1231,23 @@
     "scope": "Embedded source TrueType face reuse, glyph coverage checks with Unicode fallback, blank rich-line font metrics, 18 skill labels without spurious wrapping, original-font byte hashes and baseline deltas under 0.25 pt.",
     "numeric_format_regression": "Preserve canonical 2024 wolf AC formula 10+Dex while displaying original Format result 12. Preserve signed default values such as +4 when no Format action runs.",
     "remaining": "Mixed fonts/styles per span, rich-text event/default-style fidelity, non-BMP text and broader appearance/resource/render equivalence remain incomplete."
+  },
+  "sidekick_workflows": {
+    "status": "five defined 2014 profiles pass; 2024/Ashnar profiles running; independent Reader pending",
+    "native_2014": "output/testing/native-sidekicks-1793106581875525010/sidekicks.json",
+    "scope": "Original all-source/class/subclass dialogs; explicit Yes to sidekick conversion; explicit base 2d8; Bandit base ability scores; disabled race/background automation; levels 3,1,5,11,17,20,3 with HD totals level+1; original scripts, saved fields/appearances and native reopen.",
+    "profiles": [
+      "Expert",
+      "Warrior",
+      "Spellcaster Mage",
+      "Spellcaster Healer",
+      "Spellcaster Prodigy"
+    ],
+    "limits": [
+      "Base creature proficiencies/attacks still require manual entry and are unqualified",
+      "HP calculation, every role/skill/tool/feature choice and spell selection unqualified",
+      "No Reader-equivalence claim"
+    ],
+    "alert_validation": "Scripted responses must use actual dialog button codes; optional exact title and checkbox guards. Legacy response 1 is invalid for Yes/No (3/4) and now fails explicitly."
   }
 }
