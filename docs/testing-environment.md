@@ -17,6 +17,8 @@ The dedicated Windows account is configured to log in automatically on boot, and
 
 `run` selects Python with pypdf, including the installed Codex runtime. For another machine, install `tools/acrobat/requirements.txt` and set `MPMB_PYTHON` to that environment's Python. SSH, SCP, libvirt, Poppler, Rust/Cargo, Clang, CMake and pkg-config are checked by preflight.
 
+A libvirt managed save hibernates the guest to disk and releases its RAM. `tools/acrobat/run up` resumes the registered state; direct `virsh start mpmb-windows11` is the equivalent resume for the configured local libvirt connection. Existing TCP sessions may have ended, so reconnect and qualify the resumed reference with preflight/readiness. Preserve managed-save state during routine startup. Discarding it loses the in-memory session and is a recovery action, not a prerequisite for resuming. The reported managed-save continuation was resumed without discarding state; preflight passed 27 checks and `output/testing/readiness-1793100140.json` passed 24 cases.
+
 ## Fixtures and evidence
 
 `docs/fixtures.json` records the original PDFs' SHA-256 hashes. The two blank sheets are v14.2.0+261023 (2014) and v24.2.0+261023 (2024). Ashnar is an existing level-12 Monk (Way of Shadow), v14.0.2-beta+251205, with imported content and a spell page. It is a separate legacy-version regression case. Preserve these originals.
