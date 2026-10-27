@@ -597,7 +597,8 @@ impl Pdf {
                 if f.kind != "Tx" && f.kind != "Ch" {
                     continue;
                 }
-                if w.page < 0 || display == 1 || display == 3 {
+                // noView fields still need fresh appearances for printing.
+                if w.page < 0 || display == 1 {
                     continue;
                 }
                 if value.chars().any(|c| c as u32 > 65535) {

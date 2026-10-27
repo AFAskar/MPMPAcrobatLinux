@@ -1,4 +1,5 @@
 mod pdf;
+mod printing;
 mod render;
 mod runtime;
 mod ui;

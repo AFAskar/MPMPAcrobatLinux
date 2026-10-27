@@ -388,7 +388,7 @@
         "2024": 1,
         "ashnar": 1
       },
-      "status": "unsupported-or-unverified"
+      "status": "partial-native-controlled-printing; Reader qualification pending"
     },
     {
       "api": "tDoc.getTemplate",
@@ -424,7 +424,7 @@
         "2024": 1,
         "ashnar": 1
       },
-      "status": "unsupported-or-unverified"
+      "status": "partial-native-controlled-printing; Reader qualification pending"
     },
     {
       "api": "tDoc.removeField",
@@ -555,6 +555,10 @@
     "actual_mpmb_counterexamples": {
       "path": "output/testing/mpmb-scope-audit-1793046774015100548/scope.json",
       "passed": false
+    },
+    "printing_native": {
+      "path": "output/testing/native-printing-1793074562899703807/printing.json",
+      "passed": true
     }
   },
   "ashnar_complete_comparison": {
@@ -894,41 +898,6 @@
       }
     ]
   },
-  "observed_incompatible_mpmb_workflows": [
-    {
-      "fixture": "2014",
-      "workflow": "Original PrintTheSheet",
-      "compatible": false,
-      "failure_observed": true,
-      "interfaces": {
-        "getPrintParams": "undefined",
-        "print": "undefined"
-      },
-      "probe": "output/testing/mpmb-scope-audit-1793046774015100548/2014-report.json"
-    },
-    {
-      "fixture": "2024",
-      "workflow": "Original PrintTheSheet",
-      "compatible": false,
-      "failure_observed": true,
-      "interfaces": {
-        "getPrintParams": "undefined",
-        "print": "undefined"
-      },
-      "probe": "output/testing/mpmb-scope-audit-1793046774015100548/2024-report.json"
-    },
-    {
-      "fixture": "ashnar",
-      "workflow": "Original PrintTheSheet",
-      "compatible": false,
-      "failure_observed": true,
-      "interfaces": {
-        "getPrintParams": "undefined",
-        "print": "undefined"
-      },
-      "probe": "output/testing/mpmb-scope-audit-1793046774015100548/ashnar-report.json"
-    }
-  ],
   "observed_field_method_calls": [
     {
       "method": "buttonGetIcon",
@@ -1059,8 +1028,65 @@
     "Non-normal icon faces and distinct rollover/down button captions",
     "Full dialog control coverage and exact layout",
     "Complete rich text/font/appearance fidelity",
-    "URL/binary imports and printing/export",
+    "URL/binary imports, document export and unqualified printing options",
     "Field/widget/appearance differences outside the defined assertions",
     "Bookmark actions, style and tree persistence"
-  ]
+  ],
+  "printing": {
+    "status": "native-controlled-cases-passed; oracle-and-desktop-qualification-pending",
+    "evidence": "output/testing/native-printing-1793074562899703807/printing.json",
+    "fixtures": 3,
+    "print_artifacts": 12,
+    "coverage": [
+      "Original PrintTheSheet and PrintButton",
+      "all/selected/generated companion pages",
+      "simplex and long-edge duplex",
+      "all four field display values",
+      "cancel generates no job",
+      "native interactive save/reopen and original script retention",
+      "independent static PDF structure/text and Poppler rendering"
+    ],
+    "not_qualified": [
+      "Physical CUPS submission",
+      "Real Reader print dialog and output comparison",
+      "Short-edge duplex and advanced Acrobat print settings"
+    ],
+    "native_desktop_evidence": "output/testing/native-print-desktop-1793074958381478234/desktop.json"
+  },
+  "historical_print_counterexamples": [
+    {
+      "fixture": "2014",
+      "workflow": "Original PrintTheSheet",
+      "compatible": false,
+      "failure_observed": true,
+      "interfaces": {
+        "getPrintParams": "undefined",
+        "print": "undefined"
+      },
+      "probe": "output/testing/mpmb-scope-audit-1793046774015100548/2014-report.json"
+    },
+    {
+      "fixture": "2024",
+      "workflow": "Original PrintTheSheet",
+      "compatible": false,
+      "failure_observed": true,
+      "interfaces": {
+        "getPrintParams": "undefined",
+        "print": "undefined"
+      },
+      "probe": "output/testing/mpmb-scope-audit-1793046774015100548/2024-report.json"
+    },
+    {
+      "fixture": "ashnar",
+      "workflow": "Original PrintTheSheet",
+      "compatible": false,
+      "failure_observed": true,
+      "interfaces": {
+        "getPrintParams": "undefined",
+        "print": "undefined"
+      },
+      "probe": "output/testing/mpmb-scope-audit-1793046774015100548/ashnar-report.json"
+    }
+  ],
+  "historical_print_counterexamples_status": "Missing dependencies implemented; historical failures retained. Current native print evidence above; broader milestone remains in progress."
 }

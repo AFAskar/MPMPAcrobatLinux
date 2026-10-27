@@ -1,5 +1,17 @@
 # Implementation handoff
 
+## Continuation update — 2026-10-27
+
+The goal remains active and incomplete. See [implementation-milestones.md](implementation-milestones.md) for acceptance work split into printing, source/class/subclass selection, real table workflows, and persistence/presentation.
+
+Native printing now implements the dependencies used by the original PrintTheSheet and PrintButton. Doc.print synchronously captures authoritative state, projects a disposable copy, imports selected pages into a new PDFium document, flattens with print visibility, strips interactive structures, and creates a new output. The desktop destination flow offers PDF output or explicitly confirmed CUPS submission. Probe printing requires an explicit print_output_dir. Advanced unsupported print parameters fail. Physical printing has not been tested.
+
+The original print dialog exposed a missing execDialog.destroy callback. It now runs after commit, cancellation and custom dialog endings. Print-only fields also receive updated appearances. Original embedded scripts remain unchanged. PDFium instance lifetime is reference-counted so synchronous printing does not shut down the desktop renderer.
+
+Concrete native evidence: `output/testing/native-printing-1793074562899703807/printing.json` passes all three fixtures and twelve print artifacts, checking all/selected/generated pages, simplex/long-edge duplex, cancellation, all four display states, static PDF structure/text/rendering, original script retention and interactive native reopen. The first sentinel design triggered actual class/race processing and was replaced with plain attack-description widgets; earlier failed runs remain retained. `output/testing/native-acceptance-1793074626929747931/acceptance.json` passes both current sheets after the dialog change. Twenty-five Rust tests, formatting and strict clippy pass at this stage.
+
+The printing milestone is still in progress: real Reader printing/output comparison remains unqualified. The actual Linux destination dialog passed named AT-SPI inspection and cancellation on both current sheets, with screenshots inspected: `output/testing/native-print-desktop-1793074958381478234/desktop.json`. An initial screenshot-tool failure on Wayland is retained separately; the suite uses Spectacle for this desktop. The first fresh readiness run failed because an old disposable Reader document was left open, and the checked close correctly refused a multi-document shutdown. That failure is retained as `output/testing/readiness-1793074115.json`. After inspecting the actual save prompt and closing the stale disposable session, the print-capable application-menu adapter was deployed; fresh 27-check preflight passed and a new readiness suite is running. Do not treat the earlier failure or the in-progress run as an oracle qualification.
+
 ## Native implementation update — 2026-10-26
 
 A runnable Rust desktop application now opens and renders both supplied editions, executes their original 25/27 document scripts, edits fields and runs dependent calculations, handles the original class dialog, saves disposable copies, and reopens them natively and in real Windows Reader. See [native-reader.md](native-reader.md) for commands and architecture, and [native-compatibility.json](native-compatibility.json) for measured coverage. Full MPMB compatibility remains incomplete.

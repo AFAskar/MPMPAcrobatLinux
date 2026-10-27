@@ -37,8 +37,14 @@ var MPMBTesting = {
             var target=this.scoped(q.output);
             if (target.toLowerCase().indexOf(this.root.toLowerCase()+"runs/") !== 0) throw Error("Save target must be inside runs");
             d.calculateNow();d.saveAs({cPath:target,bPromptToOverwrite:false});out.path=d.path;
+        } else if (q.op === "print_params") {
+            var pp=d.getPrintParams();out.firstPage=pp.firstPage;out.lastPage=pp.lastPage;
+            out.interactionLevel={};out.duplexTypes={};
+            var interaction=['full','automatic','silent'],duplex=['Simplex','DuplexFlipLongEdge','DuplexFlipShortEdge'];
+            for(var i=0;i<interaction.length;i++)out.interactionLevel[interaction[i]]=pp.constants.interactionLevel[interaction[i]];
+            for(var i=0;i<duplex.length;i++)out.duplexTypes[duplex[i]]=pp.constants.duplexTypes[duplex[i]];
         } else if (q.op === "call") {
-            var allowed={calcCont:1,ImportUserScriptFile:1,RunUserScript:1,ApplyClasses:1,ApplyClassLevel:1,SelectClass:1,ApplyRace:1,ApplyBackground:1,GenerateSpellSheet:1,GenerateSpellSheetWithAll:1,DoTemplate:1,ApplyCompRace:1,ApplyWildshape:1,SetStringifieds:1};
+            var allowed={PrintButton:1,PrintTheSheet:1,calcCont:1,ImportUserScriptFile:1,RunUserScript:1,ApplyClasses:1,ApplyClassLevel:1,SelectClass:1,ApplyRace:1,ApplyBackground:1,GenerateSpellSheet:1,GenerateSpellSheetWithAll:1,DoTemplate:1,ApplyCompRace:1,ApplyWildshape:1,SetStringifieds:1};
             if (!allowed[q.name] || typeof d[q.name] !== "function") throw Error("Unsupported MPMB function: "+q.name);
             if(q.name==="ImportUserScriptFile"){
                 if(q.file_picker){this.scoped(q.import_file);q.args=[];}

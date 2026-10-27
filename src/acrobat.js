@@ -13,7 +13,7 @@ String.prototype.replace=function(pattern,replacement){
 };
 var __host = (function () {
   const data=JSON.parse(__initial), fields={}, names=[], journal=[];
-  const timers=new Map(), menus={}, gaps=[], errors=[], repairs=[], assigning=new Set(), formatDirty=new Set();
+  const timers=new Map(), menus={}, gaps=[], errors=[], repairs=[], printJobs=[], assigning=new Set(), formatDirty=new Set();
   let clock=0, timerId=0, calculating=false, pending=false, revision=0;
   function unsupported(name) { gaps.push(name); throw Error('Unsupported Acrobat API: '+name); }
   function gap(name) { if(gaps.indexOf(name)<0)gaps.push(name); }
@@ -142,16 +142,17 @@ var __host = (function () {
     };
     const controls=[];function collect(e){if(e.item_id)controls.push(e);(e.elements||[]).forEach(collect)}collect(def.description||{});
     if(def.initialize)def.initialize(dialog);
+    function finish(result){if(def.destroy)def.destroy(dialog);return result;}
     for(let i=0;i<1000;i++) {
       const rendered=Object.assign({},store);
       for(const key of Object.keys(rendered)){const icon=iconData(rendered[key]);if(icon)rendered[key]=icon;}
       const reply=JSON.parse(__dialog(JSON.stringify({description:def.description,values:rendered,enabled,visible,focus})));
       if(reply.values)for(const key of Object.keys(reply.values)){if(!store[key]||typeof store[key].read!=='function')store[key]=reply.values[key];}
       const control=reply.event&&controls.filter(c=>c.item_id===reply.event)[0];if(control&&control.type==='radio'){for(const c of controls)if(c.type==='radio'&&c.group_id===control.group_id)store[c.item_id]=c.item_id===control.item_id;}
-      if(reply.result==='other'){if(def.other)def.other(dialog);if(ended!==null)return ended;continue;}
-      if(reply.event){if(typeof def[reply.event]==='function')def[reply.event](dialog);if(ended!==null)return ended;continue;}
-      if(reply.result==='ok') {if(def.validate&&!def.validate(dialog))continue;if(def.ok)def.ok(dialog);if(ended!==null)return ended;if(def.commit)def.commit(dialog);return 'ok'}
-      if(def.cancel)def.cancel(dialog);return 'cancel';
+      if(reply.result==='other'){if(def.other)def.other(dialog);if(ended!==null)return finish(ended);continue;}
+      if(reply.event){if(typeof def[reply.event]==='function')def[reply.event](dialog);if(ended!==null)return finish(ended);continue;}
+      if(reply.result==='ok') {if(def.validate&&!def.validate(dialog))continue;if(def.ok)def.ok(dialog);if(ended!==null)return finish(ended);if(def.commit)def.commit(dialog);return finish('ok')}
+      if(def.cancel)def.cancel(dialog);return finish('cancel');
     }throw Error('dialog interaction budget exceeded');
   }
   function command(code){const previous=globalThis.event;globalThis.event={type:'App',name:'Exec',target:globalThis,rc:true};try{return (0,eval)(code)}finally{globalThis.event=previous}}
@@ -177,10 +178,11 @@ var __host = (function () {
     repairs.push(repair);__log('Applied qualified runtime repair: '+repair.id);
   }
   return {activate,pageWidgets,menuItems,popup,applyQualifiedRepairs,get revision(){return revision},recordError(e){errors.push(e)},fields,names,data,menus,gaps,errors,source,unsupported,gap,calculateNow,edit,advance,execDialog,invokeMenu,command,spawn,removeField,deletePages,
+    print(params){const result=JSON.parse(__print(JSON.stringify({params,state:JSON.parse(__host.snapshot())})));printJobs.push(result);return undefined},
     ready(){let n=0;while(!globalThis.calculate||!app.calculate||globalThis.delay){let t=Array.from(timers.values()).sort((a,b)=>a.at-b.at)[0];if(!t||++n>100)throw Error('Document calculations suspended without a resumable timer');advance(Math.max(0,t.at-clock));}return true},
     snapshot(){let o={__structure:journal,__order:data.order};for(const n of names){let f=fields[n];o[n]={value:Array.isArray(f.value)?f.value:f.valueAsString,icon:f._icon,caption:f._caption,captions:f._captions,actions:f._modifiedActions,widgets:f._widgets,currentValueIndices:f.currentValueIndices,textSize:f.textSize,alignment:f.alignment,multiline:f.multiline,textColor:f.textColor,textFont:f.textFont,richValue:f.richValue,formatted:f._formatted===undefined?f.value:f._formatted,display:f.display,userName:f.userName,submitName:f.submitName,readonly:f.readonly,items:f.items};}return JSON.stringify(o)},
     timer(code,ms){let id=++timerId;timers.set(id,{id,code:String(code),at:clock+Math.max(1,Number(ms)||1)});return id},clear(id){timers.delete(id)},
-    diagnostics(){return JSON.stringify({gaps,errors,repairs,timers:timers.size,field_count:names.length,menus:Object.keys(menus)})}
+    diagnostics(){return JSON.stringify({gaps,errors,repairs,printJobs,timers:timers.size,field_count:names.length,menus:Object.keys(menus)})}
   };
 })();
 var display={visible:0,hidden:1,noPrint:2,noView:3};
@@ -222,6 +224,8 @@ Object.assign(globalThis,{
   getTemplate(n){return __host.data.templates&&__host.data.templates[n]?{name:n,spawn(index,rename,overlay){return __host.spawn(n,index,rename,overlay)}}:null},
   get templates(){return Object.keys(__host.data.templates||{}).map(n=>getTemplate(n))},
   removeField:__host.removeField,deletePages:__host.deletePages,
+  getPrintParams(){return {firstPage:0,lastPage:numPages-1,interactive:'full',DuplexType:'Simplex',constants:{interactionLevel:{full:'full',automatic:'automatic',silent:'silent'},duplexTypes:{Simplex:'Simplex',DuplexFlipLongEdge:'DuplexFlipLongEdge',DuplexFlipShortEdge:'DuplexFlipShortEdge'}}}},
+  print(params){if(!params||typeof params!=='object')return __host.unsupported('Doc.print legacy arguments');return __host.print(params)},
 });
 
 function AFRange_Validate(lower,minimum,upper,maximum){let n=Number(event.value);if(event.value!==''&&((lower&&n<minimum)||(upper&&n>maximum)))event.rc=false;}

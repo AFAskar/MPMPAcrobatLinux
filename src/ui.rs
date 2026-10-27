@@ -21,7 +21,7 @@ pub fn main() -> Result<()> {
     if args.iter().any(|a| a == "--strict-original-scripts") {
         std::env::set_var("MPMB_STRICT_ORIGINAL_SCRIPTS", "1");
     }
-    let pdf = Pdf::open(std::path::Path::new(&args[0]))?;
+    let pdf = Arc::new(Pdf::open(std::path::Path::new(&args[0]))?);
     if args.get(1).map(String::as_str) == Some("--probe") {
         let scenario: Value = serde_json::from_slice(&std::fs::read(
             args.get(2)
@@ -42,6 +42,7 @@ pub fn main() -> Result<()> {
                     .filter_map(|v| v.as_i64().map(|v| v as i32))
                     .collect(),
                 false,
+                scenario["print_output_dir"].as_str().map(PathBuf::from),
             )?;
             report["loaded_scripts"] = json!(runtime.loaded);
             if let Some(steps) = scenario["steps"].as_array() {
@@ -148,6 +149,7 @@ pub fn main() -> Result<()> {
         },
         if smoke.is_some() { vec![1, 1] } else { vec![] },
         true,
+        None,
     )?;
     if smoke.is_some() {
         rt.advance(4100)?;
@@ -207,7 +209,7 @@ struct Reader {
     allow_close: bool,
     smoke: Option<PathBuf>,
     smoke_phase: u8,
-    pdf: Pdf,
+    pdf: Arc<Pdf>,
     rt: Runtime,
     renderer: Renderer,
     page: i32,
@@ -285,15 +287,22 @@ impl eframe::App for Reader {
                 self.smoke_phase = 2;
             }
             if self.smoke_phase == 2 {
+                let print_smoke = std::env::var_os("MPMB_UI_SMOKE_PRINT").is_some();
                 let r = self
                     .rt
-                    .eval("__host.invokeMenu('ClassesButton')")
+                    .eval(if print_smoke {
+                        "__host.command(\"Value('Print Remember','false!#TheListSeparator#!0,CSfront');PrintTheSheet()\")"
+                    } else { "__host.invokeMenu('ClassesButton')" })
                     .map(|_| ());
-                let passed = r.is_ok();
+                let diagnostics = self.rt.diagnostics().unwrap_or(Value::Null);
+                let passed = r.is_ok()
+                    && (!print_smoke
+                        || diagnostics["printJobs"] == json!([{"status":"cancelled"}]));
                 self.result(r);
                 let _ = std::fs::write(
                     dir.join("desktop-result.json"),
-                    json!({"passed":passed,"status":self.status}).to_string(),
+                    json!({"passed":passed,"status":self.status,"diagnostics":diagnostics})
+                        .to_string(),
                 );
                 self.smoke_phase = 3;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);

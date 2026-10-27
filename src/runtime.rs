@@ -14,10 +14,11 @@ pub struct Runtime {
 }
 impl Runtime {
     pub fn new(
-        pdf: &Pdf,
+        pdf: &Arc<Pdf>,
         dialogs: Vec<Value>,
         alerts: Vec<i32>,
         interactive: bool,
+        print_output_dir: Option<std::path::PathBuf>,
     ) -> Result<Self> {
         let engine = Engine::new()?;
         engine.set_memory_limit(512 * 1024 * 1024);
@@ -33,6 +34,11 @@ impl Runtime {
                         == "ce4624265af7fad2456badd108fa6003e5dbb939263ee7269a4cbbf9e3055857"
             });
         js.with(|ctx|->Result<()>{
+        let print_pdf=Arc::clone(pdf);
+        ctx.globals().set("__print",Function::new(ctx.clone(),move|ctx:Ctx,request:String|->rquickjs::Result<String>{
+            crate::printing::execute(&print_pdf,&request,interactive,print_output_dir.as_deref())
+                .map(|v|v.to_string()).map_err(|e|Exception::throw_message(&ctx,&format!("{e:#}")))
+        })?)?;
         ctx.globals().set("__log",Function::new(ctx.clone(),|s:String|{eprintln!("JS: {s}");true})?)?;
         let queue=Arc::new(Mutex::new(VecDeque::from(dialogs)));
         let trace_dir=std::env::var_os("MPMB_DIALOG_TRACE_DIR").map(std::path::PathBuf::from);let trace_count=Arc::new(Mutex::new(0usize));
@@ -209,6 +215,10 @@ mod tests {
     #[test]
     fn dialog_list_operations_and_ok_handler_are_committed() {
         host("var saved;globalThis.__dialog=function(){return JSON.stringify({result:'ok'})};__host.execDialog({description:{elements:[]},initialize:function(d){d.load({list:{A:-1}});d.insertEntryInList({list:{B:-2}});d.focus('list')},ok:function(d){saved=d.store().list},commit:function(d){d.removeAllEntriesFromList('list')}});saved.A===-1&&saved.B===-2");
+    }
+    #[test]
+    fn dialog_destroy_runs_after_commit_cancel_and_custom_end() {
+        host("var trace=[],reply={result:'ok'};globalThis.__dialog=()=>JSON.stringify(reply);var def={description:{elements:[]},commit(){trace.push('commit')},cancel(){trace.push('cancel')},destroy(){trace.push('destroy')},other(d){d.end('save')}};__host.execDialog(def);reply={result:'cancel'};__host.execDialog(def);reply={result:'other'};var result=__host.execDialog(def);result==='save'&&JSON.stringify(trace)==='[\"commit\",\"destroy\",\"cancel\",\"destroy\",\"destroy\"]'");
     }
     #[test]
     fn popup_menu_returns_the_original_leaf_command() {

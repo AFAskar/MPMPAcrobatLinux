@@ -16,11 +16,11 @@ These are counts per fixture, not counts of distinct classes across versions. Th
 
 Local evidence: `output/testing/native-class-audit-1793046452594567379/classes.json`, with original-runtime inventory and per-case reports. Paid script bodies and private character values are not copied into this document or test source.
 
-## Confirmed MPMB incompatibility
+## Printing milestone in progress
 
-`tools/native/mpmb-scope-audit` calls the original `PrintTheSheet` function with its all-pages print setting. It fails in **all three supplied PDFs**, because `tDoc.getPrintParams` and `tDoc.print` are absent. This is an actual MPMB workflow failure, not an unrelated Acrobat API gap. The failure is retained and never counted as compatible. If printer dependencies are implemented later, the negative probe refuses to invoke them; controlled printing validation must replace that check.
+The missing `getPrintParams`/`print` dependency failure has been implemented with synchronous live-state capture and actual flattened print output. `tools/native/printing` passes all three fixtures: twelve controlled print artifacts cover all/selected/generated companion pages, simplex/long-edge duplex, the original page-selection dialog, cancellation, and all four field display values. Independent PDF structure, extracted text and Poppler rendering checks pass; interactive saves retain original scripts and reopen natively. Evidence: `output/testing/native-printing-1793074562899703807/printing.json`.
 
-Local evidence: `output/testing/mpmb-scope-audit-1793046774015100548/scope.json`. Original failed probes include the original function stack and bounded dependency introspection. No job was printed.
+This milestone remains **in progress** pending fresh reference qualification, real Reader print workflow/output checks and native destination-dialog interaction. Physical CUPS output is implemented but has not been submitted to a printer. Advanced Acrobat print settings are rejected explicitly. Earlier unsupported-print evidence remains under `output/testing/mpmb-scope-audit-1793046774015100548/scope.json`; it is historical, not a statement that the dependencies are still absent.
 
 Original embedded source also uses unfinished attachment/export, document import/export and menu operations. Field styling/font/rich-text fidelity and some bookmark/dialog behavior remain partial. Full generated-output comparisons still show two hidden-widget Print-flag differences and a 2024 `CurrentEvals.Stringified` representation difference; some Reader-regenerated appearance streams and rendered pixels differ. See [native-compatibility.json](native-compatibility.json).
 
