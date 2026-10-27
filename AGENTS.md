@@ -1,3 +1,9 @@
+# Constraints
+
+- Atomic Commits
+- Relevant Commit Messages Per atomic commit
+- Concrete Proofs by testing Per Feature
+
 # MPMB development environment
 
 Read `docs/testing-environment.md` before changing or testing PDF behavior.
@@ -12,3 +18,12 @@ Read `docs/testing-environment.md` before changing or testing PDF behavior.
 - Restore a VM checkpoint only while Windows is cleanly shut down. The checkpoint tool retains pre-restore state.
 
 - The 2024 source is a pinned reference submodule. Initialize with `git submodule update --init --recursive`; do not edit it or advance it with `git pull`/`--remote`. Deliberate reference upgrades require a separate parent-repository commit.
+
+# Native reader implementation
+
+- Keep Cargo builds at one job and serialize Acrobat operations. The Windows VM has 4 GiB RAM; do not spawn parallel agents for this work.
+- Keep QuickJS as the single authoritative form state. PDFium renders disposable projections; its built-in execDialog is a successful no-op and is not an alternative MPMB runtime.
+- Compatibility means all reachable MPMB workflows in all three authorized fixtures. Base-class level/proficiency checks, default dialog replies and passing smoke tests do not establish full compatibility. Record unsupported behavior and coverage gaps explicitly.
+- Separate implementation into milestones with concrete native and real Acrobat evidence before marking each milestone complete. Maintain docs/native-compatibility.json, docs/mpmb-compatibility-audit.md and docs/development-handoff.md.
+- Runtime repair mpmb-2024-261023-wildshape-pop-typo is already user-authorized. Keep its exact fingerprint/source guards, diagnostics/UI disclosure, unchanged embedded script bytes and strict-original-scripts option. Do not request authorization again for this repair.
+- Printing tests must use controlled file destinations or cancel the printer dialog; never automatically send test jobs to a physical printer.
