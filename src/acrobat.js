@@ -27,6 +27,9 @@ var __host = (function () {
     seen.push(v);let s=Array.isArray(v)?'['+v.map(x=>source(x,seen)).join(',')+']':'({'+Object.keys(v).map(k=>JSON.stringify(k)+':'+source(v[k],seen)).join(',')+'})';seen.pop();return s;
   }
   Object.defineProperty(Object.prototype,'toSource',{value:function(){return source(this)},configurable:true});
+  function displayFlags(value,old){value=Number(value);if(![0,1,2,3].includes(value))throw Error('Invalid field display');return (old&~(2|4|32))|({0:4,1:6,2:0,3:36})[value];}
+  function widgetDisplay(f,index){const w=f._widgets[index];if(!w||w.flags===undefined)return f._fallbackDisplay;const flags=w.flags;return flags&2?1:flags&32?3:flags&4?0:2;}
+  function setWidgetDisplay(f,index,value){const w=f._widgets[index];if(!w)throw Error('Invalid widget index');const next=displayFlags(value,w.flags===undefined?displayFlags(f._fallbackDisplay,4):w.flags);if(next!==w.flags){w.flags=next;revision++;}}
   function addField(n,x) {
     const f={name:n,value:x.value,defaultValue:x.default_value,userName:x.user_name,submitName:x.submit_name,
       type:({Tx:'text',Ch:x.flags&131072?'combobox':'listbox',Btn:x.flags&65536?'button':x.flags&32768?'radiobutton':'checkbox'})[x.kind],
@@ -35,7 +38,7 @@ var __host = (function () {
       alignment:['left','center','right'][x.alignment||0],lineWidth:1,borderStyle:'solid',buttonPosition:0,buttonAlignX:50,buttonAlignY:50,
       calcOrderIndex:data.order.indexOf(n),items:x.items,exportValues:x.export_values||['Yes'],currentValueIndices:-1,
       page:x.widgets.length===1?x.widgets[0].page:x.widgets.map(w=>w.page),
-      rect:x.widgets.length?x.widgets[0].rect:[],_widgets:x.widgets.map(w=>Object.assign({},w)),_actions:Object.assign({},x.actions),
+      rect:x.widgets.length?x.widgets[0].rect:[],_widgets:x.widgets.map(w=>Object.assign({flags:displayFlags(x.display,4)},w)),_fallbackDisplay:x.display,_actions:Object.assign({},x.actions),
       get valueAsString(){return String(this.value)}, get numItems(){return this.items.length},
       getItemAt(i,exportValue){let v=this.items[i];return Array.isArray(v)?v[exportValue?0:1]:v},
       setItems(items){this.items=items.slice()}, clearItems(){this.items=[]},
@@ -52,7 +55,8 @@ var __host = (function () {
       let stored=f[prop];Object.defineProperty(f,prop,{enumerable:true,get(){return stored},set(v){if(JSON.stringify(v)!==JSON.stringify(stored))gap('Field.'+prop+' appearance/persistence');stored=v;if(prop==='richValue'&&Array.isArray(v))f.value=v.map(span=>span.text||'').join('')}});
     }
     for(const prop of ['userName','submitName']){let stored=f[prop];Object.defineProperty(f,prop,{enumerable:true,get(){return stored},set(v){stored=String(v)}})}
-    for(const prop of ['display','readonly']){let stored=f[prop];Object.defineProperty(f,prop,{enumerable:true,get(){return stored},set(v){if(stored!==v)revision++;stored=v}})}
+    Object.defineProperty(f,'display',{enumerable:true,get(){return widgetDisplay(f,0)},set(v){displayFlags(v,4);f._fallbackDisplay=Number(v);for(let i=0;i<f._widgets.length;i++)setWidgetDisplay(f,i,v);}});
+    for(const prop of ['readonly']){let stored=f[prop];Object.defineProperty(f,prop,{enumerable:true,get(){return stored},set(v){if(stored!==v)revision++;stored=v}})}
     let raw=x.value;
     Object.defineProperty(f,'value',{enumerable:true,get(){return x.kind!=='Btn'&&typeof raw==='string'&&/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(raw)?Number(raw):raw},set(v){
       // Reader leaves the Wildfire Spirit's absent hit-die value as an empty
@@ -84,7 +88,7 @@ var __host = (function () {
     for(const n of Object.keys(t.fields)){
       const x=JSON.parse(JSON.stringify(t.fields[n])),base=fields[n];
       if(base){x.value=base.valueAsString;x.user_name=base.userName;x.submit_name=base.submitName;x.display=base.display;x.rich_value=base.richValue;}
-      for(const w of x.widgets)w.page=index;
+      for(const w of x.widgets){if(base){const live=base._widgets.filter(source=>JSON.stringify(source.id)===JSON.stringify(w.id))[0];if(live&&live.flags!==undefined)w.flags=live.flags;}w.page=index;}
       if(rename)addField(prefix+n,x);else{if(!fields[n])throw Error('Missing shared template field '+n);fields[n]._widgets.push(...x.widgets);}
 
     }
@@ -129,7 +133,7 @@ var __host = (function () {
     if(!f.readonly&&(f.type==='checkbox'||f.type==='radiobutton'))f.checkThisBox(index,f.type==='radiobutton'||!f.isBoxChecked(index));
     eventRun(f,'U',f.value);if(globalThis.calculate&&app.calculate)calculateNow();
   }
-  function pageWidgets(page){const result=[];for(const n of names){const f=fields[n];if(f.display===1||f.display===3)continue;f._widgets.forEach((w,index)=>{if(w.page===page)result.push({name:n,index,rect:w.rect,type:f.type,readonly:f.readonly})})}return result;}
+  function pageWidgets(page){const result=[];for(const n of names){const f=fields[n];f._widgets.forEach((w,index)=>{const display=widgetDisplay(f,index);if(w.page===page&&display!==1&&display!==3)result.push({name:n,index,rect:w.rect,type:f.type,readonly:f.readonly})})}return result;}
   function advance(ms) {
     const target=clock+ms;let count=0;
     while(true){let due=Array.from(timers.values()).filter(t=>t.at<=target).sort((a,b)=>a.at-b.at||a.id-b.id)[0];if(!due)break;
@@ -180,7 +184,7 @@ var __host = (function () {
     const repair={id:'mpmb-2024-261023-wildshape-pop-typo',scope:'runtime only',embedded_scripts_modified:false,reason:'Original ApplyWildshape reads pop instead of its local prop variable'};
     repairs.push(repair);__log('Applied qualified runtime repair: '+repair.id);
   }
-  return {activate,pageWidgets,menuItems,popup,applyQualifiedRepairs,get revision(){return revision},recordError(e){errors.push(e)},fields,names,data,menus,gaps,errors,source,unsupported,gap,calculateNow,edit,advance,execDialog,invokeMenu,command,spawn,removeField,deletePages,
+  return {activate,pageWidgets,widgetDisplay,setWidgetDisplay,menuItems,popup,applyQualifiedRepairs,get revision(){return revision},recordError(e){errors.push(e)},fields,names,data,menus,gaps,errors,source,unsupported,gap,calculateNow,edit,advance,execDialog,invokeMenu,command,spawn,removeField,deletePages,
     print(params){const result=JSON.parse(__print(JSON.stringify({params,state:JSON.parse(__host.snapshot())})));printJobs.push(result);return undefined},
     ready(){let n=0;while(!globalThis.calculate||!app.calculate||globalThis.delay){let t=Array.from(timers.values()).sort((a,b)=>a.at-b.at)[0];if(!t||++n>100)throw Error('Document calculations suspended without a resumable timer');advance(Math.max(0,t.at-clock));}return true},
     snapshot(){let o={__structure:journal,__order:data.order};if(data.bookmarksChanged)o.__bookmarks=bookmarkRoot;for(const n of names){let f=fields[n];o[n]={value:Array.isArray(f.value)?f.value:f.valueAsString,icon:f._icon,caption:f._caption,captions:f._captions,actions:f._modifiedActions,widgets:f._widgets,currentValueIndices:f.currentValueIndices,textSize:f.textSize,alignment:f.alignment,multiline:f.multiline,textColor:f.textColor,textFont:f.textFont,richValue:f.richValue,formatted:f._formatted===undefined?f.value:f._formatted,display:f.display,userName:f.userName,submitName:f.submitName,readonly:f.readonly,items:f.items};}return JSON.stringify(o)},
@@ -221,7 +225,7 @@ var util={
 Object.assign(globalThis,{
   info:JSON.parse(__initial).info,documentFileName:JSON.parse(__initial).file,path:JSON.parse(__initial).path,
   numPages:JSON.parse(__initial).pages,numFields:__host.names.length,calculate:true,delay:false,dirty:false,pageNum:0,
-  getField(n){n=String(n).replace(/\.{2,}/g,'.');if(__host.fields[n])return __host.fields[n];const selected=/^(.*)\.(\d+)$/.exec(n);if(selected&&__host.fields[selected[1]]){const base=__host.fields[selected[1]],index=Number(selected[2]);if(!base._widgets[index])return null;return new Proxy(base,{get(target,key){if(key==='page')return target._widgets[index].page;if(key==='setFocus')return function(){__host.data.focus=target.name;__host.data.focusWidget=index;const page=target._widgets[index].page;if(page>=0)globalThis.pageNum=page;};return target[key]}})}const prefix=String(n)+'.';let children=__host.names.filter(x=>x.startsWith(prefix));return children.length?new Proxy({name:n,getArray(){return children.map(x=>__host.fields[x])}},{get(o,k){return k in o?o[k]:__host.fields[children[0]][k]},set(o,k,v){for(const child of children)__host.fields[child][k]=v;return true}}):null},
+  getField(n){n=String(n).replace(/\.{2,}/g,'.');if(__host.fields[n])return __host.fields[n];const selected=/^(.*)\.(\d+)$/.exec(n);if(selected&&__host.fields[selected[1]]){const base=__host.fields[selected[1]],index=Number(selected[2]);if(!base._widgets[index])return null;return new Proxy(base,{get(target,key){if(key==='page')return target._widgets[index].page;if(key==='display')return __host.widgetDisplay(target,index);if(key==='setFocus')return function(){__host.data.focus=target.name;__host.data.focusWidget=index;const page=target._widgets[index].page;if(page>=0)globalThis.pageNum=page;};return target[key]},set(target,key,value){if(key==='display')__host.setWidgetDisplay(target,index,value);else target[key]=value;return true}})}const prefix=String(n)+'.';let children=__host.names.filter(x=>x.startsWith(prefix));return children.length?new Proxy({name:n,getArray(){return children.map(x=>__host.fields[x])}},{get(o,k){return k in o?o[k]:__host.fields[children[0]][k]},set(o,k,v){for(const child of children)__host.fields[child][k]=v;return true}}):null},
   getNthFieldName(i){return __host.names[i]},calculateNow:__host.calculateNow,
   resetForm(list){for(const n of __host.names){if(!list||list.some(x=>n===x||n.startsWith(x+'.')))__host.fields[n].value=__host.fields[n].defaultValue;}},
   getTemplate(n){return __host.data.templates&&__host.data.templates[n]?{name:n,spawn(index,rename,overlay){return __host.spawn(n,index,rename,overlay)}}:null},

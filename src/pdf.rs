@@ -17,6 +17,7 @@ pub struct Widget {
     pub id: ObjectId,
     pub page: i32,
     pub rect: Vec<f64>,
+    pub flags: i64,
 }
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Field {
@@ -240,6 +241,7 @@ fn walk(
             id: wid,
             page: *page_map.get(&wid).unwrap_or(&-1),
             rect,
+            flags,
         });
     }
     let items = attrs
@@ -598,12 +600,20 @@ impl Pdf {
             }
             for (widget_index, w) in f.widgets.iter().enumerate() {
                 let display = s["display"].as_i64().unwrap_or(f.display as i64);
-                let flags = match display {
-                    1 => 2,
-                    2 => 0,
-                    3 => 36,
-                    _ => 4,
-                };
+                let flags = s["widgets"][widget_index]["flags"]
+                    .as_i64()
+                    .unwrap_or_else(|| {
+                        let visibility = match display {
+                            1 => 6,
+                            2 => 0,
+                            3 => 36,
+                            _ => 4,
+                        };
+                        (w.flags & !(2 | 4 | 32)) | visibility
+                    });
+                if flags < 0 {
+                    bail!("invalid widget flags for {name}")
+                }
                 let rect = s["widgets"][widget_index]["rect"]
                     .as_array()
                     .map(|a| {
@@ -621,8 +631,7 @@ impl Pdf {
                             .collect::<Vec<_>>(),
                     );
                 }
-                let old = wd.get(b"F").and_then(Object::as_i64).unwrap_or(4);
-                wd.set("F", (old & !(2 | 4 | 32)) | flags);
+                wd.set("F", flags);
                 if f.kind == "Btn" && f.flags & 65536 != 0 {
                     buttons::project(&mut doc, &icon_source, &fields, w, &rect, s, (&face, font))?;
                     continue;
@@ -638,7 +647,7 @@ impl Pdf {
                     continue;
                 }
                 // noView fields still need fresh appearances for printing.
-                if w.page < 0 || display == 1 {
+                if w.page < 0 || flags & 2 != 0 {
                     continue;
                 }
                 if value.chars().any(|c| c as u32 > 65535) {

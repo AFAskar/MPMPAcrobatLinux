@@ -112,3 +112,9 @@ Add reproducible native build/run instructions as implementation begins. Keep Ru
 The initial commits were checked for Python syntax, shell syntax, JavaScript syntax, valid JSON, staged whitespace, unwanted binary/private artifacts and common credential patterns. Ignore rules were checked against both excluded paths and trackable Rust/source/example files. Functional harness evidence predates these commits; the harness source is unchanged from the qualification fingerprint.
 
 See testing-readiness-audit.md for measured acceptance boundaries and retained failure history; see windows-reference-benchmark.md only for the retired app-server/direct macro comparison.
+
+## Continuation: widget flags and newly exposed failures
+
+Per-widget annotation flags are retained in the authoritative state and saved PDF, including indexed display assignments and template cloning. Fresh two-edition native acceptance and Reader saves pass: `native-acceptance-1793081175283634562`, `native-acrobat-1793081649617013956.json`; complete active-widget flags/geometry/states match Reader (`widget-final-native-{2014,2024}.json`). 2014 canonical values all match; the known 2024 CurrentEvals representation difference remains. Older native-seeded reference files already contained stripped flags and are insufficient fidelity baselines.
+
+The frozen 2024 subclass run `native-subclasses-1793079112063681221` remains FAILED: it reached Hexblade, saved its progression state, then reopening failed in original SetRichTextFields on a missing companion skills field. Inspect this generated-page/removal state before extending coverage claims. Default feature replies and no independent Reader class qualification remain explicit limitations.

@@ -318,4 +318,12 @@ mod tests {
     fn undefined_field_assignment_does_not_reach_original_string_formatting() {
         host("getField('A').setAction('Format',\"event.value=event.value.replace(/x/g,'')\");getField('A').value=undefined;calculateNow();var state=JSON.parse(__host.snapshot());getField('A').valueAsString===''&&state.A.value===''&&state.A.formatted===''");
     }
+    #[test]
+    fn untouched_widgets_retain_print_bits_and_display_assignment_normalizes_them() {
+        host("var f=getField('A');f._widgets=[{page:0,flags:134},{page:1,flags:130}];var s=JSON.parse(__host.snapshot());var kept=s.A.widgets[0].flags===134&&s.A.widgets[1].flags===130;f.display=display.hidden;kept&&f._widgets.every(w=>w.flags===134)&&f.display===display.hidden&&__host.pageWidgets(0).length===0");
+    }
+    #[test]
+    fn indexed_display_changes_only_its_widget_and_survives_snapshot() {
+        host("var f=getField('A');f._widgets=[{page:0,flags:132},{page:1,flags:132}];getField('A.1').display=display.hidden;var hidden=f._widgets[0].flags===132&&f._widgets[1].flags===134&&f.display===display.visible&&getField('A.1').display===display.hidden;f.display=display.noView;getField('A.1').display=display.noPrint;var s=JSON.parse(__host.snapshot());hidden&&s.A.widgets[0].flags===164&&s.A.widgets[1].flags===128&&__host.pageWidgets(0).length===0&&__host.pageWidgets(1)[0].name==='A'");
+    }
 }

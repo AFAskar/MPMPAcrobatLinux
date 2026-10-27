@@ -26,7 +26,7 @@ The missing `getPrintParams`/`print` dependency failure has been implemented wit
 
 This milestone remains **in progress** pending real Reader printed-file output comparison. Fresh 27-check preflight/24-case readiness, native destination-dialog cancellation, and real Reader print-dialog cancellation/save have passed for the defined fixtures; the latest evidence is in native-compatibility.json. Physical CUPS output is implemented but has not been submitted to a printer. Advanced Acrobat print settings are rejected explicitly. Earlier unsupported-print evidence remains under `output/testing/mpmb-scope-audit-1793046774015100548/scope.json`; it is historical, not a statement that the dependencies are still absent.
 
-Original embedded source also uses unfinished attachment/export, document import/export and menu operations. Field styling/font/rich-text fidelity and some bookmark/dialog behavior remain partial. Full generated-output comparisons still show two hidden-widget Print-flag differences and a 2024 `CurrentEvals.Stringified` representation difference; some Reader-regenerated appearance streams and rendered pixels differ. See [native-compatibility.json](native-compatibility.json).
+Original embedded source also uses unfinished attachment/export, document import/export and menu operations. Field styling/font/rich-text fidelity and some bookmark/dialog behavior remain partial. Earlier generated-output comparisons showed hidden-widget Print-flag differences. Per-widget flag preservation now passes fresh two-edition Reader roundtrips (see below); a 2024 `CurrentEvals.Stringified` representation difference remains; some Reader-regenerated appearance streams and rendered pixels differ. See [native-compatibility.json](native-compatibility.json).
 
 ## Additional validation
 
@@ -44,3 +44,9 @@ Evidence: `output/testing/readiness-1793046363.json`, `native-validation-1793047
 6. Complete the MPMB-used workflows that currently fail. Do not expand the requirement to unused Acrobat APIs, and never count a stub, ignored error, excluded case or default-only dialog probe as full compatibility.
 
 This audit does not certify the viewer for unrestricted table use with arbitrary predefined class choices.
+
+## Per-widget visibility correction
+
+The native state now preserves each annotation's complete flags independently, including inactive template widgets. Indexed `getField(name + ".N").display` changes only that widget; base-field assignment changes every widget and preserves unrelated flags. Hidden assignment uses Reader's Hidden+Print bits. Template spawning retains the source widget's live flags.
+
+Concrete evidence: `native-acceptance-1793081175283634562/acceptance.json` and real Reader reopen/save `native-acrobat-1793081649617013956.json`. Read-only comparisons `widget-final-native-2014.json` and `widget-final-native-2024.json` have **zero active-widget flag/geometry/state differences**. All canonical values match in 2014; 2024 retains one known serialized evaluator difference. This does not establish appearance/resource equivalence or all generated-state coverage. Older comparisons against native-seeded Reader outputs understated the original loss of unchanged Print bits; those damaged baselines cannot certify source fidelity.
