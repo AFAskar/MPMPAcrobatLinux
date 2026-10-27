@@ -1132,7 +1132,9 @@
       "Reader save/reopen of changed trees not yet qualified",
       "Named/non-JavaScript external actions fail explicitly",
       "Direct destinations navigate to their page but zoom/position is flagged as partial"
-    ]
+    ],
+    "current_native_evidence": "output/testing/native-bookmarks-1793100757325317907/bookmarks.json",
+    "binary_scope": "Each new run retains its executable and SHA-256 to make evidence independent of later builds."
   },
   "table_workflows": {
     "status": "six native resource/rest/healing cases passed; independent Reader scenarios pending",

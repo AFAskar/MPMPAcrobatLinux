@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Original MPMB bookmark mutation/navigation with independently checked persistence."""
-import hashlib, json, subprocess, sys, time
+import hashlib, json, shutil, subprocess, sys, time
 from pathlib import Path
 from pypdf import PdfReader
 ROOT = Path(__file__).resolve().parents[2]
@@ -10,13 +10,14 @@ from verify import inspect, script_hashes
 
 def main():
     folder = ROOT / 'output/testing' / ('native-bookmarks-' + str(time.time_ns())); folder.mkdir(parents=True)
-    report = {'passed': False, 'cases': []}
+    binary = folder / 'mpmb-reader'; shutil.copy2(ROOT / 'target/debug/mpmb-reader', binary)
+    report = {'passed': False, 'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(), 'cases': []}
     print(folder, flush=True)
     def run(source, label, steps):
         spec, evidence = folder / (label + '-scenario.json'), folder / (label + '-report.json')
         spec.write_text(json.dumps({'dialogs': [{'result': 'ok'}] * 10, 'alerts': [1] * 10, 'steps': steps}))
         with (folder / (label + '.log')).open('w') as log:
-            result = subprocess.run([str(ROOT / 'target/debug/mpmb-reader'), str(source), '--probe', str(spec), str(evidence)], stdout=log, stderr=log, timeout=180)
+            result = subprocess.run([str(binary), str(source), '--probe', str(spec), str(evidence)], stdout=log, stderr=log, timeout=180)
         data = json.loads(evidence.read_text())
         assert result.returncode == 0 and data['passed'], data.get('error')
         return str(evidence)
