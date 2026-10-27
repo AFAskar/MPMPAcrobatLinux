@@ -427,6 +427,10 @@ mod tests {
         );
     }
     #[test]
+    fn default_appearance_retains_canonical_numeric_spelling() {
+        host("getField('A').value='+4';var s=JSON.parse(__host.snapshot());getField('A').value===4&&s.A.value==='+4'&&s.A.formatted==='+4'");
+    }
+    #[test]
     fn untouched_widgets_retain_print_bits_and_display_assignment_normalizes_them() {
         host("var f=getField('A');f._widgets=[{page:0,flags:134},{page:1,flags:130}];var s=JSON.parse(__host.snapshot());var kept=s.A.widgets[0].flags===134&&s.A.widgets[1].flags===130;f.display=display.hidden;kept&&f._widgets.every(w=>w.flags===134)&&f.display===display.hidden&&__host.pageWidgets(0).length===0");
     }

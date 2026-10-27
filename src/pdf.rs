@@ -374,10 +374,7 @@ fn bookmarks(d: &Document, first: Option<&Object>, depth: usize) -> Result<Vec<V
     }
     Ok(result)
 }
-fn unicode_font(doc: &mut Document) -> Result<(ObjectId, Vec<u8>)> {
-    let path = std::env::var("MPMB_FONT")
-        .unwrap_or_else(|_| "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf".into());
-    let bytes = std::fs::read(&path).context("read Unicode appearance font (MPMB_FONT)")?;
+fn unicode_font(doc: &mut Document, bytes: Vec<u8>, name: &str) -> Result<(ObjectId, Vec<u8>)> {
     let face = ttf_parser::Face::parse(&bytes, 0)?;
     let units = face.units_per_em() as f32;
     let scale = |n: i16| n as f32 * 1000. / units;
@@ -401,12 +398,58 @@ fn unicode_font(doc: &mut Document) -> Result<(ObjectId, Vec<u8>)> {
         dictionary! {"Length1"=>bytes.len() as i64},
         bytes.clone(),
     ));
-    let descriptor=doc.add_object(dictionary!{"Type"=>"FontDescriptor","FontName"=>"MPMBDejaVuSans","Flags"=>32,"FontBBox"=>vec![scale(bbox.x_min).into(),scale(bbox.y_min).into(),scale(bbox.x_max).into(),scale(bbox.y_max).into()],"ItalicAngle"=>0,"Ascent"=>scale(face.ascender()),"Descent"=>scale(face.descender()),"CapHeight"=>scale(face.capital_height().unwrap_or(face.ascender())),"StemV"=>80,"FontFile2"=>file});
+    let descriptor=doc.add_object(dictionary!{"Type"=>"FontDescriptor","FontName"=>name,"Flags"=>32,"FontBBox"=>vec![scale(bbox.x_min).into(),scale(bbox.y_min).into(),scale(bbox.x_max).into(),scale(bbox.y_max).into()],"ItalicAngle"=>0,"Ascent"=>scale(face.ascender()),"Descent"=>scale(face.descender()),"CapHeight"=>scale(face.capital_height().unwrap_or(face.ascender())),"StemV"=>80,"FontFile2"=>file});
     let gidmap = doc.add_object(Stream::new(dictionary! {}, gids));
-    let cid=doc.add_object(dictionary!{"Type"=>"Font","Subtype"=>"CIDFontType2","BaseFont"=>"MPMBDejaVuSans","CIDSystemInfo"=>dictionary!{"Registry"=>Object::string_literal("Adobe"),"Ordering"=>Object::string_literal("Identity"),"Supplement"=>0},"FontDescriptor"=>descriptor,"DW"=>1000,"W"=>widths,"CIDToGIDMap"=>gidmap});
+    let cid=doc.add_object(dictionary!{"Type"=>"Font","Subtype"=>"CIDFontType2","BaseFont"=>name,"CIDSystemInfo"=>dictionary!{"Registry"=>Object::string_literal("Adobe"),"Ordering"=>Object::string_literal("Identity"),"Supplement"=>0},"FontDescriptor"=>descriptor,"DW"=>1000,"W"=>widths,"CIDToGIDMap"=>gidmap});
     let cmap=b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def /CMapName /MPMBIdentity def /CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange 1 beginbfrange <0000> <FFFF> <0000> endbfrange endcmap CMapName currentdict /CMap defineresource pop end end";
     let unicode = doc.add_object(Stream::new(dictionary! {}, cmap.to_vec()));
-    Ok((doc.add_object(dictionary!{"Type"=>"Font","Subtype"=>"Type0","BaseFont"=>"MPMBDejaVuSans","Encoding"=>"Identity-H","DescendantFonts"=>vec![cid.into()],"ToUnicode"=>unicode}),bytes))
+    Ok((doc.add_object(dictionary!{"Type"=>"Font","Subtype"=>"Type0","BaseFont"=>name,"Encoding"=>"Identity-H","DescendantFonts"=>vec![cid.into()],"ToUnicode"=>unicode}),bytes))
+}
+// Reuse embedded TrueType faces and their actual metrics when the field's
+// requested font covers its text. Paid font bytes stay inside disposable PDFs.
+fn embedded_fonts(doc: &Document) -> Result<BTreeMap<String, Vec<u8>>> {
+    let mut result = BTreeMap::new();
+    let form = resolved(doc, doc.catalog()?.get(b"AcroForm")?)?.as_dict()?;
+    let Ok(resources) = form
+        .get(b"DR")
+        .and_then(|o| doc.dereference(o).map(|(_, o)| o))
+        .and_then(Object::as_dict)
+    else {
+        return Ok(result);
+    };
+    let Ok(fonts) = resources
+        .get(b"Font")
+        .and_then(|o| doc.dereference(o).map(|(_, o)| o))
+        .and_then(Object::as_dict)
+    else {
+        return Ok(result);
+    };
+    for (key, value) in fonts {
+        let font = resolved(doc, value)?.as_dict()?;
+        let Ok(descriptor) = font
+            .get(b"FontDescriptor")
+            .and_then(|o| doc.dereference(o).map(|(_, o)| o))
+            .and_then(Object::as_dict)
+        else {
+            continue;
+        };
+        let Ok(stream) = descriptor
+            .get(b"FontFile2")
+            .and_then(|o| doc.dereference(o).map(|(_, o)| o))
+            .and_then(Object::as_stream)
+        else {
+            continue;
+        };
+        let bytes = if stream.dict.has(b"Filter") {
+            stream.decompressed_content()?
+        } else {
+            stream.content.clone()
+        };
+        if ttf_parser::Face::parse(&bytes, 0).is_ok() {
+            result.insert(String::from_utf8_lossy(key).into_owned(), bytes);
+        }
+    }
+    Ok(result)
 }
 impl Pdf {
     pub fn open(path: &Path) -> Result<Self> {
@@ -527,7 +570,13 @@ impl Pdf {
             doc.get_dictionary_mut(form)?.set("CO", ids);
         }
         let icon_source = doc.clone();
-        let (font, font_bytes) = unicode_font(&mut doc)?;
+        let embedded = embedded_fonts(&doc)?;
+        let mut font_cache = BTreeMap::new();
+        let fallback_path = std::env::var("MPMB_FONT")
+            .unwrap_or_else(|_| "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf".into());
+        let fallback_bytes =
+            std::fs::read(fallback_path).context("read Unicode appearance font (MPMB_FONT)")?;
+        let (font, font_bytes) = unicode_font(&mut doc, fallback_bytes, "MPMBDejaVuSans")?;
         let face = ttf_parser::Face::parse(&font_bytes, 0)?;
         for (name, f) in &fields {
             let Some(s) = state.get(name) else {
@@ -658,8 +707,43 @@ impl Pdf {
                 }
                 let width = (rect[2] - rect[0]).abs() as f32;
                 let height = (rect[3] - rect[1]).abs() as f32;
-                let content = appearance::content(&face, width, height, f, s, &value)?;
-                let ap=doc.add_object(Stream::new(dictionary!{"Type"=>"XObject","Subtype"=>"Form","BBox"=>vec![0.into(),0.into(),width.into(),height.into()],"Resources"=>dictionary!{"Font"=>dictionary!{"Helv"=>font}}},content));
+                let requested = s["textFont"].as_str().unwrap_or(&f.text_font);
+                let render_text =
+                    if let Some(spans) = s["richValue"].as_array().filter(|v| !v.is_empty()) {
+                        spans
+                            .iter()
+                            .filter_map(|v| v["text"].as_str())
+                            .collect::<String>()
+                    } else {
+                        appearance::display_text(f, s, &value)
+                    };
+                let suitable = embedded.get(requested).filter(|bytes| {
+                    ttf_parser::Face::parse(bytes, 0).is_ok_and(|face| {
+                        render_text
+                            .chars()
+                            .all(|c| c.is_control() || face.glyph_index(c).is_some())
+                    })
+                });
+                let (appearance_font, content) = if let Some(bytes) = suitable {
+                    if !font_cache.contains_key(requested) {
+                        let mapped =
+                            unicode_font(&mut doc, bytes.clone(), &format!("MPMB{requested}"))?;
+                        font_cache.insert(requested.to_owned(), mapped);
+                    }
+                    let (id, bytes) = &font_cache[requested];
+                    let face = ttf_parser::Face::parse(bytes, 0)?;
+                    (
+                        *id,
+                        appearance::content(&face, width, height, f, s, &value)?,
+                    )
+                } else {
+                    (
+                        font,
+                        appearance::content(&face, width, height, f, s, &value)?,
+                    )
+                };
+
+                let ap=doc.add_object(Stream::new(dictionary!{"Type"=>"XObject","Subtype"=>"Form","BBox"=>vec![0.into(),0.into(),width.into(),height.into()],"Resources"=>dictionary!{"Font"=>dictionary!{"Helv"=>appearance_font}}},content));
                 doc.get_dictionary_mut(w.id)?
                     .set("AP", dictionary! {"N"=>ap});
             }

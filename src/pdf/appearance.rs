@@ -7,6 +7,9 @@ struct Glyph {
     color: [f32; 3],
 }
 fn width(face: &ttf_parser::Face<'_>, g: &Glyph) -> f32 {
+    if g.c == '\n' {
+        return 0.;
+    }
     face.glyph_index(g.c)
         .and_then(|id| face.glyph_hor_advance(id))
         .unwrap_or(face.units_per_em() / 2) as f32
@@ -24,6 +27,8 @@ fn lines(
     let mut current = 0.;
     for glyph in glyphs {
         if glyph.c == '\n' {
+            // A blank rich line still carries the newline span's font size.
+            line.push(glyph);
             result.push(std::mem::take(&mut line));
             current = 0.;
             continue;
@@ -63,6 +68,30 @@ fn rgb(v: &Value) -> [f32; 3] {
         _ => [0.; 3],
     }
 }
+pub(super) fn display_text(field: &Field, state: &Value, value: &str) -> String {
+    let formatted = match state.get("formatted") {
+        Some(Value::String(s)) => s.clone(),
+        Some(v @ (Value::Number(_) | Value::Bool(_))) => v.to_string(),
+        _ => value.to_owned(),
+    };
+    if field.kind == "Ch" && !field.actions.contains_key("F") {
+        state["items"]
+            .as_array()
+            .and_then(|items| {
+                items.iter().find_map(|item| {
+                    let pair = item.as_array()?;
+                    if pair.first()?.as_str()? == value {
+                        pair.get(1)?.as_str().map(str::to_owned)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .unwrap_or(formatted)
+    } else {
+        formatted
+    }
+}
 pub(super) fn content(
     face: &ttf_parser::Face<'_>,
     width_box: f32,
@@ -83,29 +112,9 @@ pub(super) fn content(
     } else {
         (height - 3.).clamp(4., 18.)
     };
-    let formatted = state["formatted"]
-        .as_str()
-        .map(str::to_owned)
-        .unwrap_or_else(|| value.to_owned());
-    let formatted = if field.kind == "Ch" && !field.actions.contains_key("F") {
-        state["items"]
-            .as_array()
-            .and_then(|items| {
-                items.iter().find_map(|item| {
-                    let pair = item.as_array()?;
-                    if pair.first()?.as_str()? == value {
-                        pair.get(1)?.as_str().map(str::to_owned)
-                    } else {
-                        None
-                    }
-                })
-            })
-            .unwrap_or(formatted)
-    } else {
-        formatted
-    };
+    let formatted = display_text(field, state, value);
     let color = rgb(&state["textColor"]);
-    let available = (width_box - 2.).max(1.);
+    let available = (width_box - if spans.is_some() { 0. } else { 2. }).max(1.);
     let make = |size: f32| -> Vec<Glyph> {
         if let Some(spans) = spans {
             spans
@@ -150,27 +159,35 @@ pub(super) fn content(
         }
     }
     let mut out = format!("/Tx BMC q 0 0 {width_box} {height} re W n BT ");
-    let mut y = if wrap || spans.is_some() {
-        height
-            - 1.
-            - laid
-                .first()
-                .and_then(|l| l.iter().map(|g| g.size).reduce(f32::max))
-                .unwrap_or(size)
+    let line_sizes: Vec<f32> = laid
+        .iter()
+        .map(|line| line.iter().map(|g| g.size).reduce(f32::max).unwrap_or(size))
+        .collect();
+    let units = face.units_per_em() as f32;
+    let ascent = face.ascender() as f32 / units;
+    let descent = face.descender() as f32 / units;
+    let mut y = if spans.is_some() {
+        height - line_sizes.first().copied().unwrap_or(size) * (ascent - descent)
+    } else if wrap {
+        height - 1. - line_sizes.first().copied().unwrap_or(size)
     } else {
-        let units = face.units_per_em() as f32;
-        let ascent = face.ascender() as f32 * size / units;
-        let descent = face.descender() as f32 * size / units;
-        (height - ascent + descent) / 2. - descent
+        (height - ascent * size + descent * size) / 2. - descent * size
     };
-    for line in laid {
+    for (line_index, line) in laid.into_iter().enumerate() {
+        let line_size = line_sizes[line_index];
+        let line: Vec<_> = line.into_iter().filter(|g| g.c != '\n').collect();
         let total = line.iter().map(|g| width(face, g)).sum::<f32>();
         let mut x = match state["alignment"].as_str().unwrap_or("left") {
             "center" => (width_box - total) / 2.,
             "right" => width_box - 1. - total,
-            _ => 1.,
+            _ => {
+                if spans.is_some() {
+                    0.
+                } else {
+                    1.
+                }
+            }
         };
-        let line_size = line.iter().map(|g| g.size).reduce(f32::max).unwrap_or(size);
         let mut start = 0;
         while start < line.len() {
             let mut end = start + 1;
@@ -206,8 +223,64 @@ pub(super) fn content(
             x += run.iter().map(|g| width(face, g)).sum::<f32>();
             start = end;
         }
-        y -= line_size * 1.12;
+        y -= if spans.is_some() {
+            let next = line_sizes.get(line_index + 1).copied().unwrap_or(line_size);
+            line_size * (1. - ascent) + next * ascent
+        } else {
+            line_size * 1.12
+        };
     }
     out.push_str("ET Q EMC");
     Ok(out.into_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn field() -> Field {
+        Field {
+            name: "format regression".into(),
+            id: (1, 0),
+            value: json!("10+Dex"),
+            default_value: json!(""),
+            kind: "Tx".into(),
+            user_name: String::new(),
+            submit_name: String::new(),
+            flags: 0,
+            alignment: 0,
+            display: 0,
+            text_size: 7.,
+            text_font: String::new(),
+            widgets: vec![],
+            actions: BTreeMap::new(),
+            items: vec![],
+            export_values: vec![],
+            caption: String::new(),
+        }
+    }
+    #[test]
+    fn numeric_format_result_is_displayed_without_overwriting_formula() {
+        let field = field();
+        let state = json!({"formatted":12});
+        assert_eq!(display_text(&field, &state, "10+Dex"), "12");
+        assert_eq!(field.value, json!("10+Dex"));
+    }
+    #[test]
+    fn blank_rich_lines_preserve_the_newline_font_size() {
+        let bytes = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
+        let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
+        let glyphs = [('A', 7.), ('\n', 7.), ('\n', 6.), ('B', 7.)]
+            .into_iter()
+            .map(|(c, size)| Glyph {
+                c,
+                size,
+                color: [0.; 3],
+            })
+            .collect();
+        let layout = lines(&face, glyphs, 100., true);
+        assert_eq!(layout.len(), 3);
+        assert_eq!(layout[1][0].c, '\n');
+        assert_eq!(layout[1][0].size, 6.);
+        assert_eq!(width(&face, &layout[1][0]), 0.);
+    }
 }
