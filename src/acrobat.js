@@ -59,14 +59,15 @@ var __host = (function () {
     for(const prop of ['readonly']){let stored=f[prop];Object.defineProperty(f,prop,{enumerable:true,get(){return stored},set(v){if(stored!==v)revision++;stored=v}})}
     let raw=x.value;
     Object.defineProperty(f,'value',{enumerable:true,get(){return x.kind!=='Btn'&&typeof raw==='string'&&/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(raw)?Number(raw):raw},set(v){
-      // Reader leaves the Wildfire Spirit's absent hit-die value as an empty
-      // field. Undefined must not leak into subsequent original Format events.
-      if(v===undefined)v='';
-      if(raw===v)return;
+      // Reader converts null/undefined to text, then runs the commit keystroke
+      // and validation actions. Numeric MPMB fields reject that text themselves.
+      // Text fields stringify arrays as comma-separated text, never JSON.
+      if(v===undefined||v===null||(typeof v==='object'&&!(x.kind==='Ch'&&x.flags&2097152&&Array.isArray(v))))v=String(v);
+      if(String(raw)===String(v)){if(f._actions.F&&!calculating)f._formatted=eventRun(f,'F',f.value).value;return;}
       if(data.trace&&data.trace.includes(n))__log(n+': '+String(raw)+' -> '+String(v)+'\n'+new Error().stack);
       if(assigning.has(n)){raw=v;return}
       assigning.add(n);
-      try {let e=eventRun(f,'V',v);if(e.rc){if(String(raw)!==String(e.value))formatDirty.add(n);if(raw!==e.value)revision++;raw=e.value;f._formatted=undefined;if(globalThis.event&&event.target===f&&event.name==='Calculate')event.value=e.value;if(globalThis.calculate&&globalThis.app&&app.calculate&&!calculating)calculateNow();}} finally{assigning.delete(n)}
+      try {const original=v,text=String(v);let k=eventRun(f,'K',text);if(!k.rc){if(f._actions.F&&!calculating)f._formatted=eventRun(f,'F',f.value).value;return;}let e=eventRun(f,'V',k.value);if(e.rc){const committed=String(e.value)===text?original:e.value;if(String(raw)!==String(committed))formatDirty.add(n);if(raw!==committed)revision++;raw=committed;f._formatted=undefined;if(globalThis.event&&event.target===f&&event.name==='Calculate')event.value=e.value;if(globalThis.calculate&&globalThis.app&&app.calculate&&!calculating)calculateNow();if(f._actions.F&&!calculating)f._formatted=eventRun(f,'F',f.value).value;}} finally{assigning.delete(n)}
     }});
     Object.defineProperty(f,'valueAsString',{get(){return String(raw)}});
     Object.defineProperty(f,'rect',{get(){const r=f._widgets[0]&&f._widgets[0].rect;return r&&r.length===4?[r[0],Math.max(r[1],r[3]),r[2],Math.min(r[1],r[3])]:[]},set(r){if(!Array.isArray(r)||r.length!==4||r.some(v=>!Number.isFinite(Number(v))))throw Error('Invalid field rectangle');for(const w of f._widgets)w.rect=[Number(r[0]),Math.min(Number(r[1]),Number(r[3])),Number(r[2]),Math.max(Number(r[1]),Number(r[3]))];revision++}});
@@ -108,7 +109,7 @@ var __host = (function () {
   }
   function eventRun(f,key,value,extra) {
     let previous=globalThis.event;
-    let e=Object.assign({target:f,source:fields[data.focus]||f,name:({C:'Calculate',V:'Validate',K:'Keystroke',F:'Format',U:'Mouse Up'})[key]||key,type:'Field',value:value,rc:true,willCommit:true,change:'',selStart:0,selEnd:0},extra||{});
+    let e=Object.assign({target:f,targetName:f.name,source:fields[data.focus]||f,name:({C:'Calculate',V:'Validate',K:'Keystroke',F:'Format',U:'Mouse Up'})[key]||key,type:'Field',value:['K','V','C','F'].includes(key)?String(value):value,rc:true,willCommit:key==='K',change:'',selStart:0,selEnd:0},extra||{});
     globalThis.event=e;
     try {if(f._actions[key]) (0,eval)(f._actions[key]);return e;}
     catch(err){errors.push({stage:'field',field:f.name,event:key,error:String(err),stack:err.stack});throw err}
@@ -117,15 +118,15 @@ var __host = (function () {
   function calculateNow() {
     if(calculating){pending=true;return}
     calculating=true;
-    try {let passes=0; do {pending=false;for(const n of data.order){let f=fields[n];if(!f)throw Error('Missing calculation target '+n);if(f._actions.C){const e=eventRun(f,'C',f.value);if(e.rc)f.value=e.value;f._formatted=eventRun(f,'F',f.value).value;}}if(++passes>8)throw Error('calculation did not settle');}while(pending);const changed=Array.from(formatDirty);formatDirty.clear();for(const n of changed){const f=fields[n];if(f&&f._actions.F&&f._widgets.some(w=>w.page>=0))f._formatted=eventRun(f,'F',f.value).value;}}finally{calculating=false}
+    // A setter refreshes its own Format action. Calculation commits defer that
+    // refresh until the pass finishes; unchanged fields do not run commit hooks.
+    try {let passes=0; do {pending=false;for(const n of data.order){let f=fields[n];if(!f)throw Error('Missing calculation target '+n);if(f._actions.C){const e=eventRun(f,'C',f.value);if(e.rc)f.value=e.value;}}if(++passes>8)throw Error('calculation did not settle');}while(pending);for(const n of names.slice()){const f=fields[n];if(f&&f._actions.F&&(data.order.includes(n)||(formatDirty.has(n)&&typeof f.value==='number')))f._formatted=eventRun(f,'F',f.value).value;}formatDirty.clear();}finally{calculating=false}
   }
   function edit(n,v) {
     let f=fields[n];if(!f)throw Error('Unknown field '+n);if(f.readonly)throw Error('Read-only field '+n);
     data.focus=n;
-    let k=eventRun(f,'K',v);if(!k.rc)return false;
-    f.value=k.value;
-    if(globalThis.calculate&&app.calculate)calculateNow();
-    f._formatted=eventRun(f,'F',f.value).value;globalThis.dirty=true;return true;
+    f.value=v;
+    globalThis.dirty=true;return true;
   }
   function activate(n,index=0){
     const f=fields[n];if(!f)throw Error('Unknown field '+n);data.focus=n;

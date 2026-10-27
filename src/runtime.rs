@@ -315,8 +315,22 @@ mod tests {
         );
     }
     #[test]
-    fn undefined_field_assignment_does_not_reach_original_string_formatting() {
-        host("getField('A').setAction('Format',\"event.value=event.value.replace(/x/g,'')\");getField('A').value=undefined;calculateNow();var state=JSON.parse(__host.snapshot());getField('A').valueAsString===''&&state.A.value===''&&state.A.formatted===''");
+    fn null_and_undefined_are_text_and_numeric_keystrokes_can_reject_them() {
+        host(
+            r#"var f=getField('A');f.value=undefined;var text=f.value==='undefined';f.value=null;text=text&&f.value==='null';f.value='7';f.setAction('Keystroke',"event.rc=!isNaN(event.value)");f.value=undefined;text&&f.value===7"#,
+        );
+    }
+    #[test]
+    fn script_assignments_deliver_commit_keystrokes_before_string_validation() {
+        host(
+            r#"var f=getField('A'),trace=[];f.setAction('Keystroke',"trace.push([event.name,typeof event.value,event.value,event.willCommit]);event.rc=event.value!=='bad'");f.setAction('Validate',"trace.push([event.name,typeof event.value,event.value,event.willCommit])");f.value=17;f.value=17;f.value='bad';f.value===17&&JSON.stringify(trace)==='[["Keystroke","string","17",true],["Validate","string","17",false],["Keystroke","string","bad",true]]'"#,
+        );
+    }
+    #[test]
+    fn text_fields_coerce_arrays_before_snapshot() {
+        host(
+            r#"var f=getField('A');f.setAction('Validate','');f.value=['','P3.AScomp.'];var first=JSON.parse(__host.snapshot()).A.value;f.value=[''];first===',P3.AScomp.'&&JSON.parse(__host.snapshot()).A.value===''"#,
+        );
     }
     #[test]
     fn untouched_widgets_retain_print_bits_and_display_assignment_normalizes_them() {
