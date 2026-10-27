@@ -557,7 +557,7 @@
       "passed": false
     },
     "printing_native": {
-      "path": "output/testing/native-printing-1793074562899703807/printing.json",
+      "path": "output/testing/native-printing-1793075666647821266/printing.json",
       "passed": true
     }
   },
@@ -1033,8 +1033,8 @@
     "Bookmark actions, style and tree persistence"
   ],
   "printing": {
-    "status": "native-controlled-cases-passed; oracle-and-desktop-qualification-pending",
-    "evidence": "output/testing/native-printing-1793074562899703807/printing.json",
+    "status": "native artifacts, native dialog cancel and Reader dialog cancel/save passed; printed-output comparison pending",
+    "evidence": "output/testing/native-printing-1793075666647821266/printing.json",
     "fixtures": 3,
     "print_artifacts": 12,
     "coverage": [
@@ -1048,10 +1048,24 @@
     ],
     "not_qualified": [
       "Physical CUPS submission",
-      "Real Reader print dialog and output comparison",
+      "Real Reader printed-file output comparison",
       "Short-edge duplex and advanced Acrobat print settings"
     ],
-    "native_desktop_evidence": "output/testing/native-print-desktop-1793074958381478234/desktop.json"
+    "native_desktop_evidence": "output/testing/native-print-desktop-1793074958381478234/desktop.json",
+    "reader_cancel_save_evidence": "output/testing/native-printing-1793074562899703807/reader-printing-1793075547563190782/reader-printing.json",
+    "reader_qualification": "output/testing/readiness-1793074448.json",
+    "reader_constants": {
+      "interactionLevel": {
+        "full": 0,
+        "automatic": 1,
+        "silent": 2
+      },
+      "duplexTypes": {
+        "Simplex": 1,
+        "DuplexFlipLongEdge": 2,
+        "DuplexFlipShortEdge": 3
+      }
+    }
   },
   "historical_print_counterexamples": [
     {

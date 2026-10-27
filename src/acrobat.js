@@ -224,7 +224,7 @@ Object.assign(globalThis,{
   getTemplate(n){return __host.data.templates&&__host.data.templates[n]?{name:n,spawn(index,rename,overlay){return __host.spawn(n,index,rename,overlay)}}:null},
   get templates(){return Object.keys(__host.data.templates||{}).map(n=>getTemplate(n))},
   removeField:__host.removeField,deletePages:__host.deletePages,
-  getPrintParams(){return {firstPage:0,lastPage:numPages-1,interactive:'full',DuplexType:'Simplex',constants:{interactionLevel:{full:'full',automatic:'automatic',silent:'silent'},duplexTypes:{Simplex:'Simplex',DuplexFlipLongEdge:'DuplexFlipLongEdge',DuplexFlipShortEdge:'DuplexFlipShortEdge'}}}},
+  getPrintParams(){return {firstPage:0,lastPage:numPages-1,interactive:0,DuplexType:1,constants:{interactionLevel:{full:0,automatic:1,silent:2},duplexTypes:{Simplex:1,DuplexFlipLongEdge:2,DuplexFlipShortEdge:3}}}},
   print(params){if(!params||typeof params!=='object')return __host.unsupported('Doc.print legacy arguments');return __host.print(params)},
 });
 

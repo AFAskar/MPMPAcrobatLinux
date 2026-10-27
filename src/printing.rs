@@ -99,10 +99,29 @@ pub fn execute(
             bail!("unsupported print parameter {key}")
         }
     }
-    let duplex = match params["DuplexType"].as_str().unwrap_or("Simplex") {
-        "Simplex" => "one-sided",
-        "DuplexFlipLongEdge" => "two-sided-long-edge",
-        "DuplexFlipShortEdge" => "two-sided-short-edge",
+    let interaction = params
+        .get("interactive")
+        .map(|v| {
+            v.as_i64()
+                .context("print interaction level must be an integer")
+        })
+        .transpose()?
+        .unwrap_or(0);
+    if !(0..=2).contains(&interaction) {
+        bail!("invalid print interaction level")
+    }
+    if interactive && output_dir.is_none() && interaction != 0 {
+        bail!("noninteractive desktop printing is unsupported")
+    }
+    let duplex = match params
+        .get("DuplexType")
+        .map(|v| v.as_i64().context("print duplex type must be an integer"))
+        .transpose()?
+        .unwrap_or(1)
+    {
+        1 => "one-sided",
+        2 => "two-sided-long-edge",
+        3 => "two-sided-short-edge",
         value => bail!("unsupported duplex type {value}"),
     };
     let projected = pdf.project(&request["state"])?;
