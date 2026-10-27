@@ -366,7 +366,7 @@ mod tests {
         let context = Context::full(&engine).unwrap();
         context.with(|ctx|{
             let field=|name:&str,value:&str,actions:Value|json!({"name":name,"value":value,"default_value":"","user_name":"","submit_name":"","kind":"Tx","flags":0,"display":0,"text_size":10,"widgets":[],"items":[],"actions":actions});
-            ctx.globals().set("__initial",json!({"fields":{"A":field("A","2",json!({"V":"if (Number(event.value)<0) event.rc=false;"})),"B":field("B","0",json!({"C":"event.value=getField('A').value+1;"})),"C":field("C","0",json!({"C":"event.value=getField('B').value+1;"}))},"order":["B","C"],"info":{},"bookmarks":{"children":[]},"pages":1,"templates":{"blank":{"fields":{},"order":[]}}}).to_string()).unwrap();
+            ctx.globals().set("__initial",json!({"fields":{"A":field("A","2",json!({"V":"if (Number(event.value)<0) event.rc=false;"})),"B":field("B","0",json!({"C":"event.value=getField('A').value+1;"})),"C":field("C","0",json!({"C":"event.value=getField('B').value+1;"})),"Unchecked":json!({"kind":"Btn","flags":0,"value":"Off","default_value":"","items":[],"widgets":[],"actions":{},"export_values":["True"]})},"order":["B","C"],"info":{},"bookmarks":{"children":[]},"pages":1,"templates":{"blank":{"fields":{},"order":[]}}}).to_string()).unwrap();
             ctx.eval::<(),_>(concat!(include_str!("acrobat.js"),"\nvoid 0;")).unwrap();
             assert!(ctx.eval::<bool,_>(test).unwrap());
         });
@@ -406,6 +406,10 @@ mod tests {
     #[test]
     fn numeric_format_separators_do_not_change_the_value() {
         host("getField('B').setAction('Format','AFNumber_Format(2,0,0,0,\"\",false)');getField('A').value='1233.5';calculateNow();var state=JSON.parse(__host.snapshot());state.B.value==='1234.5'&&state.B.formatted==='1,234.50'");
+    }
+    #[test]
+    fn unchecked_button_assignments_match_reader() {
+        host("var f=getField('Unchecked');var initial=f.value==='Off'&&f.isBoxChecked(0)===0;f.value='';var blank=f.value==='Off';f.value='invalid';var invalid=f.value==='invalid'&&f.isBoxChecked(0)===0;f.checkThisBox(0,true);var on=f.value==='True'&&f.isBoxChecked(0)===1;f.value='';initial&&blank&&invalid&&on&&f.valueAsString==='Off'&&f.isBoxChecked(0)===0");
     }
     #[test]
     fn checkbox_uses_its_real_export_state() {

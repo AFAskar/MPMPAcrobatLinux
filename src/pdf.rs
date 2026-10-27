@@ -269,17 +269,25 @@ fn walk(
         .and_then(|i| i.checked_sub(2))
         .map(|i| tokens[i].trim_start_matches('/').to_owned())
         .unwrap_or_else(|| "Helvetica".into());
+    let kind = val(b"FT");
+    let flags = attrs.get(b"Ff").and_then(Object::as_i64).unwrap_or(0);
+    let mut value = val(b"V");
+    // Reader exposes an unset checkbox/radio value as Off. Keep the source
+    // dictionary untouched so an unchanged logical Off does not invent /V.
+    if kind == "Btn" && flags & 65536 == 0 && value.is_empty() {
+        value = "Off".into();
+    }
     out.insert(
         name.clone(),
         Field {
             name,
             id,
-            value: json!(val(b"V")),
+            value: json!(value),
             default_value: json!(val(b"DV")),
-            kind: val(b"FT"),
+            kind,
             user_name: val(b"TU"),
             submit_name: val(b"TM"),
-            flags: attrs.get(b"Ff").and_then(Object::as_i64).unwrap_or(0),
+            flags,
             alignment: attrs.get(b"Q").and_then(Object::as_i64).unwrap_or(0),
             display,
             text_size,
@@ -806,6 +814,27 @@ fn update_action(doc: &mut Document, id: ObjectId, key: &str, code: &str) -> Res
 #[cfg(test)]
 mod action_tests {
     use super::*;
+    #[test]
+    fn unset_checkbox_value_is_logical_off_without_changing_the_pdf() {
+        let mut doc = Document::new();
+        for (flags, stored, expected) in [
+            (0, None, "Off"),
+            (0, Some(""), "Off"),
+            (0, Some("True"), "True"),
+            (32768, None, "Off"),
+            (65536, None, ""),
+        ] {
+            let mut field = dictionary! {"FT"=>"Btn","Ff"=>flags,"T"=>Object::string_literal("Check")};
+            if let Some(value) = stored {
+                field.set("V", Object::string_literal(value));
+            }
+            let id = doc.add_object(field.clone());
+            let mut fields = BTreeMap::new();
+            walk(&doc, &id.into(), "", &Dictionary::new(), &BTreeMap::new(), &mut fields).unwrap();
+            assert_eq!(fields["Check"].value, json!(expected));
+            assert_eq!(doc.get_dictionary(id).unwrap(), &field);
+        }
+    }
     #[test]
     fn changed_action_retains_unrelated_actions_and_does_not_modify_shared_source() {
         let mut doc = Document::new();

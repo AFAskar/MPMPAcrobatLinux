@@ -63,6 +63,7 @@ var __host = (function () {
       // and validation actions. Numeric MPMB fields reject that text themselves.
       // Text fields stringify arrays as comma-separated text, never JSON.
       if(v===undefined||v===null||(typeof v==='object'&&!(x.kind==='Ch'&&x.flags&2097152&&Array.isArray(v))))v=String(v);
+      if(x.kind==='Btn'&&!(x.flags&65536)&&v==='')v='Off';
       if(typeof v==='string'&&x.kind==='Tx')v=v.replace(/\r\n|\r|\n/g,f.multiline?'\r':' ');
       if(!f.richText&&String(raw)===String(v)){if(f._actions.F&&!calculating)f._formatted=eventRun(f,'F',f.value).value;return;}
       if(data.trace&&data.trace.includes(n))__log(n+': '+String(raw)+' -> '+String(v)+'\n'+new Error().stack);

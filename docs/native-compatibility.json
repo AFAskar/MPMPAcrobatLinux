@@ -1255,5 +1255,21 @@
     "alert_validation": "Scripted responses must use actual dialog button codes; optional exact title and checkbox guards. Legacy response 1 is invalid for Yes/No (3/4) and now fails explicitly.",
     "native_other": "output/testing/native-sidekicks-1793106845145753682/sidekicks.json",
     "cases": 15
+  },
+  "checkbox_values": {
+    "status": "Three defined original-addon runtime/canonical-save comparisons pass; initially checked field clearing and mark appearance remain incomplete",
+    "evidence": "output/testing/checkbox-events-1793108602307717102/checkbox-events.json",
+    "scope": "Logical Off for absent/empty checkbox or radio values; blank assignments normalize to Off; arbitrary strings preserved; numeric 0/1 checked results; original unset PDF /V retained when unchanged. Three checkbox fields in each fixture, with script/assignment/toggle traces and independent canonical saved values.",
+    "failed_before_fix": [
+      "output/testing/checkbox-events-1793108316283571196/checkbox-events.json",
+      "output/testing/checkbox-events-1793108431887647061/checkbox-events.json"
+    ],
+    "regressions": {
+      "rust_tests": 46,
+      "clippy": "strict pass",
+      "table": "output/testing/native-table-1793108615879243486/table.json",
+      "generated": "output/testing/native-generated-1793108776371287331/generated.json"
+    },
+    "remaining": "Ashnar initially checked Dex ST Prof and Proficiency Weapon Other still save as Off versus absent in Reader after class removal; rich-text NBSP and serialized-state comparisons remain unresolved."
   }
 }

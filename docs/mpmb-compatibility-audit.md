@@ -66,3 +66,9 @@ This corrects the actual Class Features paragraph-order mismatch in the independ
 ## Bounded fighting-style reference evidence
 
 The six resource/rest/healing Reader cases subsequently passed in `native-table-1793104929774042202/reader-table-1793106341581663938/reader-table.json`; complete canonical differences remain recorded. Three independent Reader Archery/Dueling attack and save cases also pass in `native-fighting-styles-1793101442990601077/reader-fighting-styles-1793107387113180523/reader-fighting-styles.json`. These execute original feature commands, while the native suite exercises the original popup. Reader popup interaction and wider feature choices remain unqualified.
+
+## Checkbox logical values and retained PDF state
+
+Reader exposes unset checkbox values as `Off`, and returns numeric `0`/`1` from `isBoxChecked`. Native loading and blank assignments now match those measured behaviors while preserving absent source `/V` when the final value is unchanged. All three original-addon trace/canonical-save comparisons pass: `checkbox-events-1793108602307717102/checkbox-events.json`. All six native table cases and six generated-page cases pass after the change; 46 Rust tests and strict clippy pass.
+
+Comparisons against the earlier independent Reader table outputs remove three checkbox differences from each current-edition Monk state (11→8 differences, all remaining fields serialized state). Ashnar still has initially checked fields saved as Off versus absent after class replacement, and NBSP differences in Class Features/Extra.Notes. Those are unresolved; do not classify every remaining difference as harmless serialization.
