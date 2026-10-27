@@ -1140,12 +1140,15 @@
     "binary_scope": "Each new run retains its executable and SHA-256 to make evidence independent of later builds."
   },
   "table_workflows": {
-    "status": "six native resource/rest/healing cases passed; independent Reader scenarios pending",
-    "evidence": "output/testing/native-table-1793077542685557772/table.json",
+    "status": "six defined native and independent Reader resource/rest/healing cases pass; broader table use incomplete",
+    "evidence": "output/testing/native-table-1793104929774042202/table.json",
     "cases": 6,
     "coverage": "Fighter/Champion and Monk/Shadow at level 5 in each authorized PDF; use actual class resources, short/long rests, HP and hit-dice recovery, strict saved values/choice appearances/template widgets and native reopen.",
     "verification_negative_controls": "output/testing/verify-regressions-1793077970606239902/verification.json",
-    "reader_scope": "Reader will create the same input independently from its original fixture; no calculated native values are assigned to the reference."
+    "reader_scope": "Reader starts from each original fixture, receives user inputs only, runs original ApplyClasses/resetLimFeaUsed/HealItNow through the application menu and saves/closes before comparison.",
+    "reader": "output/testing/native-table-1793104929774042202/reader-table-1793106341581663938/reader-table.json",
+    "reader_cases": 6,
+    "limits": "Only Fighter/Champion and Monk/Shadow at level 5. Monk tool prompts retain verified original defaults; tool-choice coverage is unqualified. Full canonical comparisons retain 6\u201311 differences outside asserted phase fields; do not claim whole-state equivalence."
   },
   "widget_visibility": {
     "status": "defined two-edition native and Reader save/reopen passes; generated-state breadth incomplete",
@@ -1233,7 +1236,7 @@
     "remaining": "Mixed fonts/styles per span, rich-text event/default-style fidelity, non-BMP text and broader appearance/resource/render equivalence remain incomplete."
   },
   "sidekick_workflows": {
-    "status": "five defined 2014 profiles pass; 2024/Ashnar profiles running; independent Reader pending",
+    "status": "15 defined native conversion/HD/progression/reopen profiles pass; Reader and broader mechanics unqualified",
     "native_2014": "output/testing/native-sidekicks-1793106581875525010/sidekicks.json",
     "scope": "Original all-source/class/subclass dialogs; explicit Yes to sidekick conversion; explicit base 2d8; Bandit base ability scores; disabled race/background automation; levels 3,1,5,11,17,20,3 with HD totals level+1; original scripts, saved fields/appearances and native reopen.",
     "profiles": [
@@ -1248,6 +1251,8 @@
       "HP calculation, every role/skill/tool/feature choice and spell selection unqualified",
       "No Reader-equivalence claim"
     ],
-    "alert_validation": "Scripted responses must use actual dialog button codes; optional exact title and checkbox guards. Legacy response 1 is invalid for Yes/No (3/4) and now fails explicitly."
+    "alert_validation": "Scripted responses must use actual dialog button codes; optional exact title and checkbox guards. Legacy response 1 is invalid for Yes/No (3/4) and now fails explicitly.",
+    "native_other": "output/testing/native-sidekicks-1793106845145753682/sidekicks.json",
+    "cases": 15
   }
 }
