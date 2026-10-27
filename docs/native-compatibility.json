@@ -1135,7 +1135,10 @@
     "ashnar_regular": "output/testing/native-subclasses-1793107324207137425/subclasses.json",
     "ashnar_regular_cases": 169,
     "shadowed_profile_pilot": "output/testing/native-subclasses-1793121267996131353/subclasses.json",
-    "shadowed_profile_scope": "One 2014 UA Ancestral Guardian case passed at 3,5,11,20,3 and native reopen after target-only source-element selection; remaining 72 shadowed pairs and Reader profile equivalence unqualified."
+    "shadowed_profile_scope": "41 cases passed before original duplicate-leaf movement enabled both Ranger parents. Corrected Gloom Stalker profile passes by excluding UA:RR through original sourcebook controls. Remaining 32 run is incomplete; class/subclass, sourcebook exclusion and native reopen assertions remain strict. No Reader-equivalence or full feature claim.",
+    "shadowed_profile_failed": "output/testing/native-subclasses-1793121437422195259/subclasses.json",
+    "shadowed_profile_passes_before_boundary": 41,
+    "shared_ranger_book_pilot": "output/testing/native-subclasses-1793123485647904376/subclasses.json"
   },
   "bookmarks": {
     "status": "defined native workflow and native desktop cases passed; Reader qualification pending",

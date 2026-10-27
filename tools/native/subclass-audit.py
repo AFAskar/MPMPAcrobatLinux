@@ -20,23 +20,28 @@ INVENTORY = """(function(){
  function label(name,def,alt){var refs=parseSource(def.source||(alt&&alt.source))||[];
  var abbr=refs.filter(function(x){return CurrentSources.globalExcl.indexOf(x[0])===-1}).map(function(x){return isNewAcrobat?SourceList[x[0]].abbreviation:SourceList[x[0]].uniS});
  return name+(abbr.length?(isNewAcrobat?' ['+abbr.join(', ')+']':' '+abbr.join(' ')):'');}
- return Object.keys(ClassList).map(k=>({key:k,name:ClassList[k].name,label:label(ClassList[k].name,ClassList[k]),parsed:ParseClass(ClassList[k].name),excluded:testSource(k,ClassList[k],'classExcl'),subs:(ClassList[k].subclasses[1]||[]).map(s=>({key:s,name:ClassSubList[s]&&ClassSubList[s].subname,label:ClassSubList[s]&&label(ClassSubList[s].subname,ClassSubList[s],ClassList[k]),excluded:!ClassSubList[s]||testSource(s,ClassSubList[s],'classExcl'),parsed:ClassSubList[s]&&ParseClass(ClassSubList[s].fullname||ClassList[k].name+' ('+ClassSubList[s].subname+')')}))}));})()"""
+ function sources(def,alt){return (parseSource(def.source||(alt&&alt.source))||[]).map(function(x){return {key:x[0],abbreviation:SourceList[x[0]].abbreviation}});}
+ return Object.keys(ClassList).map(k=>({key:k,sources:sources(ClassList[k]),name:ClassList[k].name,label:label(ClassList[k].name,ClassList[k]),parsed:ParseClass(ClassList[k].name),excluded:testSource(k,ClassList[k],'classExcl'),subs:(ClassList[k].subclasses[1]||[]).map(s=>({key:s,sources:ClassSubList[s]&&sources(ClassSubList[s],ClassList[k]),name:ClassSubList[s]&&ClassSubList[s].subname,label:ClassSubList[s]&&label(ClassSubList[s].subname,ClassSubList[s],ClassList[k]),excluded:!ClassSubList[s]||testSource(s,ClassSubList[s],'classExcl'),parsed:ClassSubList[s]&&ParseClass(ClassSubList[s].fullname||ClassList[k].name+' ('+ClassSubList[s].subname+')')}))}));})()"""
 
 
 def source_dialogs(fixture, target=None):
     startup = [{'title': SOURCE, 'result': 'ok'}] if fixture != 'ashnar' else []
     elements = [{'title': ELEMENTS, 'event': 'BTRA'}]
+    books = []
     if target:
-        cl, sub = target
+        cl, sub, excluded_books = target
+        for book in excluded_books:
+            books += [{'title': SOURCE, 'event': 'IncL', 'select': {'IncL': book['dialog_path']}}, {'title': SOURCE, 'event': 'BTL1'}]
         elements = [{'title': ELEMENTS, 'event': 'BTLA'},
                     {'title': ELEMENTS, 'event': 'BTR1', 'select': {'ExcL': [cl['label'], sub['label']]}}]
-    return startup + [{'title': SOURCE, 'event': 'BTRA'}, {'title': SOURCE, 'event': 'bCla'}] + elements + [{'title': ELEMENTS, 'result': 'ok'}, {'title': SOURCE, 'result': 'ok'}]
+    return startup + [{'title': SOURCE, 'event': 'BTRA'}] + books + [{'title': SOURCE, 'event': 'bCla'}] + elements + [{'title': ELEMENTS, 'result': 'ok'}, {'title': SOURCE, 'result': 'ok'}]
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--fixture', choices=['2014', '2024', 'ashnar'], action='append')
     parser.add_argument('--isolate-shadowed', action='store_true', help='Test shadowed pairs with only the target class/subclass enabled through original source-element controls')
+    parser.add_argument('--resume-report', type=Path, help='Skip cases already passed in a prior target-only shadowed-pair report; retains provenance')
     parser.add_argument('--class-key', action='append')
     parser.add_argument('--skip-class-key', action='append', help='Explicit separate-profile classes; recorded as unexercised in this suite')
     parser.add_argument('--limit', type=int)
@@ -69,6 +74,29 @@ def main():
             assert rc == 0 and data['passed'], data.get('error')
             inventory = data['stages'][-1]['result']
             item = {'fixture': fixture, 'profile': 'All sourcebooks and class elements enabled via original dialog buttons', 'inventory': evidence, 'cases': [], 'not_exercised': []}; report['fixtures'].append(item)
+            prior_passed = set()
+            if args.resume_report:
+                assert args.isolate_shadowed, 'Resume is limited to the explicit shadowed-profile suite'
+                previous = json.loads(args.resume_report.read_text())
+                for prior in previous['fixtures']:
+                    if prior['fixture'] == fixture:
+                        assert prior.get('profile_mode') == 'isolated-shadowed' or prior['profile'].startswith('All sourcebooks; only the target')
+                        prior_passed |= {(c['class'], c['subclass']) for c in prior['cases'] if c['passed']}
+                item['resumed_from'] = str(args.resume_report.resolve())
+                item['previous_report_sha256'] = hashlib.sha256(args.resume_report.read_bytes()).hexdigest()
+                item['previous_passing_cases'] = len(prior_passed)
+            source_paths = []
+            def leaves(options, path=()):
+                for name, value in options.items():
+                    if isinstance(value, dict):
+                        yield from leaves(value, path + (name,))
+                    else:
+                        yield list(path + (name,))
+            for request_path in sorted((folder / (fixture + '-inventory-dialogs')).glob('dialog-*.json')):
+                request = json.loads(request_path.read_text())
+                if request['description'].get('name') == SOURCE:
+                    offered = list(leaves(request['values'].get('IncL', {})))
+                    if len(offered) > len(source_paths): source_paths = offered
             candidates = []
             for cl in inventory:
                 if cl['excluded'] or (not args.isolate_shadowed and (not cl['parsed'] or cl['parsed'][0] != cl['key'])):
@@ -78,6 +106,8 @@ def main():
                         item['not_exercised'].append({'class': cl['key'], 'subclass': sub['key'], 'reason': 'Excluded or shadowed with this source profile', 'parsed': sub['parsed']}); continue
                     if args.isolate_shadowed and cl['parsed'] and cl['parsed'][0] == cl['key'] and sub['parsed'] and sub['parsed'][:2] == [cl['key'], sub['key']]:
                         item['not_exercised'].append({'class': cl['key'], 'subclass': sub['key'], 'reason': 'Selectable in all-source profile; this suite targets shadowed pairs only'}); continue
+                    if (cl['key'], sub['key']) in prior_passed:
+                        item['not_exercised'].append({'class': cl['key'], 'subclass': sub['key'], 'reason': 'Passed in referenced prior bounded report'}); continue
                     if args.skip_class_key and cl['key'] in args.skip_class_key:
                         item['not_exercised'].append({'class': cl['key'], 'subclass': sub['key'], 'reason': 'Explicit separate-profile class filter'}); continue
                     if args.class_key and cl['key'] not in args.class_key:
@@ -88,7 +118,8 @@ def main():
                 if not cl['subs']:
                     item['not_exercised'].append({'class': cl['key'], 'reason': 'No subclasses; separate base-class qualification required'})
             if args.isolate_shadowed:
-                item['profile']='All sourcebooks; only the target class/subclass enabled through original source-element dialog per case'
+                item['profile_mode']='isolated-shadowed'
+                item['profile']='All-source starting profile; target class/subclass elements and recorded conflicting parent sourcebook exclusions per case'
                 item['inventory_profile']='All sourcebooks and class elements enabled; used to identify shadowing'
             item['candidates']=[{'class':cl['key'],'subclass':sub['key']} for cl,sub in candidates]
             item['candidate_count']=len(candidates)
@@ -96,7 +127,22 @@ def main():
                 if args.limit is not None and index >= args.limit:
                     item['not_exercised'].append({'class': cl['key'], 'subclass': sub['key'], 'reason': 'Command limit'}); continue
                 label = fixture + '-' + str(index); output = folder / (label + '.pdf')
-                case_sources = source_dialogs(fixture, (cl, sub) if args.isolate_shadowed else None)
+                excluded_books = []
+                if args.isolate_shadowed:
+                    # Original MergeElement moves every matching leaf label,
+                    # including shared Ranger subclasses under both parents.
+                    # Exclude conflicting parent books through the real source
+                    # dialog, without disabling a source needed by the target.
+                    required = {s['key'] for s in cl['sources'] + sub['sources']}
+                    conflicts = [other for other in inventory if other['key'] != cl['key'] and any(s['key'] == sub['key'] for s in other['subs'])]
+                    seen = set()
+                    for other in conflicts:
+                        for source_book in other['sources']:
+                            if source_book['key'] in required or source_book['key'] in seen: continue
+                            matches = [path for path in source_paths if path[-1].endswith('(' + source_book['abbreviation'] + ')')]
+                            assert len(matches) == 1, {'source_book': source_book, 'actual_offered_paths': matches}
+                            excluded_books.append(dict(source_book, dialog_path=matches[0])); seen.add(source_book['key'])
+                case_sources = source_dialogs(fixture, (cl, sub, excluded_books) if args.isolate_shadowed else None)
                 dialogs = case_sources + [{'event': 'r0CD', 'select': {'r0CD': cl['name']}}, {'event': 'r0SD', 'select': {'r0SD': sub['name']}}, {'event': 'r0LV', 'values': {'r0LV': '3'}}, {'result': 'ok'}] + [{'result': 'ok'}] * 300
                 # Reset prior classes before selecting through the real dropdowns.
                 steps = setup() + [{'op': 'eval', 'code': "__host.command(\"ApplyClasses('',false)\")"}, {'op': 'advance', 'ms': 1000}]
@@ -108,6 +154,8 @@ def main():
                 if args.isolate_shadowed:
                     steps += [{'op':'eval','code':"var enabledClassKeys=Object.keys(ClassList).filter(function(k){return !testSource(k,ClassList[k],'classExcl')});if(enabledClassKeys.length!==1||enabledClassKeys[0]!=="+json.dumps(cl['key'])+")throw Error('Target-only source profile not applied');if(testSource("+json.dumps(sub['key'])+",ClassSubList["+json.dumps(sub['key'])+"],'classExcl'))throw Error('Target subclass excluded');"}]
                 verify_class = 'if(!classes.known[' + json.dumps(cl['key']) + ']||classes.known[' + json.dumps(cl['key']) + '].subclass!==' + json.dumps(sub['key']) + ")throw Error('Wrong class/subclass selected');"
+                if excluded_books:
+                    verify_class = "if(" + json.dumps([book['key'] for book in excluded_books]) + ".some(function(k){return CurrentSources.globalExcl.indexOf(k)<0}))throw Error('Conflicting sourcebook exclusion not retained');" + verify_class
                 steps += [{'op': 'eval', 'code': verify_class + "var chosenClass=What('Class and Levels');"}, {'op': 'assert', 'values': {'Character Level': '3'}}]
                 if sub['key'] == 'druid-circle of wildfire':
                     steps += [{'op': 'eval', 'code': "var spiritPrefix=What('Template.extras.AScomp').split(',').filter(p=>p&&What(p+'Comp.Race')==='Wildfire Spirit')[0];if(!spiritPrefix)throw Error('Missing Wildfire Spirit');if(What(spiritPrefix+'Comp.Use.HD.Die')!==''||What(spiritPrefix+'Comp.Use.HD.Level')!=='')throw Error('Spirit must have empty hit dice');if(Number(What(spiritPrefix+'Comp.Use.HP.Max'))!==20)throw Error('Spirit level-3 HP must be 20');"}]
@@ -117,7 +165,7 @@ def main():
                     steps += [{'op': 'eval', 'code': code}, {'op': 'advance', 'ms': 1000}, {'op': 'eval', 'code': verify_class}, {'op': 'assert', 'values': {'Character Level': str(level), 'Proficiency Bonus': str(2 + (level - 1) // 4)}}]
                 steps += [{'op': 'save', 'path': str(output)}]
                 rc, data, evidence = run(source, label, dialogs, steps)
-                case = {'class': cl['key'], 'subclass': sub['key'], 'passed': rc == 0 and data['passed'], 'probe': evidence, 'error': data.get('error'), 'feature_choices': 'Default responses only; unqualified', 'reader': 'not run'}; item['cases'].append(case)
+                case = {'class': cl['key'], 'subclass': sub['key'], 'passed': rc == 0 and data['passed'], 'probe': evidence, 'error': data.get('error'), 'source_exclusions': excluded_books, 'feature_choices': 'Default responses only; unqualified', 'reader': 'not run'}; item['cases'].append(case)
                 if case['passed']:
                     expected = {'Class and Levels': canonical_fields(PdfReader(output))['Class and Levels']['/V'], 'Character Level': '3', 'Proficiency Bonus': '2'}
                     independent = inspect(output, expected); assert independent['passed'], independent
