@@ -431,6 +431,12 @@ mod tests {
         host("getField('A').value='+4';var s=JSON.parse(__host.snapshot());getField('A').value===4&&s.A.value==='+4'&&s.A.formatted==='+4'");
     }
     #[test]
+    fn line_endings_are_normalized_before_commit_events() {
+        host(
+            r#"var f=getField('A'),seen=[];f.setAction('Keystroke','seen.push(event.value)');f.value='a\nb';f.value='a\r\nb';var plain=seen.length===1&&seen[0]==='a b';f.multiline=true;f.richText=true;f.value='a\nb';f.value='a\r\nb';plain&&f.valueAsString==='a\rb'&&seen.length===3&&seen[1]==='a\rb'&&seen[2]==='a\rb'"#,
+        );
+    }
+    #[test]
     fn untouched_widgets_retain_print_bits_and_display_assignment_normalizes_them() {
         host("var f=getField('A');f._widgets=[{page:0,flags:134},{page:1,flags:130}];var s=JSON.parse(__host.snapshot());var kept=s.A.widgets[0].flags===134&&s.A.widgets[1].flags===130;f.display=display.hidden;kept&&f._widgets.every(w=>w.flags===134)&&f.display===display.hidden&&__host.pageWidgets(0).length===0");
     }

@@ -1120,7 +1120,10 @@
     "latest_failed_run": "output/testing/native-subclasses-1793079112063681221/subclasses.json",
     "hexblade_targeted_fix": "output/testing/native-subclasses-1793082229270078667/subclasses.json",
     "wildfire_event_fix": "output/testing/native-subclasses-1793082187243630120/subclasses.json",
-    "warlock_wizard_slice": "output/testing/native-subclasses-1793082304040159913/subclasses.json"
+    "warlock_wizard_slice": "output/testing/native-subclasses-1793082304040159913/subclasses.json",
+    "historical_2014_failed_run": "output/testing/native-subclasses-1793100024191636214/subclasses.json",
+    "historical_2014_passed_cases": 143,
+    "sidekick_boundary": "The default scripted response did not affirm the required sidekick conversion warning. Explicit Yes plus base HD setup creates Mage correctly; special workflow qualification remains pending. Do not label this as a class-parser failure."
   },
   "bookmarks": {
     "status": "defined native workflow and native desktop cases passed; Reader qualification pending",
@@ -1160,7 +1163,7 @@
     "limitations": "Appearance streams/rendered pixels differ. Earlier native-seeded Reader outputs already contained lost flags and cannot certify unchanged source flags."
   },
   "field_event_qualification": {
-    "status": "defined measured setter/calculation/coercion traces match isolated Reader exactly; arbitrary event coverage remains incomplete",
+    "status": "defined plain/rich newline, setter and calculation traces match Reader exactly; full rich-text events remain incomplete",
     "scope": "Script setters: keystroke then validation, string event values and willCommit, unchanged/rejected values, calculation setters, text/array/object coercion and formatting cadence",
     "initial_matching_reader_trace": "output/testing/field-events-1793082058299776964/events.json",
     "expanded_failed_close_trace": "output/testing/field-events-1793082410186864053/events.json",
@@ -1168,8 +1171,14 @@
     "hexblade_counterexample": "Text field array serialized as JSON text broke Template.extras.AScomp on native reopen; targeted string-coercion fix passes",
     "limitations": "Trace agreement does not certify arbitrary event ordering, all field types, delay/calculate combinations or UI edit behaviors.",
     "qualified_reader_trace": "output/testing/field-events-1793082876778218795/events.json",
-    "native_table_regression": "output/testing/native-table-1793082877958892618/table.json",
-    "native_print_regression": "output/testing/native-printing-1793082799007399331/printing.json"
+    "native_table_regression": "output/testing/native-table-1793104929774042202/table.json",
+    "native_print_regression": "output/testing/native-printing-1793082799007399331/printing.json",
+    "singleline_reader": "output/testing/field-events-1793105208509857092/events.json",
+    "multiline_reader": "output/testing/field-events-1793104744998160239/events.json",
+    "line_endings": "Single-line CR/LF/CRLF becomes space before commit; multiline becomes CR. Rich fields commit unchanged values and format once.",
+    "native_generated_regression": "output/testing/native-generated-1793105209709603335/generated.json",
+    "native_import_regression": "output/testing/native-extended-1793105357416395385/extended.json",
+    "native_lifecycle_regression": "output/testing/native-lifecycle-1793105981695578429/lifecycle.json"
   },
   "attachment_workflows": {
     "status": "defined native exports plus independent Reader metadata/menu/persistence pass; desktop launching and Reader file-export interaction unqualified",

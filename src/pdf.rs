@@ -621,6 +621,15 @@ impl Pdf {
             if let Some(readonly) = s["readonly"].as_bool() {
                 dict.set("Ff", if readonly { f.flags | 1 } else { f.flags & !1 });
             }
+            if f.kind == "Tx" {
+                let mut flags = dict.get(b"Ff").and_then(Object::as_i64).unwrap_or(f.flags);
+                for (property, mask) in [("richText", 33554432), ("multiline", 4096)] {
+                    if let Some(enabled) = s[property].as_bool() {
+                        flags = if enabled { flags | mask } else { flags & !mask };
+                    }
+                }
+                dict.set("Ff", flags);
+            }
             if let Some(v) = s["submitName"].as_str() {
                 if v != f.submit_name {
                     dict.set("TM", pdf_string(v));

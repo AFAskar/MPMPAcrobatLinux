@@ -34,7 +34,7 @@ var __host = (function () {
     const f={name:n,value:x.value,defaultValue:x.default_value,userName:x.user_name,submitName:x.submit_name,
       type:({Tx:'text',Ch:x.flags&131072?'combobox':'listbox',Btn:x.flags&65536?'button':x.flags&32768?'radiobutton':'checkbox'})[x.kind],
       readonly:!!(x.flags&1),display:x.display,textSize:x.text_size,textFont:x.text_font||'Helvetica',multiline:!!(x.flags&4096),
-      richText:false,richValue:x.rich_value||[],textColor:['G',0],fillColor:['T'],strokeColor:['G',0],
+      richText:x.kind==='Tx'&&!!(x.flags&33554432),richValue:x.rich_value||[],textColor:['G',0],fillColor:['T'],strokeColor:['G',0],
       alignment:['left','center','right'][x.alignment||0],lineWidth:1,borderStyle:'solid',buttonPosition:0,buttonAlignX:50,buttonAlignY:50,
       calcOrderIndex:data.order.indexOf(n),items:x.items,exportValues:x.export_values||['Yes'],currentValueIndices:-1,
       page:x.widgets.length===1?x.widgets[0].page:x.widgets.map(w=>w.page),
@@ -52,7 +52,7 @@ var __host = (function () {
       buttonSetCaption(c,face=0){if(![0,1,2].includes(face))throw Error('Invalid button face');this._captions=this._captions||{};this._captions[face]=String(c);if(face===0)this._caption=String(c);revision++},buttonGetCaption(face=0){return this._captions&&this._captions[face]!==undefined?this._captions[face]:this._caption===undefined?(x.caption||''):this._caption},
     };
     for(const prop of ['textSize','textFont','richText','richValue','textColor','fillColor','strokeColor','alignment','lineWidth','borderStyle']){
-      let stored=f[prop];Object.defineProperty(f,prop,{enumerable:true,get(){return stored},set(v){if(JSON.stringify(v)!==JSON.stringify(stored))gap('Field.'+prop+' appearance/persistence');stored=v;if(prop==='richValue'&&Array.isArray(v))f.value=v.map(span=>span.text||'').join('')}});
+      let stored=f[prop];Object.defineProperty(f,prop,{enumerable:true,get(){return stored},set(v){if(JSON.stringify(v)!==JSON.stringify(stored))gap('Field.'+prop+' appearance/persistence');stored=v;if(prop==='richValue'){if(Array.isArray(v))f.value=v.map(span=>span.text||'').join('');else if(v==='')f.value='';}}});
     }
     for(const prop of ['userName','submitName']){let stored=f[prop];Object.defineProperty(f,prop,{enumerable:true,get(){return stored},set(v){stored=String(v)}})}
     Object.defineProperty(f,'display',{enumerable:true,get(){return widgetDisplay(f,0)},set(v){displayFlags(v,4);f._fallbackDisplay=Number(v);for(let i=0;i<f._widgets.length;i++)setWidgetDisplay(f,i,v);}});
@@ -63,7 +63,8 @@ var __host = (function () {
       // and validation actions. Numeric MPMB fields reject that text themselves.
       // Text fields stringify arrays as comma-separated text, never JSON.
       if(v===undefined||v===null||(typeof v==='object'&&!(x.kind==='Ch'&&x.flags&2097152&&Array.isArray(v))))v=String(v);
-      if(String(raw)===String(v)){if(f._actions.F&&!calculating)f._formatted=eventRun(f,'F',f.value).value;return;}
+      if(typeof v==='string'&&x.kind==='Tx')v=v.replace(/\r\n|\r|\n/g,f.multiline?'\r':' ');
+      if(!f.richText&&String(raw)===String(v)){if(f._actions.F&&!calculating)f._formatted=eventRun(f,'F',f.value).value;return;}
       if(data.trace&&data.trace.includes(n))__log(n+': '+String(raw)+' -> '+String(v)+'\n'+new Error().stack);
       if(assigning.has(n)){raw=v;return}
       assigning.add(n);
@@ -120,7 +121,7 @@ var __host = (function () {
     calculating=true;
     // A setter refreshes its own Format action. Calculation commits defer that
     // refresh until the pass finishes; unchanged fields do not run commit hooks.
-    try {let passes=0; do {pending=false;for(const n of data.order){let f=fields[n];if(!f)throw Error('Missing calculation target '+n);if(f._actions.C){const e=eventRun(f,'C',f.value);if(e.rc)f.value=e.value;}}if(++passes>8)throw Error('calculation did not settle');}while(pending);for(const n of names.slice()){const f=fields[n];if(f&&f._actions.F&&(data.order.includes(n)||(formatDirty.has(n)&&typeof f.value==='number')))f._formatted=eventRun(f,'F',f.value).value;}formatDirty.clear();}finally{calculating=false}
+    try {let passes=0; do {pending=false;for(const n of data.order){let f=fields[n];if(!f)throw Error('Missing calculation target '+n);if(f._actions.C){const e=eventRun(f,'C',f.value);if(e.rc)f.value=e.value;}}if(++passes>8)throw Error('calculation did not settle');}while(pending);for(const n of names.slice()){const f=fields[n];if(f&&f._actions.F&&(data.order.includes(n)||(formatDirty.has(n)&&typeof f.value==='number'&&!f.richText)))f._formatted=eventRun(f,'F',f.value).value;}formatDirty.clear();}finally{calculating=false}
   }
   function edit(n,v) {
     let f=fields[n];if(!f)throw Error('Unknown field '+n);if(f.readonly)throw Error('Read-only field '+n);
@@ -190,7 +191,7 @@ var __host = (function () {
     exportDataObject(params){if(typeof params==='string')params={cName:params};const result=JSON.parse(__attachment(JSON.stringify(params)));attachmentExports.push(result);},
     print(params){const result=JSON.parse(__print(JSON.stringify({params,state:JSON.parse(__host.snapshot())})));printJobs.push(result);return undefined},
     ready(){let n=0;while(!globalThis.calculate||!app.calculate||globalThis.delay){let t=Array.from(timers.values()).sort((a,b)=>a.at-b.at)[0];if(!t||++n>100)throw Error('Document calculations suspended without a resumable timer');advance(Math.max(0,t.at-clock));}return true},
-    snapshot(){let o={__structure:journal,__order:data.order};if(data.bookmarksChanged)o.__bookmarks=bookmarkRoot;for(const n of names){let f=fields[n];o[n]={value:Array.isArray(f.value)?f.value:f.valueAsString,icon:f._icon,caption:f._caption,captions:f._captions,actions:f._modifiedActions,widgets:f._widgets,currentValueIndices:f.currentValueIndices,textSize:f.textSize,alignment:f.alignment,multiline:f.multiline,textColor:f.textColor,textFont:f.textFont,richValue:f.richValue,formatted:f._formatted===undefined?f.valueAsString:f._formatted,display:f.display,userName:f.userName,submitName:f.submitName,readonly:f.readonly,items:f.items};}return JSON.stringify(o)},
+    snapshot(){let o={__structure:journal,__order:data.order};if(data.bookmarksChanged)o.__bookmarks=bookmarkRoot;for(const n of names){let f=fields[n];o[n]={value:Array.isArray(f.value)?f.value:f.valueAsString,icon:f._icon,caption:f._caption,captions:f._captions,actions:f._modifiedActions,widgets:f._widgets,currentValueIndices:f.currentValueIndices,textSize:f.textSize,alignment:f.alignment,multiline:f.multiline,textColor:f.textColor,textFont:f.textFont,richText:f.richText,richValue:f.richValue,formatted:f._formatted===undefined?f.valueAsString:f._formatted,display:f.display,userName:f.userName,submitName:f.submitName,readonly:f.readonly,items:f.items};}return JSON.stringify(o)},
     timer(code,ms){let id=++timerId;timers.set(id,{id,code:String(code),at:clock+Math.max(1,Number(ms)||1)});return id},clear(id){timers.delete(id)},
     diagnostics(){return JSON.stringify({gaps,errors,repairs,printJobs,attachmentExports,timers:timers.size,field_count:names.length,menus:Object.keys(menus)})}
   };

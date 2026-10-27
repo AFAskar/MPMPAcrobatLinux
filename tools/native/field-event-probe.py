@@ -11,7 +11,7 @@ from verify import canonical_fields, field_text
 ADDON = r'''
 var iFileName = "Native field event probe.js";
 (function(d, originals) {
- var output=[], f=d.getField('Player Name'), g=d.getField('Str Mod');
+ var output=[], f=d.getField(__FIELD__), g=d.getField('Str Mod');
  var saved={value:f.valueAsString,calculate:d.calculate,appCalculate:app.calculate,delay:d.delay};
  var log="if(tDoc.__fieldProbeEvents.length<80)tDoc.__fieldProbeEvents.push({event:event.name,type:typeof event.value,value:String(event.value),willCommit:event.willCommit===undefined?'absent':event.willCommit});";
  function run(name,fn,field){d.__fieldProbeEvents=[];try{fn();var beforeCalculate=d.__fieldProbeEvents.length;d.calculateNow();output.push({name:name,beforeCalculate:beforeCalculate,value:field.valueAsString,valueType:typeof field.value,events:d.__fieldProbeEvents.slice()});}catch(e){output.push({name:name,error:String(e),events:d.__fieldProbeEvents.slice()});}}
@@ -22,6 +22,9 @@ var iFileName = "Native field event probe.js";
   run('script setter unchanged',function(){f.value=17},f);
   run('text setter plain string',function(){f.value='alpha'},f);
   run('text setter numeric string',function(){f.value='18'},f);
+  run('text setter LF',function(){f.value='line1\nline2'},f);
+  run('text setter CRLF',function(){f.value='line1\r\nline2'},f);
+  run('text setter CR',function(){f.value='line1\rline2'},f);
   run('text setter array',function(){f.value=['a','b']},f);
   run('text setter object',function(){f.value={a:1}},f);
   f.setAction('Keystroke','');f.setAction('Validate','');f.setAction('Format','');f.value='7';
@@ -46,21 +49,21 @@ var iFileName = "Native field event probe.js";
 
 
 def main():
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--readiness',type=Path);parser.add_argument('--native-only',action='store_true');args=parser.parse_args()
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--readiness',type=Path);parser.add_argument('--native-only',action='store_true');parser.add_argument('--field',default='Player Name');args=parser.parse_args()
     if not args.native_only:
         assert args.readiness and json.loads(args.readiness.read_text())['passed']
     folder=ROOT/'output/testing'/('field-events-'+str(time.time_ns()));folder.mkdir()
     source=next((ROOT/'Testing').glob('*_2024_*.pdf'));reader=PdfReader(source);fields=canonical_fields(reader)
     originals={}
-    for name in ['Player Name','Str Mod']:
+    for name in [args.field,'Str Mod']:
         node=reader.get_object(fields[name]['reference']);actions={};nodes=[node]+[ref.get_object() for ref in node.get('/Kids',[])]
         for obj in nodes:
             for key,action in obj.get('/AA',{}).items():
                 action=action.get_object()
                 if action.get('/JS') is not None and key not in actions:actions[key]=field_text(action['/JS'])
         originals[name]={trigger:actions.get(key,'') for trigger,key in [('Keystroke','/K'),('Validate','/V'),('Format','/F'),('Calculate','/C')]}
-    addon=ADDON.replace('__RESTORE__',json.dumps(originals));(folder/'probe-addon.js').write_text(addon)
-    report={'passed':False,'readiness':str(args.readiness) if args.readiness else None};print(folder,flush=True)
+    addon=ADDON.replace('__RESTORE__',json.dumps(originals)).replace('__FIELD__',json.dumps(args.field));(folder/'probe-addon.js').write_text(addon)
+    report={'passed':False,'field':args.field,'readiness':str(args.readiness) if args.readiness else None};print(folder,flush=True)
     try:
         spec={'dialogs':[{'result':'ok'}]*30,'alerts':[1]*30,'steps':[{'op':'advance','ms':4100},{'op':'eval','code':"getField('User Script').value="+json.dumps(addon)},{'op':'eval','code':"__host.command('RunUserScript(false)')"},{'op':'advance','ms':1000},{'op':'eval','code':"JSON.parse(What('PC Name'))"}]}
         scenario,evidence=folder/'native-scenario.json',folder/'native-report.json';scenario.write_text(json.dumps(spec))
