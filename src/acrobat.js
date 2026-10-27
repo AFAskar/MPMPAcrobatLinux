@@ -43,7 +43,7 @@ var __host = (function () {
       deleteItemAt(i){this.items.splice(i,1)},
       checkThisBox(i,on){this.value=on?(this.exportValues[i]||'Yes'):'Off'},isBoxChecked(i){return String(this.value)===(this.exportValues[i]||'Yes')?1:0},
       setAction(type,code){const key=({Calculate:'C',Validate:'V',Keystroke:'K',Format:'F',MouseUp:'U',MouseDown:'D',OnFocus:'Fo',OnBlur:'Bl'})[type];if(!key)return unsupported('Field.setAction '+type);code=String(code);if(this._actions[key]!==code){this._actions[key]=code;this._modifiedActions=this._modifiedActions||{};this._modifiedActions[key]=code;revision++;}},
-      setFocus(){data.focus=n;const page=Array.isArray(this.page)?this.page.find(p=>p>=0):this.page;if(page>=0)globalThis.pageNum=page;},getArray(){return [this]},
+      setFocus(){data.focus=n;const page=Array.isArray(this.page)?this.page.filter(p=>p>=0)[0]:this.page;if(page>=0)globalThis.pageNum=page;},getArray(){return [this]},
       buttonGetIcon(face=0){if(face!==0)return unsupported('Field.buttonGetIcon non-normal face');return this._icon||{field:n,face:0}},
       buttonSetIcon(icon,face=0){if(face!==0)return unsupported('Field.buttonSetIcon non-normal face');if(!icon||typeof icon.field!=='string')return unsupported('Field.buttonSetIcon external icon');this._icon=Object.assign({},icon);revision++},
       buttonSetCaption(c,face=0){if(![0,1,2].includes(face))throw Error('Invalid button face');this._captions=this._captions||{};this._captions[face]=String(c);if(face===0)this._caption=String(c);revision++},buttonGetCaption(face=0){return this._captions&&this._captions[face]!==undefined?this._captions[face]:this._caption===undefined?(x.caption||''):this._caption},

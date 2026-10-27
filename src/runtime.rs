@@ -306,7 +306,7 @@ mod tests {
     }
     #[test]
     fn focus_selects_the_target_widget_page() {
-        host("var f=getField('A');f._widgets=[{page:1},{page:2}];getField('A.1').setFocus();var exact=pageNum===2;f.setFocus();exact&&pageNum===1");
+        host("Array.prototype.find=function(){return -1};var f=getField('A');f._widgets=[{page:1},{page:2}];getField('A.1').setFocus();var exact=pageNum===2;f.setFocus();exact&&pageNum===1");
     }
     #[test]
     fn print_constants_match_qualified_reader_values() {
