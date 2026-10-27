@@ -1286,5 +1286,15 @@
     "remaining": "Rich-text NBSP, serialized-state comparisons, checkbox mark styling and wider radio-button behavior remain incomplete.",
     "clearing_evidence": "output/testing/checkbox-events-1793109261986589690/checkbox-events.json",
     "clearing_failed_before_fix": "output/testing/checkbox-events-1793109091284805362/checkbox-events.json"
+  },
+  "text_commit_normalization": {
+    "status": "NBSP and richText mode event behavior implemented; recovered exact Reader trace and saved diagnostic match, clean reference rerun pending harness qualification",
+    "native_tests": 49,
+    "table": "output/testing/native-table-1793122033811218055/table.json",
+    "generated": "output/testing/native-generated-1793122283200422875/generated.json",
+    "reader_trace": "output/testing/field-events-1793122032591996993/recovered-and-cleaned.json",
+    "failed_suite": "output/testing/field-events-1793122032591996993/events.json",
+    "scope": "Text .value normalizes NBSP before K/V/F and preserves tabs. RichText=false formats; RichText=true runs K/V/F even for unchanged mode/value. Source rich/plain and multiline flags retained. Reader payload recovered from the same completed add-on, saved/closed, canonical diagnostic and original script hashes verified independently.",
+    "remaining": "The originating suite remains failed due to result-dialog cleanup. event.richValue, defaultStyle, rich XML persistence and broader styling remain incomplete; Ashnar Class Features/Extra.Notes canonical differences remain."
   }
 }

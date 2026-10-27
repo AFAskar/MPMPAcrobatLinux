@@ -525,8 +525,16 @@ mod tests {
     #[test]
     fn line_endings_are_normalized_before_commit_events() {
         host(
-            r#"var f=getField('A'),seen=[];f.setAction('Keystroke','seen.push(event.value)');f.value='a\nb';f.value='a\r\nb';var plain=seen.length===1&&seen[0]==='a b';f.multiline=true;f.richText=true;f.value='a\nb';f.value='a\r\nb';plain&&f.valueAsString==='a\rb'&&seen.length===3&&seen[1]==='a\rb'&&seen[2]==='a\rb'"#,
+            r#"var f=getField('A'),seen=[];f.setAction('Keystroke','seen.push(event.value)');f.value='a\nb';f.value='a\r\nb';var plain=seen.length===1&&seen[0]==='a b';f.multiline=true;f.richText=true;f.value='a\nb';f.value='a\r\nb';plain&&f.valueAsString==='a\rb'&&seen.length===4&&seen[1]==='a b'&&seen[2]==='a\rb'&&seen[3]==='a\rb'"#,
         );
+    }
+    #[test]
+    fn nonbreaking_spaces_normalize_before_plain_and_rich_commit_events() {
+        host(r#"var f=getField('A'),seen=[];f.setAction('Keystroke','seen.push(event.value)');f.value='a\u00a0b\tc';var plain=seen[0]==='a b\tc'&&f.valueAsString==='a b\tc';f.multiline=true;f.richText=true;f.value='a\u00a0b\r\u00a0\u00a0indented';plain&&seen[1]==='a b\tc'&&seen[2]==='a b\r  indented'&&f.valueAsString==='a b\r  indented'"#);
+    }
+    #[test]
+    fn rich_text_mode_assignments_deliver_reader_commit_and_format_events() {
+        host(r#"var f=getField('A'),seen=[];f.setAction('Keystroke',"seen.push('K')");f.setAction('Validate',"seen.push('V')");f.setAction('Format',"seen.push('F')");f.richText=false;f.richText=false;f.richText=true;f.richText=true;JSON.stringify(seen)==='["F","F","K","V","F","K","V","F"]'&&f.valueAsString==='2'"#);
     }
     #[test]
     fn untouched_widgets_retain_print_bits_and_display_assignment_normalizes_them() {

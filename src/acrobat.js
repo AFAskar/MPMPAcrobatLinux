@@ -52,7 +52,7 @@ var __host = (function () {
       buttonSetCaption(c,face=0){if(![0,1,2].includes(face))throw Error('Invalid button face');this._captions=this._captions||{};this._captions[face]=String(c);if(face===0)this._caption=String(c);revision++},buttonGetCaption(face=0){return this._captions&&this._captions[face]!==undefined?this._captions[face]:this._caption===undefined?(x.caption||''):this._caption},
     };
     for(const prop of ['textSize','textFont','richText','richValue','textColor','fillColor','strokeColor','alignment','lineWidth','borderStyle']){
-      let stored=f[prop];Object.defineProperty(f,prop,{enumerable:true,get(){return stored},set(v){if(JSON.stringify(v)!==JSON.stringify(stored))gap('Field.'+prop+' appearance/persistence');stored=v;if(prop==='richValue'){if(Array.isArray(v))f.value=v.map(span=>span.text||'').join('');else if(v==='')f.value='';}}});
+      let stored=f[prop];Object.defineProperty(f,prop,{enumerable:true,get(){return stored},set(v){if(JSON.stringify(v)!==JSON.stringify(stored))gap('Field.'+prop+' appearance/persistence');stored=prop==='richText'?!!v:v;if(prop==='richText'){if(stored)f.value=f.valueAsString;else if(f._actions.F&&!calculating)f._formatted=eventRun(f,'F',f.value).value;}if(prop==='richValue'){if(Array.isArray(v))f.value=v.map(span=>span.text||'').join('');else if(v==='')f.value='';}}});
     }
     for(const prop of ['userName','submitName']){let stored=f[prop];Object.defineProperty(f,prop,{enumerable:true,get(){return stored},set(v){stored=String(v)}})}
     Object.defineProperty(f,'display',{enumerable:true,get(){return widgetDisplay(f,0)},set(v){displayFlags(v,4);f._fallbackDisplay=Number(v);for(let i=0;i<f._widgets.length;i++)setWidgetDisplay(f,i,v);}});
@@ -64,7 +64,7 @@ var __host = (function () {
       // Text fields stringify arrays as comma-separated text, never JSON.
       if(v===undefined||v===null||(typeof v==='object'&&!(x.kind==='Ch'&&x.flags&2097152&&Array.isArray(v))))v=String(v);
       if(x.kind==='Btn'&&!(x.flags&65536)&&v==='')v='Off';
-      if(typeof v==='string'&&x.kind==='Tx')v=v.replace(/\r\n|\r|\n/g,f.multiline?'\r':' ');
+      if(typeof v==='string'&&x.kind==='Tx')v=v.replace(/\u00a0/g,' ').replace(/\r\n|\r|\n/g,f.multiline?'\r':' ');
       if(!f.richText&&String(raw)===String(v)){if(f._actions.F&&!calculating)f._formatted=eventRun(f,'F',f.value).value;return;}
       if(data.trace&&data.trace.includes(n))__log(n+': '+String(raw)+' -> '+String(v)+'\n'+new Error().stack);
       if(assigning.has(n)){raw=v;return}
