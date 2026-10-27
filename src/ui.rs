@@ -43,6 +43,9 @@ pub fn main() -> Result<()> {
                     .collect(),
                 false,
                 scenario["print_output_dir"].as_str().map(PathBuf::from),
+                scenario["attachment_output_dir"]
+                    .as_str()
+                    .map(PathBuf::from),
             )?;
             report["loaded_scripts"] = json!(runtime.loaded);
             if let Some(steps) = scenario["steps"].as_array() {
@@ -149,6 +152,7 @@ pub fn main() -> Result<()> {
         },
         if smoke.is_some() { vec![1, 1] } else { vec![] },
         true,
+        None,
         None,
     )?;
     if smoke.is_some() {

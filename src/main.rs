@@ -1,3 +1,4 @@
+mod attachments;
 mod pdf;
 mod printing;
 mod render;

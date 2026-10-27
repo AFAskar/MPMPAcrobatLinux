@@ -60,6 +60,7 @@ impl Runtime {
         alerts: Vec<i32>,
         interactive: bool,
         print_output_dir: Option<std::path::PathBuf>,
+        attachment_output_dir: Option<std::path::PathBuf>,
     ) -> Result<Self> {
         let engine = Engine::new()?;
         engine.set_memory_limit(512 * 1024 * 1024);
@@ -74,7 +75,14 @@ impl Runtime {
                         .collect::<String>()
                         == "ce4624265af7fad2456badd108fa6003e5dbb939263ee7269a4cbbf9e3055857"
             });
+        let attachments = crate::attachments::read(&pdf.doc)?;
+        let attachment_metadata: Vec<_> = attachments.values().cloned().collect();
+        let exporter = std::cell::RefCell::new(crate::attachments::Exporter::default());
         js.with(|ctx|->Result<()>{
+        ctx.globals().set("__attachment",Function::new(ctx.clone(),move|ctx:Ctx,request:String|->rquickjs::Result<String>{
+            exporter.borrow_mut().export(&attachments,&request,interactive,attachment_output_dir.as_deref())
+                .map(|v|v.to_string()).map_err(|e|Exception::throw_message(&ctx,&format!("{e:#}")))
+        })?)?;
         let print_pdf=Arc::clone(pdf);
         ctx.globals().set("__print",Function::new(ctx.clone(),move|ctx:Ctx,request:String|->rquickjs::Result<String>{
             crate::printing::execute(&print_pdf,&request,interactive,print_output_dir.as_deref())
@@ -118,7 +126,7 @@ impl Runtime {
                 Ok(json!({"data":String::from_utf8(bytes)?}).to_string())
             })().map_err(|e|Exception::throw_message(&ctx,&format!("{e:#}")))
         })?)?;
-        let initial=json!({"repair_allowed":repair_allowed,"templates":pdf.templates,"trace":std::env::var("MPMB_TRACE_FIELDS").unwrap_or_default().split(',').collect::<Vec<_>>(),"bookmarks":pdf.bookmarks,"fields":pdf.fields,"order":pdf.order,"info":pdf.info,"file":pdf.path.file_name().unwrap().to_string_lossy(),"path":pdf.path,"pages":pdf.doc.get_pages().len()});
+        let initial=json!({"attachments":attachment_metadata,"repair_allowed":repair_allowed,"templates":pdf.templates,"trace":std::env::var("MPMB_TRACE_FIELDS").unwrap_or_default().split(',').collect::<Vec<_>>(),"bookmarks":pdf.bookmarks,"fields":pdf.fields,"order":pdf.order,"info":pdf.info,"file":pdf.path.file_name().unwrap().to_string_lossy(),"path":pdf.path,"pages":pdf.doc.get_pages().len()});
         ctx.globals().set("__initial",initial.to_string())?;
         ctx.eval::<(),_>(concat!(include_str!("acrobat.js"),"\nvoid 0;")).map_err(|e|anyhow!("Acrobat host: {e}: {:?}",ctx.catch()))?;
         Ok(())})?;
@@ -330,6 +338,12 @@ mod tests {
     fn text_fields_coerce_arrays_before_snapshot() {
         host(
             r#"var f=getField('A');f.setAction('Validate','');f.value=['','P3.AScomp.'];var first=JSON.parse(__host.snapshot()).A.value;f.value=[''];first===',P3.AScomp.'&&JSON.parse(__host.snapshot()).A.value===''"#,
+        );
+    }
+    #[test]
+    fn attachment_descriptors_do_not_mutate_document_resources() {
+        host(
+            r#"__host.data.attachments=[{name:'FAQ.pdf',path:'FAQ.pdf',size:3}];var list=dataObjects;list[0].name='changed';var object=getDataObject('FAQ.pdf');object.size=0;dataObjects[0].name==='FAQ.pdf'&&getDataObject('FAQ.pdf').size===3"#,
         );
     }
     #[test]

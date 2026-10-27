@@ -13,7 +13,7 @@ String.prototype.replace=function(pattern,replacement){
 };
 var __host = (function () {
   const data=JSON.parse(__initial), fields={}, names=[], journal=[];
-  const timers=new Map(), menus={}, gaps=[], errors=[], repairs=[], printJobs=[], assigning=new Set(), formatDirty=new Set();
+  const timers=new Map(), menus={}, gaps=[], errors=[], repairs=[], printJobs=[], attachmentExports=[], assigning=new Set(), formatDirty=new Set();
   let clock=0, timerId=0, calculating=false, pending=false, revision=0;
   function unsupported(name) { gaps.push(name); throw Error('Unsupported Acrobat API: '+name); }
   function gap(name) { if(gaps.indexOf(name)<0)gaps.push(name); }
@@ -186,11 +186,13 @@ var __host = (function () {
     repairs.push(repair);__log('Applied qualified runtime repair: '+repair.id);
   }
   return {activate,pageWidgets,widgetDisplay,setWidgetDisplay,menuItems,popup,applyQualifiedRepairs,get revision(){return revision},recordError(e){errors.push(e)},fields,names,data,menus,gaps,errors,source,unsupported,gap,calculateNow,edit,advance,execDialog,invokeMenu,command,spawn,removeField,deletePages,
+    dataObjects(){return JSON.parse(JSON.stringify(data.attachments||[]))},
+    exportDataObject(params){if(typeof params==='string')params={cName:params};const result=JSON.parse(__attachment(JSON.stringify(params)));attachmentExports.push(result);},
     print(params){const result=JSON.parse(__print(JSON.stringify({params,state:JSON.parse(__host.snapshot())})));printJobs.push(result);return undefined},
     ready(){let n=0;while(!globalThis.calculate||!app.calculate||globalThis.delay){let t=Array.from(timers.values()).sort((a,b)=>a.at-b.at)[0];if(!t||++n>100)throw Error('Document calculations suspended without a resumable timer');advance(Math.max(0,t.at-clock));}return true},
     snapshot(){let o={__structure:journal,__order:data.order};if(data.bookmarksChanged)o.__bookmarks=bookmarkRoot;for(const n of names){let f=fields[n];o[n]={value:Array.isArray(f.value)?f.value:f.valueAsString,icon:f._icon,caption:f._caption,captions:f._captions,actions:f._modifiedActions,widgets:f._widgets,currentValueIndices:f.currentValueIndices,textSize:f.textSize,alignment:f.alignment,multiline:f.multiline,textColor:f.textColor,textFont:f.textFont,richValue:f.richValue,formatted:f._formatted===undefined?f.value:f._formatted,display:f.display,userName:f.userName,submitName:f.submitName,readonly:f.readonly,items:f.items};}return JSON.stringify(o)},
     timer(code,ms){let id=++timerId;timers.set(id,{id,code:String(code),at:clock+Math.max(1,Number(ms)||1)});return id},clear(id){timers.delete(id)},
-    diagnostics(){return JSON.stringify({gaps,errors,repairs,printJobs,timers:timers.size,field_count:names.length,menus:Object.keys(menus)})}
+    diagnostics(){return JSON.stringify({gaps,errors,repairs,printJobs,attachmentExports,timers:timers.size,field_count:names.length,menus:Object.keys(menus)})}
   };
 })();
 var display={visible:0,hidden:1,noPrint:2,noView:3};
@@ -227,6 +229,9 @@ Object.assign(globalThis,{
   info:JSON.parse(__initial).info,documentFileName:JSON.parse(__initial).file,path:JSON.parse(__initial).path,
   numPages:JSON.parse(__initial).pages,numFields:__host.names.length,calculate:true,delay:false,dirty:false,pageNum:0,
   getField(n){n=String(n).replace(/\.{2,}/g,'.');if(__host.fields[n])return __host.fields[n];const selected=/^(.*)\.(\d+)$/.exec(n);if(selected&&__host.fields[selected[1]]){const base=__host.fields[selected[1]],index=Number(selected[2]);if(!base._widgets[index])return null;return new Proxy(base,{get(target,key){if(key==='page')return target._widgets[index].page;if(key==='display')return __host.widgetDisplay(target,index);if(key==='setFocus')return function(){__host.data.focus=target.name;__host.data.focusWidget=index;const page=target._widgets[index].page;if(page>=0)globalThis.pageNum=page;};return target[key]},set(target,key,value){if(key==='display')__host.setWidgetDisplay(target,index,value);else target[key]=value;return true}})}const prefix=String(n)+'.';let children=__host.names.filter(x=>x.startsWith(prefix));return children.length?new Proxy({name:n,getArray(){return children.map(x=>__host.fields[x])}},{get(o,k){return k in o?o[k]:__host.fields[children[0]][k]},set(o,k,v){for(const child of children)__host.fields[child][k]=v;return true}}):null},
+  getDataObject(name){const found=__host.dataObjects().filter(d=>d.name===name);if(!found.length)throw Error('Unknown data object '+name);return found[0]},
+  exportDataObject:__host.exportDataObject,
+  importDataObject(){return __host.unsupported('Doc.importDataObject')},
   getNthFieldName(i){return __host.names[i]},calculateNow:__host.calculateNow,
   resetForm(list){for(const n of __host.names){if(!list||list.some(x=>n===x||n.startsWith(x+'.')))__host.fields[n].value=__host.fields[n].defaultValue;}},
   getTemplate(n){return __host.data.templates&&__host.data.templates[n]?{name:n,spawn(index,rename,overlay){return __host.spawn(n,index,rename,overlay)}}:null},
@@ -235,6 +240,8 @@ Object.assign(globalThis,{
   getPrintParams(){return {firstPage:0,lastPage:numPages-1,interactive:0,DuplexType:1,constants:{interactionLevel:{full:0,automatic:1,silent:2},duplexTypes:{Simplex:1,DuplexFlipLongEdge:2,DuplexFlipShortEdge:3}}}},
   print(params){if(!params||typeof params!=='object')return __host.unsupported('Doc.print legacy arguments');return __host.print(params)},
 });
+
+Object.defineProperty(globalThis,'dataObjects',{get:__host.dataObjects});
 
 function AFRange_Validate(lower,minimum,upper,maximum){let n=Number(event.value);if(event.value!==''&&((lower&&n<minimum)||(upper&&n>maximum)))event.rc=false;}
 function AFDate_Format(format){if(event.value){let d=util.scand(format,event.value);if(d)event.value=util.printd(format,d);}}

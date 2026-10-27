@@ -1168,5 +1168,24 @@
     "qualified_reader_trace": "output/testing/field-events-1793082876778218795/events.json",
     "native_table_regression": "output/testing/native-table-1793082877958892618/table.json",
     "native_print_regression": "output/testing/native-printing-1793082799007399331/printing.json"
+  },
+  "attachment_workflows": {
+    "status": "defined native existing-file listing/export/menu/persistence passes; Reader and desktop opening pending",
+    "native": "output/testing/native-attachments-1793100475546677964/attachments.json",
+    "scope": "Read EmbeddedFiles name tree and stream bytes; dataObjects/getDataObject descriptors; original built-in FAQ menu and getFAQ export; original AddFolderJavaScript helper export; exact payload hashes and native save/reopen with original scripts and field inventory preserved.",
+    "native_exports": {
+      "FAQ.pdf": {
+        "bytes": 397667,
+        "sha256": "cf19c0a75866845670f4656d2798ce6b8346fc0447a03b17fd04e94d450abb06"
+      },
+      "helper": "Exact original byte comparison in each fixture; never executed"
+    },
+    "probe_launches": "Suppressed and recorded; this is not proof of desktop launching",
+    "unsupported": [
+      "Attachment import/modification and stream-content APIs",
+      "Non-PDF attachment launching",
+      "Creation/modification date descriptor fidelity and encrypted attachment authorization"
+    ],
+    "reference": "https://opensource.adobe.com/dc-acrobat-sdk-docs/library/jsapiref/doc.html#exportdataobject"
   }
 }
