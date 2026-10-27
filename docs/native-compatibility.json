@@ -1104,7 +1104,7 @@
   ],
   "historical_print_counterexamples_status": "Missing dependencies implemented; historical failures retained. Current native print evidence above; broader milestone remains in progress.",
   "subclass_dropdown_audit": {
-    "status": "93 frozen 2024 subclass cases passed; Hexblade reopen failed; targeted corrected Hexblade and Wildfire pass; remaining definitions not fully exercised",
+    "status": "Bounded default-choice progression across separate runs covers 172 selectable 2014 class/subclass pairs and 107 selectable 2024 pairs in the all-source profile; alternate profiles and Reader qualification incomplete",
     "pilot": "output/testing/native-subclasses-1793074776109531946/subclasses.json",
     "broad_run": "output/testing/native-subclasses-1793074818475225818/subclasses.json",
     "scope": "Original source-selection buttons and offered class/subclass dropdowns; levels 3,5,11,20,3; independent saved output/script checks and native reopen. All-source profile only; default feature choices only. Reader equivalence and full table workflows unqualified.",
@@ -1123,7 +1123,15 @@
     "warlock_wizard_slice": "output/testing/native-subclasses-1793082304040159913/subclasses.json",
     "historical_2014_failed_run": "output/testing/native-subclasses-1793100024191636214/subclasses.json",
     "historical_2014_passed_cases": 143,
-    "sidekick_boundary": "The default scripted response did not affirm the required sidekick conversion warning. Explicit Yes plus base HD setup creates Mage correctly; special workflow qualification remains pending. Do not label this as a class-parser failure."
+    "sidekick_boundary": "Historical default-profile failure did not affirm Yes=4. All 15 explicit native sidekick profiles subsequently passed; see sidekick_workflows. Reader and broader mechanics remain unqualified.",
+    "remaining_2014": "output/testing/native-subclasses-1793106869845133839/subclasses.json",
+    "2014_inventory": {
+      "registered_nonexcluded_pairs": 245,
+      "unique_subclass_keys": 235,
+      "selectable_pairs_in_all_source_profile": 172,
+      "shadowed_pairs_unexercised": 73,
+      "limitations": "58 subclass pairs and the 15 pairs under the shadowed ranger class require alternate source selection. 172 is not the total predefined inventory."
+    }
   },
   "bookmarks": {
     "status": "defined native workflow and native desktop cases passed; Reader qualification pending",
