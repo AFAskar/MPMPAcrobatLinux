@@ -13,17 +13,30 @@ from verify import canonical_fields, inspect, script_hashes
 
 SOURCE = 'SOURCE SELECTION DIALOG'
 ELEMENTS = 'CLASSES OR ARCHETYPES SOURCE SELECTION DIALOG'
-INVENTORY = "Object.keys(ClassList).map(k=>({key:k,name:ClassList[k].name,parsed:ParseClass(ClassList[k].name),excluded:testSource(k,ClassList[k],'classExcl'),subs:(ClassList[k].subclasses[1]||[]).map(s=>({key:s,name:ClassSubList[s]&&ClassSubList[s].subname,excluded:!ClassSubList[s]||testSource(s,ClassSubList[s],'classExcl'),parsed:ClassSubList[s]&&ParseClass(ClassSubList[s].fullname||ClassList[k].name+' ('+ClassSubList[s].subname+')')}))}))"
+# Build citation labels from original metadata; the host must still find the
+# complete path in the actual dialog before accepting a scripted selection.
+INVENTORY = """(function(){
+ var isNewAcrobat=false;try{isNewAcrobat=/hamburger/i.test(app.listMenuItems().toSource())}catch(e){}
+ function label(name,def,alt){var refs=parseSource(def.source||(alt&&alt.source))||[];
+ var abbr=refs.filter(function(x){return CurrentSources.globalExcl.indexOf(x[0])===-1}).map(function(x){return isNewAcrobat?SourceList[x[0]].abbreviation:SourceList[x[0]].uniS});
+ return name+(abbr.length?(isNewAcrobat?' ['+abbr.join(', ')+']':' '+abbr.join(' ')):'');}
+ return Object.keys(ClassList).map(k=>({key:k,name:ClassList[k].name,label:label(ClassList[k].name,ClassList[k]),parsed:ParseClass(ClassList[k].name),excluded:testSource(k,ClassList[k],'classExcl'),subs:(ClassList[k].subclasses[1]||[]).map(s=>({key:s,name:ClassSubList[s]&&ClassSubList[s].subname,label:ClassSubList[s]&&label(ClassSubList[s].subname,ClassSubList[s],ClassList[k]),excluded:!ClassSubList[s]||testSource(s,ClassSubList[s],'classExcl'),parsed:ClassSubList[s]&&ParseClass(ClassSubList[s].fullname||ClassList[k].name+' ('+ClassSubList[s].subname+')')}))}));})()"""
 
 
-def source_dialogs(fixture):
+def source_dialogs(fixture, target=None):
     startup = [{'title': SOURCE, 'result': 'ok'}] if fixture != 'ashnar' else []
-    return startup + [{'title': SOURCE, 'event': 'BTRA'}, {'title': SOURCE, 'event': 'bCla'}, {'title': ELEMENTS, 'event': 'BTRA'}, {'title': ELEMENTS, 'result': 'ok'}, {'title': SOURCE, 'result': 'ok'}]
+    elements = [{'title': ELEMENTS, 'event': 'BTRA'}]
+    if target:
+        cl, sub = target
+        elements = [{'title': ELEMENTS, 'event': 'BTLA'},
+                    {'title': ELEMENTS, 'event': 'BTR1', 'select': {'ExcL': [cl['label'], sub['label']]}}]
+    return startup + [{'title': SOURCE, 'event': 'BTRA'}, {'title': SOURCE, 'event': 'bCla'}] + elements + [{'title': ELEMENTS, 'result': 'ok'}, {'title': SOURCE, 'result': 'ok'}]
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--fixture', choices=['2014', '2024', 'ashnar'], action='append')
+    parser.add_argument('--isolate-shadowed', action='store_true', help='Test shadowed pairs with only the target class/subclass enabled through original source-element controls')
     parser.add_argument('--class-key', action='append')
     parser.add_argument('--skip-class-key', action='append', help='Explicit separate-profile classes; recorded as unexercised in this suite')
     parser.add_argument('--limit', type=int)
@@ -58,11 +71,13 @@ def main():
             item = {'fixture': fixture, 'profile': 'All sourcebooks and class elements enabled via original dialog buttons', 'inventory': evidence, 'cases': [], 'not_exercised': []}; report['fixtures'].append(item)
             candidates = []
             for cl in inventory:
-                if cl['excluded'] or not cl['parsed'] or cl['parsed'][0] != cl['key']:
+                if cl['excluded'] or (not args.isolate_shadowed and (not cl['parsed'] or cl['parsed'][0] != cl['key'])):
                     item['not_exercised'].append({'class': cl['key'], 'reason': 'Excluded or shadowed by another class with this source profile', 'parsed': cl['parsed']}); continue
                 for sub in cl['subs']:
-                    if sub['excluded'] or not sub['parsed'] or sub['parsed'][:2] != [cl['key'], sub['key']]:
+                    if sub['excluded'] or (not args.isolate_shadowed and (not sub['parsed'] or sub['parsed'][:2] != [cl['key'], sub['key']])):
                         item['not_exercised'].append({'class': cl['key'], 'subclass': sub['key'], 'reason': 'Excluded or shadowed with this source profile', 'parsed': sub['parsed']}); continue
+                    if args.isolate_shadowed and cl['parsed'] and cl['parsed'][0] == cl['key'] and sub['parsed'] and sub['parsed'][:2] == [cl['key'], sub['key']]:
+                        item['not_exercised'].append({'class': cl['key'], 'subclass': sub['key'], 'reason': 'Selectable in all-source profile; this suite targets shadowed pairs only'}); continue
                     if args.skip_class_key and cl['key'] in args.skip_class_key:
                         item['not_exercised'].append({'class': cl['key'], 'subclass': sub['key'], 'reason': 'Explicit separate-profile class filter'}); continue
                     if args.class_key and cl['key'] not in args.class_key:
@@ -72,20 +87,26 @@ def main():
                     candidates.append((cl, sub))
                 if not cl['subs']:
                     item['not_exercised'].append({'class': cl['key'], 'reason': 'No subclasses; separate base-class qualification required'})
+            if args.isolate_shadowed:
+                item['profile']='All sourcebooks; only the target class/subclass enabled through original source-element dialog per case'
+                item['inventory_profile']='All sourcebooks and class elements enabled; used to identify shadowing'
             item['candidates']=[{'class':cl['key'],'subclass':sub['key']} for cl,sub in candidates]
             item['candidate_count']=len(candidates)
             for index, (cl, sub) in enumerate(candidates):
                 if args.limit is not None and index >= args.limit:
                     item['not_exercised'].append({'class': cl['key'], 'subclass': sub['key'], 'reason': 'Command limit'}); continue
                 label = fixture + '-' + str(index); output = folder / (label + '.pdf')
-                dialogs = source_dialogs(fixture) + [{'event': 'r0CD', 'select': {'r0CD': cl['name']}}, {'event': 'r0SD', 'select': {'r0SD': sub['name']}}, {'event': 'r0LV', 'values': {'r0LV': '3'}}, {'result': 'ok'}] + [{'result': 'ok'}] * 300
+                case_sources = source_dialogs(fixture, (cl, sub) if args.isolate_shadowed else None)
+                dialogs = case_sources + [{'event': 'r0CD', 'select': {'r0CD': cl['name']}}, {'event': 'r0SD', 'select': {'r0SD': sub['name']}}, {'event': 'r0LV', 'values': {'r0LV': '3'}}, {'result': 'ok'}] + [{'result': 'ok'}] * 300
                 # Reset prior classes before selecting through the real dropdowns.
                 steps = setup() + [{'op': 'eval', 'code': "__host.command(\"ApplyClasses('',false)\")"}, {'op': 'advance', 'ms': 1000}]
                 # Clearing Ashnar may open a changes notification before selection.
                 if fixture == 'ashnar':
-                    dialogs.insert(len(source_dialogs(fixture)), {'title': 'CHANGES ALERT DIALOG', 'result': 'ok'})
+                    dialogs.insert(len(case_sources), {'title': 'CHANGES ALERT DIALOG', 'result': 'ok'})
                 steps += [{'op': 'edit', 'field': ability, 'value': '18'} for ability in ['Str', 'Dex', 'Con', 'Int', 'Wis', 'Cha']]
                 steps += [{'op': 'eval', 'code': "__host.command('SelectClass()')"}, {'op': 'advance', 'ms': 1000}]
+                if args.isolate_shadowed:
+                    steps += [{'op':'eval','code':"var enabledClassKeys=Object.keys(ClassList).filter(function(k){return !testSource(k,ClassList[k],'classExcl')});if(enabledClassKeys.length!==1||enabledClassKeys[0]!=="+json.dumps(cl['key'])+")throw Error('Target-only source profile not applied');if(testSource("+json.dumps(sub['key'])+",ClassSubList["+json.dumps(sub['key'])+"],'classExcl'))throw Error('Target subclass excluded');"}]
                 verify_class = 'if(!classes.known[' + json.dumps(cl['key']) + ']||classes.known[' + json.dumps(cl['key']) + '].subclass!==' + json.dumps(sub['key']) + ")throw Error('Wrong class/subclass selected');"
                 steps += [{'op': 'eval', 'code': verify_class + "var chosenClass=What('Class and Levels');"}, {'op': 'assert', 'values': {'Character Level': '3'}}]
                 if sub['key'] == 'druid-circle of wildfire':

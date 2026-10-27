@@ -18,33 +18,50 @@ fn select_dialog_options(request: &Value, reply: &mut Value) -> Result<()> {
     let Some(selections) = reply["select"].as_object().cloned() else {
         return Ok(());
     };
-    fn select(options: &mut Value, label: &str, matches: &mut usize) {
+    fn select(
+        options: &mut Value,
+        labels: &[String],
+        qualified: bool,
+        parents: &[String],
+        matches: &mut usize,
+    ) {
         if let Some(options) = options.as_object_mut() {
             for (name, value) in options {
+                let mut path = parents.to_vec();
+                path.push(name.clone());
                 if let Some(n) = value.as_i64() {
                     let magnitude = n.saturating_abs().max(1);
-                    *value = json!(if name == label {
+                    let selected = if qualified { path == labels } else { name == &labels[0] };
+                    *value = json!(if selected {
                         *matches += 1;
                         magnitude
                     } else {
                         -magnitude
                     });
                 } else {
-                    select(value, label, matches);
+                    select(value, labels, qualified, &path, matches);
                 }
             }
         }
     }
-    for (id, label) in selections {
-        let label = label.as_str().context("dialog selection must be a label")?;
+    for (id, selection) in selections {
+        let qualified = selection.is_array();
+        let labels = if let Some(label) = selection.as_str() {
+            vec![label.to_owned()]
+        } else {
+            selection.as_array().context("dialog selection must be a label or label path")?
+                .iter().map(|v| v.as_str().map(str::to_owned).context("dialog path labels must be strings"))
+                .collect::<Result<Vec<_>>>()?
+        };
+        if labels.is_empty() { bail!("dialog selection path must not be empty") }
         if request["enabled"][&id] == false || request["visible"][&id] == false {
             bail!("dialog control {id} is unavailable")
         }
         let mut options = request["values"][&id].clone();
         let mut matches = 0;
-        select(&mut options, label, &mut matches);
+        select(&mut options, &labels, qualified, &[], &mut matches);
         if matches != 1 {
-            bail!("dialog control {id} offers {matches} matches for {label}")
+            bail!("dialog control {id} offers {matches} matches for {selection}")
         }
         if !reply["values"].is_object() {
             reply["values"] = json!({});
@@ -318,6 +335,16 @@ mod tests {
             &mut json!({"select":{"list":"A"}})
         )
         .is_err());
+    }
+    #[test]
+    fn qualified_dialog_paths_disambiguate_duplicate_subclass_labels() {
+        let request = json!({"values":{"ExcL":{"Ranger":{"Hunter":-2},"Revised Ranger":{"Hunter":-5}}}});
+        let mut reply = json!({"select":{"ExcL":["Revised Ranger","Hunter"]}});
+        select_dialog_options(&request, &mut reply).unwrap();
+        assert_eq!(reply["values"]["ExcL"], json!({"Ranger":{"Hunter":-2},"Revised Ranger":{"Hunter":5}}));
+        for path in [json!([]), json!(["Hunter"]), json!(["Missing","Hunter"]), json!([1,"Hunter"])] {
+            assert!(select_dialog_options(&request, &mut json!({"select":{"ExcL":path}})).is_err());
+        }
     }
     #[test]
     fn button_paths_resolve_real_controls_and_reject_ambiguous_or_disabled_choices() {

@@ -1131,7 +1131,11 @@
       "selectable_pairs_in_all_source_profile": 172,
       "shadowed_pairs_unexercised": 73,
       "limitations": "58 subclass pairs and the 15 pairs under the shadowed ranger class require alternate source selection. 172 is not the total predefined inventory."
-    }
+    },
+    "ashnar_regular": "output/testing/native-subclasses-1793107324207137425/subclasses.json",
+    "ashnar_regular_cases": 169,
+    "shadowed_profile_pilot": "output/testing/native-subclasses-1793121267996131353/subclasses.json",
+    "shadowed_profile_scope": "One 2014 UA Ancestral Guardian case passed at 3,5,11,20,3 and native reopen after target-only source-element selection; remaining 72 shadowed pairs and Reader profile equivalence unqualified."
   },
   "bookmarks": {
     "status": "defined native workflow and native desktop cases passed; Reader qualification pending",
