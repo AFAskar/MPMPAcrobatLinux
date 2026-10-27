@@ -400,6 +400,23 @@ function Select-ImportFile($q){
  }while($watch.Elapsed.TotalSeconds -lt 12)
  throw 'Import file dialog did not appear'
 }
+function Save-PrintOutput($q){
+ $path=Scope-Path $q.path
+ if(-not $path.StartsWith($Root+'\runs\',[StringComparison]::OrdinalIgnoreCase) -or [IO.Path]::GetExtension($path) -ine '.pdf'){throw 'Print output must be a new runs PDF'}
+ if(Test-Path $path){throw 'Print output already exists'}
+ $active=Get-Content "$Root\active-command.json" -Raw|ConvertFrom-Json
+ if($active.id -ne $q.request_id -or $active.name -notin @('PrintTheSheet','PrintButton')){throw 'No matching original MPMB print operation is outstanding'}
+ $elements=@(Native-Elements)
+ $dialog=@($elements|Where-Object {$_.class -eq '#32770' -and $_.name -eq 'Save Print Output As'})
+ if($dialog.Count -ne 1){throw 'Virtual printer output dialog is absent or ambiguous'}
+ $owner=$dialog[0].handle
+ $edit=@($elements|Where-Object {$_.owner -eq $owner -and $_.class -eq 'Edit' -and $_.rect[2] -gt 0 -and $_.rect[3] -gt 0})
+ $save=@($elements|Where-Object {$_.owner -eq $owner -and $_.class -eq 'Button' -and $_.name -eq 'Save'})
+ if($edit.Count -ne 1 -or $save.Count -ne 1){throw 'Virtual printer output controls are ambiguous'}
+ [DesktopNative]::SetTextVerified([IntPtr]$edit[0].handle,$path)
+ Invoke-Native $save[0]
+ return @{path=$path;request_id=$q.request_id;verified=$true}
+}
 function Uia-Child($action,$value='') {
  $file="$Root\responses\uia-"+[guid]::NewGuid().ToString('N')+'.json'
  $quote={param($v) "'"+([string]$v).Replace("'","''")+"'"}
@@ -435,6 +452,7 @@ function Execute($q) {
   'dispatch' {Dispatch-Reader $q}
   'close_document' {Close-ReaderDocument $q.path}
   'select_file' {Select-ImportFile $q}
+  'save_print_output' {Save-PrintOutput $q}
   'open' {Check-Invocation;$path=Scope-Path $q.path;if(-not(Test-Path $path)){throw 'PDF not found'};$filename=[IO.Path]::GetFileName($path);$existing=@(Reader-Windows|Where-Object {[DesktopNative]::Class($_) -eq 'AcrobatSDIWindow' -and [DesktopNative]::Text($_).IndexOf($filename,[StringComparison]::OrdinalIgnoreCase) -ge 0});if(-not $existing.Count){Start-Process 'C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe' -ArgumentList ('"'+$path+'"')};@{requested=$path;already_open=($existing.Count -gt 0)}}
   'screenshot' {@{path=(Screenshot $q.id)}}
   'script_result' {Script-Result $q.request_id $(if($q.timeout){$q.timeout}else{25})}

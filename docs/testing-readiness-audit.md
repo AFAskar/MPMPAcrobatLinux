@@ -35,3 +35,24 @@ Explicit-path `util.readFileIntoStream` fails on this Reader build; use the test
 The VM was reduced from 6 GiB to 4 GiB; the 6 GiB cold checkpoint remains available. The 4 GiB smoke passed in 144.904 seconds with at least 6886.5 MiB host RAM available, versus 217.855 seconds and 5200.3 MiB in the preceding 6 GiB smoke. These separate runs are not a controlled speed comparison. Neither recorded a new Reader crash, guest resource exhaustion, or host OOM.
 
 After the unrelated host logind restart, logind is active, the guest retained its 4 GiB configuration, and unattended startup passed all 27 checks. The restart did not erase the completed readiness, import, restore or corrected crash-audit evidence.
+
+## Guarded virtual-printer and table probe extension
+
+The application-menu adapter exposes print parameters, primitive field coercion,
+and original resource/source/feature/rest/healing commands in disposable runs
+only. The desktop helper's `save_print_output` is limited to an active original
+MPMB print request, the native print-output picker, a new PDF in runs, and exact
+native text write/readback before invoking Save. It does not choose printers.
+
+Fresh preflight passed 27 checks and `readiness-1793078028.json` passed all 24
+cases against the frozen deployed harness. `readiness-1793076904.json` remains
+failed: its final integrity check detected a verifier edit during execution,
+despite its 23 functional cases passing. Do not mutate fingerprinted harness
+files while qualification is running.
+
+Actual controlled virtual-print pilots saved files through this picker. Their
+suites remain failed because text extraction / whole-page OCR missed outlined
+form glyphs; visual inspection confirmed the printable sentinels. Retained
+failures: `reader-print-output-1793079677723119752` and
+`reader-print-output-1793082174845072879` under the respective native-printing
+run folders. Successful picker execution alone is not a printing suite pass.

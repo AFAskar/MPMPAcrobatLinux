@@ -15,7 +15,7 @@ var MPMBTesting = {
         if (q.op === "ping") return {protocol:3,session:this.session,version:app.viewerVersion,type:app.viewerType};
         if (q.session !== this.session) throw Error("Stale or absent bridge session");
         var d = this.doc(q.path), out = {path:d.path,pages:d.numPages,fields:{}};
-        if ((q.op==='set' || q.op==='call' || q.op==='focus') && this.normalize(q.path).toLowerCase().indexOf(this.root.toLowerCase()+'runs/')!==0)throw Error('Mutations require a disposable runs document');
+        if ((q.op==='set' || q.op==='call' || q.op==='focus' || q.op==='field_coercion') && this.normalize(q.path).toLowerCase().indexOf(this.root.toLowerCase()+'runs/')!==0)throw Error('Mutations require a disposable runs document');
         if (q.op === "read") {
             for (var i=0;i<q.fields.length;i++) { var f=d.getField(q.fields[i]);out.fields[q.fields[i]]=f ? f.valueAsString : null; }
             out.numFields=d.numFields;out.calculation={app:app.calculate,doc:d.calculate,delay:d.delay};
@@ -38,13 +38,18 @@ var MPMBTesting = {
             if (target.toLowerCase().indexOf(this.root.toLowerCase()+"runs/") !== 0) throw Error("Save target must be inside runs");
             d.calculateNow();d.saveAs({cPath:target,bPromptToOverwrite:false});out.path=d.path;
         } else if (q.op === "print_params") {
-            var pp=d.getPrintParams();out.firstPage=pp.firstPage;out.lastPage=pp.lastPage;
+            var pp=d.getPrintParams();out.firstPage=pp.firstPage;out.lastPage=pp.lastPage;out.printerName=pp.printerName;out.interactive=pp.interactive;out.DuplexType=pp.DuplexType;
             out.interactionLevel={};out.duplexTypes={};
             var interaction=['full','automatic','silent'],duplex=['Simplex','DuplexFlipLongEdge','DuplexFlipShortEdge'];
             for(var i=0;i<interaction.length;i++)out.interactionLevel[interaction[i]]=pp.constants.interactionLevel[interaction[i]];
             for(var i=0;i<duplex.length;i++)out.duplexTypes[duplex[i]]=pp.constants.duplexTypes[duplex[i]];
+        } else if (q.op === "field_coercion") {
+            var f=d.getField('Player Name'),before=f.valueAsString;out.probes=[];
+            var values=[undefined,null,true,false,0,1.5,'12'];
+            try {for(var i=0;i<values.length;i++){f.value='sentinel';f.value=values[i];out.probes.push({inputType:typeof values[i],input:String(values[i]),valueType:typeof f.value,value:String(f.value),valueAsString:f.valueAsString});}}
+            finally {f.value=before;}
         } else if (q.op === "call") {
-            var allowed={PrintButton:1,PrintTheSheet:1,calcCont:1,ImportUserScriptFile:1,RunUserScript:1,ApplyClasses:1,ApplyClassLevel:1,SelectClass:1,ApplyRace:1,ApplyBackground:1,GenerateSpellSheet:1,GenerateSpellSheetWithAll:1,DoTemplate:1,ApplyCompRace:1,ApplyWildshape:1,SetStringifieds:1};
+            var allowed={resourceDecisionDialog:1,ClassFeatureOptions:1,resetLimFeaUsed:1,HealItNow:1,PrintButton:1,PrintTheSheet:1,calcCont:1,ImportUserScriptFile:1,RunUserScript:1,ApplyClasses:1,ApplyClassLevel:1,SelectClass:1,ApplyRace:1,ApplyBackground:1,GenerateSpellSheet:1,GenerateSpellSheetWithAll:1,DoTemplate:1,ApplyCompRace:1,ApplyWildshape:1,SetStringifieds:1};
             if (!allowed[q.name] || typeof d[q.name] !== "function") throw Error("Unsupported MPMB function: "+q.name);
             if(q.name==="ImportUserScriptFile"){
                 if(q.file_picker){this.scoped(q.import_file);q.args=[];}
