@@ -31,6 +31,10 @@ The suite inhibits host sleep for its duration. Each run writes a unique `readin
 
 Saved outputs are checked independently with pypdf: canonical `/T` field values (independent of `/TM` export mapping names), page widgets, decoded appearance text for populated visible fields, and original embedded document-script hashes. Ashnar's imported-script payload and remembered spells are checked separately. Render outputs with Poppler and review the images as well. The harness reopens a byte-identical saved-file snapshot after obtaining exclusive read access and checking both SHA-256 hashes; this avoids an observed protected-mode broker failure on immediate same-path reopen.
 
+Choice appearance checks compare canonical export values with the label from the PDF's `/Opt` array (for example stored `short rest`, displayed `SR`). Expected widgets on inactive named templates are enumerated separately from active page widgets; canonical values remain strict, and missing/unrepresented widgets still fail. `tools/native/verify-regressions.py <native-table-report>` verifies this using disposable native outputs and damaged negative copies; it never edits a fixture or reference output.
+
+Do not edit any `tools/acrobat` Python, JavaScript or PowerShell source, fixture manifest, environment lock or readiness sentinel while a qualification run is active. The suite fingerprints these inputs and rejects the run if they change. Development under `src/` and `tools/native/` can continue independently.
+
 ## Coding-agent controls
 
 ```bash

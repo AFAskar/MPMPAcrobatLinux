@@ -1127,5 +1127,13 @@
       "Named/non-JavaScript external actions fail explicitly",
       "Direct destinations navigate to their page but zoom/position is flagged as partial"
     ]
+  },
+  "table_workflows": {
+    "status": "six native resource/rest/healing cases passed; independent Reader scenarios pending",
+    "evidence": "output/testing/native-table-1793077542685557772/table.json",
+    "cases": 6,
+    "coverage": "Fighter/Champion and Monk/Shadow at level 5 in each authorized PDF; use actual class resources, short/long rests, HP and hit-dice recovery, strict saved values/choice appearances/template widgets and native reopen.",
+    "verification_negative_controls": "output/testing/verify-regressions-1793077970606239902/verification.json",
+    "reader_scope": "Reader will create the same input independently from its original fixture; no calculated native values are assigned to the reference."
   }
 }
