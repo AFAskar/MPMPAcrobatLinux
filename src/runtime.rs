@@ -53,6 +53,65 @@ fn select_dialog_options(request: &Value, reply: &mut Value) -> Result<()> {
     }
     Ok(())
 }
+// Probe button paths use the labels shown by the original dialog, including
+// parent menus. Resolve to a real enabled control; never manufacture a choice.
+fn select_dialog_button(request: &Value, reply: &mut Value) -> Result<()> {
+    let Some(path) = reply.get("button_path") else {
+        return Ok(());
+    };
+    let path: Vec<&str> = path
+        .as_array()
+        .context("button_path must be an array")?
+        .iter()
+        .map(|v| v.as_str().context("button path labels must be strings"))
+        .collect::<Result<_>>()?;
+    if path.is_empty() {
+        bail!("button_path cannot be empty")
+    }
+    fn matches(name: &str, wanted: &str) -> bool {
+        let name = name.trim_start_matches("✓ ");
+        name.trim() == wanted || name.split('\t').next().unwrap_or(name).trim() == wanted
+    }
+    fn walk(
+        request: &Value,
+        element: &Value,
+        path: &[&str],
+        available: bool,
+        found: &mut Vec<String>,
+    ) {
+        let id = element["item_id"].as_str().unwrap_or("");
+        let available =
+            available && request["enabled"][id] != false && request["visible"][id] != false;
+        let name = element["name"].as_str().unwrap_or("");
+        if !name.is_empty() && (path.is_empty() || !matches(name, path[0])) {
+            return;
+        }
+        let remaining = if name.is_empty() { path } else { &path[1..] };
+        if element["type"] == "button" && remaining.is_empty() && available && !id.is_empty() {
+            found.push(id.to_owned());
+        }
+        if let Some(children) = element["elements"].as_array() {
+            for child in children {
+                walk(request, child, remaining, available, found);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    if let Some(elements) = request["description"]["elements"].as_array() {
+        for element in elements {
+            walk(request, element, &path, true, &mut found);
+        }
+    }
+    if found.len() != 1 {
+        bail!(
+            "dialog offers {} available matches for button path {path:?}",
+            found.len()
+        )
+    }
+    reply["event"] = json!(found[0]);
+    reply.as_object_mut().unwrap().remove("result");
+    Ok(())
+}
 impl Runtime {
     pub fn new(
         pdf: &Arc<Pdf>,
@@ -98,6 +157,7 @@ impl Runtime {
             if let Some(mut reply)=queue.lock().unwrap().pop_front(){
                 if let Some(title)=reply["title"].as_str(){if request["description"]["name"].as_str()!=Some(title){return Err(format!("Expected dialog {title}, received {}",request["description"]["name"]))}}
                 select_dialog_options(&request,&mut reply).map_err(|e|e.to_string())?;
+                select_dialog_button(&request,&mut reply).map_err(|e|e.to_string())?;
                 eprintln!("Dialog: {} [scripted response]",request["description"]["name"]);
                 return Ok(reply.to_string())
             }
@@ -216,6 +276,26 @@ mod tests {
         assert!(select_dialog_options(
             &json!({"enabled":{"list":false},"values":request["values"]}),
             &mut json!({"select":{"list":"A"}})
+        )
+        .is_err());
+    }
+    #[test]
+    fn button_paths_resolve_real_controls_and_reject_ambiguous_or_disabled_choices() {
+        let mut request = json!({"description":{"elements":[{"type":"cluster","item_id":"parent","name":"Fighting Style","elements":[{"type":"button","item_id":"one","name":"✓ Archery   \t[PHB 72]"}]}]},"enabled":{},"visible":{}});
+        let mut reply = json!({"button_path":["Fighting Style","Archery"]});
+        select_dialog_button(&request, &mut reply).unwrap();
+        assert_eq!(reply["event"], "one");
+        request["enabled"]["parent"] = json!(false);
+        assert!(select_dialog_button(&request, &mut reply).is_err());
+        request["enabled"]["parent"] = json!(true);
+        request["description"]["elements"][0]["elements"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"type":"button","item_id":"two","name":"Archery"}));
+        assert!(select_dialog_button(&request, &mut reply).is_err());
+        assert!(select_dialog_button(
+            &request,
+            &mut json!({"button_path":["Fighting Style","Absent"]})
         )
         .is_err());
     }

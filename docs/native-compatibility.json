@@ -1189,5 +1189,17 @@
       "Creation/modification date descriptor fidelity and encrypted attachment authorization"
     ],
     "reference": "https://opensource.adobe.com/dc-acrobat-sdk-docs/library/jsapiref/doc.html#exportdataobject"
+  },
+  "class_feature_choices": {
+    "status": "defined native Fighter Archery/Dueling menu and attack/persistence cases pass in all three fixtures; Reader pending",
+    "native": "output/testing/native-fighting-styles-1793101442990601077/fighting-styles.json",
+    "scope": "Original Class Features Menu widget and actual offered popup buttons; Longbow +2 Archery attack bonus, removal on Dueling selection, Longsword +2 Dueling damage, native save/reopen and subsequent style replacement.",
+    "assertions": "Numeric to-hit values retain edition-specific leading plus formatting in snapshots. Damage dice and bonuses are exact.",
+    "earlier_failed_assertion": "output/testing/native-fighting-styles-1793101383990543161/fighting-styles.json",
+    "limitations": [
+      "Only two Fighter styles and three attack states; other styles/features/classes unqualified",
+      "Reader mechanical and popup interaction comparisons pending",
+      "No proof yet of ASI/feat, multiclass or spell-choice coverage"
+    ]
   }
 }
