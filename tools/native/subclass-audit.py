@@ -25,6 +25,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--fixture', choices=['2014', '2024', 'ashnar'], action='append')
     parser.add_argument('--class-key', action='append')
+    parser.add_argument('--skip-class-key', action='append', help='Explicit separate-profile classes; recorded as unexercised in this suite')
     parser.add_argument('--limit', type=int)
     parser.add_argument('--subclass-key', action='append')
     args = parser.parse_args()
@@ -62,6 +63,8 @@ def main():
                 for sub in cl['subs']:
                     if sub['excluded'] or not sub['parsed'] or sub['parsed'][:2] != [cl['key'], sub['key']]:
                         item['not_exercised'].append({'class': cl['key'], 'subclass': sub['key'], 'reason': 'Excluded or shadowed with this source profile', 'parsed': sub['parsed']}); continue
+                    if args.skip_class_key and cl['key'] in args.skip_class_key:
+                        item['not_exercised'].append({'class': cl['key'], 'subclass': sub['key'], 'reason': 'Explicit separate-profile class filter'}); continue
                     if args.class_key and cl['key'] not in args.class_key:
                         item['not_exercised'].append({'class': cl['key'], 'subclass': sub['key'], 'reason': 'Command class filter'}); continue
                     if args.subclass_key and sub['key'] not in args.subclass_key:
