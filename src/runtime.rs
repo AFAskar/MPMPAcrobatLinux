@@ -12,6 +12,47 @@ pub struct Runtime {
     _engine: Engine,
     pub loaded: usize,
 }
+// Scripted probes select only options actually offered by the original dialog.
+// Preserve option magnitudes because Acrobat uses them as item identities.
+fn select_dialog_options(request: &Value, reply: &mut Value) -> Result<()> {
+    let Some(selections) = reply["select"].as_object().cloned() else {
+        return Ok(());
+    };
+    fn select(options: &mut Value, label: &str, matches: &mut usize) {
+        if let Some(options) = options.as_object_mut() {
+            for (name, value) in options {
+                if let Some(n) = value.as_i64() {
+                    let magnitude = n.saturating_abs().max(1);
+                    *value = json!(if name == label {
+                        *matches += 1;
+                        magnitude
+                    } else {
+                        -magnitude
+                    });
+                } else {
+                    select(value, label, matches);
+                }
+            }
+        }
+    }
+    for (id, label) in selections {
+        let label = label.as_str().context("dialog selection must be a label")?;
+        if request["enabled"][&id] == false || request["visible"][&id] == false {
+            bail!("dialog control {id} is unavailable")
+        }
+        let mut options = request["values"][&id].clone();
+        let mut matches = 0;
+        select(&mut options, label, &mut matches);
+        if matches != 1 {
+            bail!("dialog control {id} offers {matches} matches for {label}")
+        }
+        if !reply["values"].is_object() {
+            reply["values"] = json!({});
+        }
+        reply["values"][&id] = options;
+    }
+    Ok(())
+}
 impl Runtime {
     pub fn new(
         pdf: &Arc<Pdf>,
@@ -46,8 +87,9 @@ impl Runtime {
           (||->std::result::Result<String,String>{
             let request:Value=serde_json::from_str(&s).map_err(|e|e.to_string())?;
             if let Some(dir)=&trace_dir{std::fs::create_dir_all(dir).map_err(|e|e.to_string())?;let mut count=trace_count.lock().unwrap();*count+=1;std::fs::write(dir.join(format!("dialog-{:03}.json",*count)),&s).map_err(|e|e.to_string())?;}
-            if let Some(reply)=queue.lock().unwrap().pop_front(){
+            if let Some(mut reply)=queue.lock().unwrap().pop_front(){
                 if let Some(title)=reply["title"].as_str(){if request["description"]["name"].as_str()!=Some(title){return Err(format!("Expected dialog {title}, received {}",request["description"]["name"]))}}
+                select_dialog_options(&request,&mut reply).map_err(|e|e.to_string())?;
                 eprintln!("Dialog: {} [scripted response]",request["description"]["name"]);
                 return Ok(reply.to_string())
             }
@@ -149,6 +191,26 @@ impl Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn scripted_selections_reject_absent_ambiguous_and_disabled_options() {
+        let request = json!({"values":{"list":{"group":{"A":-4,"B":2}}}});
+        let mut reply = json!({"select":{"list":"A"}});
+        select_dialog_options(&request, &mut reply).unwrap();
+        assert_eq!(reply["values"]["list"], json!({"group":{"A":4,"B":-2}}));
+        assert!(
+            select_dialog_options(&request, &mut json!({"select":{"list":"missing"}})).is_err()
+        );
+        assert!(select_dialog_options(
+            &json!({"values":{"list":{"g1":{"A":-1},"g2":{"A":-2}}}}),
+            &mut json!({"select":{"list":"A"}})
+        )
+        .is_err());
+        assert!(select_dialog_options(
+            &json!({"enabled":{"list":false},"values":request["values"]}),
+            &mut json!({"select":{"list":"A"}})
+        )
+        .is_err());
+    }
     fn host(test: &str) {
         let engine = Engine::new().unwrap();
         engine.set_max_stack_size(1024 * 1024);
