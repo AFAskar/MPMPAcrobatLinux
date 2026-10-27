@@ -1030,7 +1030,7 @@
     "Complete rich text/font/appearance fidelity",
     "URL/binary imports, document export and unqualified printing options",
     "Field/widget/appearance differences outside the defined assertions",
-    "Bookmark actions, style and tree persistence"
+    "Bookmark destination details and Reader qualification beyond the defined native cases"
   ],
   "printing": {
     "status": "native artifacts, native dialog cancel and Reader dialog cancel/save passed; printed-output comparison pending",
@@ -1108,5 +1108,17 @@
     "pilot": "output/testing/native-subclasses-1793074776109531946/subclasses.json",
     "broad_run": "output/testing/native-subclasses-1793074818475225818/subclasses.json",
     "scope": "Original source-selection buttons and offered class/subclass dropdowns; levels 3,5,11,20,3; independent saved output/script checks and native reopen. All-source profile only; default feature choices only. Reader equivalence and full table workflows unqualified."
+  },
+  "bookmarks": {
+    "status": "defined native workflow and native desktop cases passed; Reader qualification pending",
+    "native_evidence": "output/testing/native-bookmarks-1793075341660271078/bookmarks.json",
+    "native_desktop_evidence": "output/testing/native-bookmark-desktop-1793075616698542936/desktop.json",
+    "counterexample": "output/testing/bookmark-counterexample-1793075189535747011/report.json",
+    "scope": "Original functionBookmarks/createBookmarks, action event target, insertion/removal, style/color/open state, PDF outline links/counts, original script retention, native save/reopen/action and actual navigation rendering.",
+    "gaps": [
+      "Reader save/reopen of changed trees not yet qualified",
+      "Named/non-JavaScript external actions fail explicitly",
+      "Direct destinations navigate to their page but zoom/position is flagged as partial"
+    ]
   }
 }

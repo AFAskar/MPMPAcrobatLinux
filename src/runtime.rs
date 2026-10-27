@@ -301,6 +301,14 @@ mod tests {
         host("getField('B').setAction('Calculate','event.value=42');calculateNow();var s=JSON.parse(__host.snapshot());s.B.value==='42'&&s.B.actions.C==='event.value=42'&&s.A.actions===undefined");
     }
     #[test]
+    fn bookmark_actions_deliver_target_restore_event_and_persist_removal() {
+        host("var previous=event;bookmarkRoot.createChild({cName:'Parent',cExpr:\"getField('A').value=event.target.name;pageNum=2\"});var b=bookmarkRoot.children[0];b.createChild({cName:'Delete'});b.createChild({cName:'Keep',nIndex:1});b.children[0].remove();b.style=2;b.open=true;b.execute();var s=JSON.parse(__host.snapshot()).__bookmarks;event===previous&&getField('A').value==='Parent'&&pageNum===2&&s.children[0].children.length===1&&s.children[0].children[0].name==='Keep'&&s.children[0].style===2");
+    }
+    #[test]
+    fn focus_selects_the_target_widget_page() {
+        host("var f=getField('A');f._widgets=[{page:1},{page:2}];getField('A.1').setFocus();var exact=pageNum===2;f.setFocus();exact&&pageNum===1");
+    }
+    #[test]
     fn print_constants_match_qualified_reader_values() {
         host(
             r#"var p=getPrintParams();p.firstPage===0&&p.lastPage===0&&p.interactive===0&&p.DuplexType===1&&JSON.stringify(p.constants)==='{"interactionLevel":{"full":0,"automatic":1,"silent":2},"duplexTypes":{"Simplex":1,"DuplexFlipLongEdge":2,"DuplexFlipShortEdge":3}}'"#,

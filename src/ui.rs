@@ -155,6 +155,9 @@ pub fn main() -> Result<()> {
         rt.advance(4100)?;
         rt.edit("PC Name", &json!("Native Vertical Slice"))?;
         rt.edit("Str", &json!("18"))?;
+        if std::env::var_os("MPMB_UI_SMOKE_BOOKMARK").is_some() {
+            rt.command("createBookmarks(bookmarkRoot,{'Native bookmark navigation':{cExpr:\"getField('PC Name').value=event.target.name;pageNum=1;\"}});bookmarkRoot.children[0].color=['RGB',0.2,0.7,0.4]")?;
+        }
     }
     let edit_value = rt
         .eval("getField('PC Name').valueAsString")?
@@ -221,6 +224,51 @@ struct Reader {
     last_tick: std::time::Instant,
     save_path: String,
 }
+fn bookmark_items(ui: &mut egui::Ui, node: &Value, path: &str, action: &mut Option<String>) {
+    if let Some(children) = node["children"].as_array() {
+        for (index, child) in children.iter().enumerate() {
+            let path = format!("{path}.children[{index}]");
+            let open = child["open"] == true;
+            ui.horizontal(|ui| {
+                if child["children"].as_array().is_some_and(|c| !c.is_empty()) {
+                    if ui.small_button(if open { "−" } else { "+" }).clicked() {
+                        *action = Some(format!("{path}.open=!{path}.open"));
+                    }
+                } else {
+                    ui.add_space(18.);
+                }
+                let mut text = egui::RichText::new(child["name"].as_str().unwrap_or(""));
+                let style = child["style"].as_i64().unwrap_or(0);
+                if style & 2 != 0 {
+                    text = text.strong();
+                }
+                if style & 1 != 0 {
+                    text = text.italics();
+                }
+                if let Some(color) = child["color"].as_array().filter(|c| {
+                    c.len() == 4
+                        && c[0] == "RGB"
+                        && c[1..].iter().any(|v| v.as_f64().unwrap_or(0.) > 0.)
+                }) {
+                    let component = |index: usize| {
+                        (color[index].as_f64().unwrap_or(0.).clamp(0., 1.) * 255.).round() as u8
+                    };
+                    text = text.color(egui::Color32::from_rgb(
+                        component(1),
+                        component(2),
+                        component(3),
+                    ));
+                }
+                if ui.link(text).clicked() {
+                    *action = Some(format!("{path}.execute()"));
+                }
+            });
+            if open {
+                ui.indent(&path, |ui| bookmark_items(ui, child, &path, action));
+            }
+        }
+    }
+}
 impl Reader {
     fn result(&mut self, r: Result<()>) {
         if r.is_ok() {
@@ -283,7 +331,7 @@ impl eframe::App for Reader {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
                 self.smoke_phase = 1;
             }
-            if capture(ctx, &dir.join("reader.png")) {
+            if self.smoke_phase == 1 && capture(ctx, &dir.join("reader.png")) {
                 self.smoke_phase = 2;
             }
             if self.smoke_phase == 2 {
@@ -292,6 +340,8 @@ impl eframe::App for Reader {
                     .rt
                     .eval(if print_smoke {
                         "__host.command(\"Value('Print Remember','false!#TheListSeparator#!0,CSfront');PrintTheSheet()\")"
+                    } else if std::env::var_os("MPMB_UI_SMOKE_BOOKMARK").is_some(){
+                        "bookmarkRoot.children[0].execute();if(pageNum!==1||What('PC Name')!=='Native bookmark navigation')throw Error('Bookmark navigation failed')"
                     } else { "__host.invokeMenu('ClassesButton')" })
                     .map(|_| ());
                 let diagnostics = self.rt.diagnostics().unwrap_or(Value::Null);
@@ -305,6 +355,19 @@ impl eframe::App for Reader {
                         .to_string(),
                 );
                 self.smoke_phase = 3;
+                if std::env::var_os("MPMB_UI_SMOKE_BOOKMARK").is_none() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+            if self.smoke_phase == 3
+                && std::env::var_os("MPMB_UI_SMOKE_BOOKMARK").is_some()
+                && self.texture.is_some()
+            {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+                self.smoke_phase = 4;
+            }
+            if self.smoke_phase == 4 && capture(ctx, &dir.join("bookmark-navigation.png")) {
+                self.smoke_phase = 5;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
         }
@@ -336,16 +399,24 @@ impl eframe::App for Reader {
             .ok()
             .and_then(|v| v.as_u64())
             .unwrap_or(self.pdf.doc.get_pages().len() as u64) as i32;
-        self.page = self.page.min(page_count - 1);
+        self.page = self
+            .rt
+            .eval("pageNum")
+            .ok()
+            .and_then(|v| v.as_i64())
+            .unwrap_or(self.page as i64)
+            .clamp(0, (page_count - 1).max(0) as i64) as i32;
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("Previous").clicked() {
                     self.page = (self.page - 1).max(0);
+                    let _ = self.rt.eval(&format!("pageNum={}", self.page));
                     self.texture = None
                 }
                 ui.label(format!("Page {} / {}", self.page + 1, page_count));
                 if ui.button("Next").clicked() {
                     self.page = (self.page + 1).min(page_count - 1);
+                    let _ = self.rt.eval(&format!("pageNum={}", self.page));
                     self.texture = None
                 }
                 if ui.button("Select class…").clicked() {
@@ -405,6 +476,13 @@ impl eframe::App for Reader {
         egui::SidePanel::left("fields")
             .default_width(310.)
             .show(ctx, |ui| {
+                egui::CollapsingHeader::new("Bookmarks").default_open(std::env::var_os("MPMB_UI_SMOKE_BOOKMARK").is_some()).show(ui,|ui|{
+                    if let Ok(tree)=self.rt.eval("JSON.parse(JSON.stringify(bookmarkRoot))"){
+                        let mut action=None;
+                        egui::ScrollArea::vertical().id_salt("bookmarks").max_height(220.).show(ui,|ui|{bookmark_items(ui,&tree,"bookmarkRoot",&mut action);});
+                        if let Some(code)=action{let r=self.rt.eval(&code).map(|_|());self.result(r);}
+                    }
+                });
                 ui.heading("Form fields");
                 ui.text_edit_singleline(&mut self.filter);
                 egui::ScrollArea::vertical()

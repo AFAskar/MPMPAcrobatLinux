@@ -1,4 +1,5 @@
 mod appearance;
+mod bookmark_tree;
 mod buttons;
 mod structure;
 use anyhow::{bail, Context, Result};
@@ -327,7 +328,46 @@ fn bookmarks(d: &Document, first: Option<&Object>, depth: usize) -> Result<Vec<V
             }
         }
         let dict = resolved(d, r)?.as_dict()?;
-        result.push(json!({"name":dict.get(b"Title").map(|v|text(d,v)).unwrap_or_default(),"code":dict.get(b"A").map(|v|action(d,v)).unwrap_or_default(),"children":bookmarks(d,dict.get(b"First").ok(),depth+1)?}));
+        let destination = dict.get(b"Dest").ok().or_else(|| {
+            dict.get(b"A")
+                .ok()
+                .and_then(|a| resolved(d, a).ok())
+                .and_then(|a| a.as_dict().ok())
+                .and_then(|a| a.get(b"D").ok())
+        });
+        let destination_page = destination
+            .and_then(|a| resolved(d, a).ok())
+            .and_then(|a| a.as_array().ok())
+            .and_then(|a| a.first())
+            .and_then(|p| p.as_reference().ok())
+            .and_then(|id| d.get_pages().values().position(|p| *p == id));
+        let mut bookmark = json!({"id":r.as_reference().ok(),"name":dict.get(b"Title").map(|v|text(d,v)).unwrap_or_default(),"code":dict.get(b"A").map(|v|action(d,v)).unwrap_or_default(),"style":dict.get(b"F").and_then(Object::as_i64).unwrap_or(0)&3,"open":dict.get(b"Count").and_then(Object::as_i64).unwrap_or(0)>0,"children":bookmarks(d,dict.get(b"First").ok(),depth+1)?});
+        if let Some(page) = destination_page {
+            bookmark["destinationPage"] = json!(page);
+            bookmark["destinationApproximate"] = json!(true);
+        } else if destination.is_some() {
+            bookmark["unsupportedAction"] = json!("named/unresolved destination");
+        } else if let Some(kind) = dict
+            .get(b"A")
+            .ok()
+            .and_then(|a| resolved(d, a).ok())
+            .and_then(|a| a.as_dict().ok())
+            .and_then(|a| a.get(b"S").ok())
+            .map(|a| text(d, a))
+        {
+            if kind != "JavaScript" {
+                bookmark["unsupportedAction"] = json!(kind);
+            }
+        }
+        if let Ok(color) = dict.get(b"C").and_then(Object::as_array) {
+            bookmark["color"] = json!([
+                "RGB",
+                color.first().and_then(|v| v.as_float().ok()).unwrap_or(0.),
+                color.get(1).and_then(|v| v.as_float().ok()).unwrap_or(0.),
+                color.get(2).and_then(|v| v.as_float().ok()).unwrap_or(0.)
+            ]);
+        }
+        result.push(bookmark);
         node = dict.get(b"Next").ok();
     }
     Ok(result)
@@ -614,6 +654,9 @@ impl Pdf {
                 doc.get_dictionary_mut(w.id)?
                     .set("AP", dictionary! {"N"=>ap});
             }
+        }
+        if let Some(bookmarks) = state.get("__bookmarks") {
+            bookmark_tree::project(&mut doc, bookmarks)?;
         }
         for object in doc.objects.values_mut() {
             if let Object::Stream(stream) = object {
