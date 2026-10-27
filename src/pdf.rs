@@ -599,7 +599,13 @@ impl Pdf {
             let dict = doc.get_dictionary_mut(f.id)?;
             if changed {
                 if f.kind == "Btn" {
-                    dict.set("V", Object::Name(value.as_bytes().to_vec()));
+                    if f.flags & (65536 | 32768) == 0 && value == "Off" {
+                        // Reader clears a checkbox's canonical value while its
+                        // widgets retain /AS /Off. Runtime still reads Off.
+                        dict.remove(b"V");
+                    } else {
+                        dict.set("V", Object::Name(value.as_bytes().to_vec()));
+                    }
                 } else {
                     dict.set("V", pdf_string(&value));
                 }
