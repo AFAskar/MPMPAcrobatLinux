@@ -1104,10 +1104,17 @@
   ],
   "historical_print_counterexamples_status": "Missing dependencies implemented; historical failures retained. Current native print evidence above; broader milestone remains in progress.",
   "subclass_dropdown_audit": {
-    "status": "partial; broad 2024 run in progress",
+    "status": "first broad run failed after 35 passes; targeted Wildfire fix passed; frozen full 2024 rerun in progress",
     "pilot": "output/testing/native-subclasses-1793074776109531946/subclasses.json",
     "broad_run": "output/testing/native-subclasses-1793074818475225818/subclasses.json",
-    "scope": "Original source-selection buttons and offered class/subclass dropdowns; levels 3,5,11,20,3; independent saved output/script checks and native reopen. All-source profile only; default feature choices only. Reader equivalence and full table workflows unqualified."
+    "scope": "Original source-selection buttons and offered class/subclass dropdowns; levels 3,5,11,20,3; independent saved output/script checks and native reopen. All-source profile only; default feature choices only. Reader equivalence and full table workflows unqualified.",
+    "first_failure": {
+      "subclass": "druid-circle of wildfire",
+      "report": "output/testing/native-subclasses-1793074818475225818/2024-35-report.json"
+    },
+    "wildfire_fix_evidence": "output/testing/native-subclasses-1793076845409009075/subclasses.json",
+    "wildfire_reader_evidence": "output/testing/wildfire-reader-seed-1793076325066121626/reader.json",
+    "binary_scope": "New runs retain a frozen executable and SHA-256. The earlier broad run spanned builds and is diagnostic only."
   },
   "bookmarks": {
     "status": "defined native workflow and native desktop cases passed; Reader qualification pending",

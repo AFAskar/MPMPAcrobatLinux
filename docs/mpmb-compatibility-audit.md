@@ -16,6 +16,10 @@ These are counts per fixture, not counts of distinct classes across versions. Th
 
 Local evidence: `output/testing/native-class-audit-1793046452594567379/classes.json`, with original-runtime inventory and per-case reports. Paid script bodies and private character values are not copied into this document or test source.
 
+## Dropdown-driven subclass work
+
+The first all-source 2024 run selected 35 subclasses through original dropdown handlers and passed its defined five progression/native persistence checkpoints before failing on Circle of Wildfire. It is an aggregate **failed suite**, and it spanned development builds. The Wildfire failure was an undefined companion hit-die value reaching original string formatting. A qualified Reader original-class run confirms empty hit-die fields and 20 HP at level 3. Host normalization fixes the targeted native regression; original document scripts are unchanged. A fresh full run now uses one frozen executable and hash. See native-compatibility.json for reports. Feature-choice defaults and all-source-only coverage remain limitations; no complete subclass milestone is claimed.
+
 ## Printing milestone in progress
 
 The missing `getPrintParams`/`print` dependency failure has been implemented with synchronous live-state capture and actual flattened print output. `tools/native/printing` passes all three fixtures: twelve controlled print artifacts cover all/selected/generated companion pages, simplex/long-edge duplex, the original page-selection dialog, cancellation, and all four field display values. Independent PDF structure, extracted text and Poppler rendering checks pass; interactive saves retain original scripts and reopen natively. Evidence: `output/testing/native-printing-1793074562899703807/printing.json`.

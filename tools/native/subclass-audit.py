@@ -4,7 +4,7 @@
 Default feature replies leave feature-choice coverage incomplete. All-source
 selection does not prove every source configuration or every predefined class.
 """
-import argparse, hashlib, json, os, subprocess, sys, time
+import argparse, hashlib, json, os, shutil, subprocess, sys, time
 from pathlib import Path
 from pypdf import PdfReader
 ROOT = Path(__file__).resolve().parents[2]
@@ -26,9 +26,13 @@ def main():
     parser.add_argument('--fixture', choices=['2014', '2024', 'ashnar'], action='append')
     parser.add_argument('--class-key', action='append')
     parser.add_argument('--limit', type=int)
+    parser.add_argument('--subclass-key', action='append')
     args = parser.parse_args()
     folder = ROOT / 'output/testing' / ('native-subclasses-' + str(time.time_ns())); folder.mkdir(parents=True)
     report = {'passed': False, 'full_mpmb_compatibility': False, 'scope': __doc__, 'fixtures': []}
+    binary = folder / 'mpmb-reader'
+    shutil.copy2(ROOT / 'target/debug/mpmb-reader', binary)
+    report['binary_sha256'] = hashlib.sha256(binary.read_bytes()).hexdigest()
     print(folder, flush=True)
 
     def run(source, label, dialogs, steps):
@@ -36,7 +40,7 @@ def main():
         spec.write_text(json.dumps({'dialogs': dialogs, 'alerts': [1] * 300, 'steps': steps}))
         env = os.environ.copy(); env['MPMB_DIALOG_TRACE_DIR'] = str(folder / (label + '-dialogs'))
         with (folder / (label + '.log')).open('w') as log:
-            proc = subprocess.run([str(ROOT / 'target/debug/mpmb-reader'), str(source), '--probe', str(spec), str(evidence)], stdout=log, stderr=log, env=env, timeout=300)
+            proc = subprocess.run([str(binary), str(source), '--probe', str(spec), str(evidence)], stdout=log, stderr=log, env=env, timeout=300)
         data = json.loads(evidence.read_text())
         return proc.returncode, data, str(evidence)
 
@@ -60,6 +64,8 @@ def main():
                         item['not_exercised'].append({'class': cl['key'], 'subclass': sub['key'], 'reason': 'Excluded or shadowed with this source profile', 'parsed': sub['parsed']}); continue
                     if args.class_key and cl['key'] not in args.class_key:
                         item['not_exercised'].append({'class': cl['key'], 'subclass': sub['key'], 'reason': 'Command class filter'}); continue
+                    if args.subclass_key and sub['key'] not in args.subclass_key:
+                        item['not_exercised'].append({'class': cl['key'], 'subclass': sub['key'], 'reason': 'Command subclass filter'}); continue
                     candidates.append((cl, sub))
                 if not cl['subs']:
                     item['not_exercised'].append({'class': cl['key'], 'reason': 'No subclasses; separate base-class qualification required'})
@@ -77,6 +83,9 @@ def main():
                 steps += [{'op': 'eval', 'code': "__host.command('SelectClass()')"}, {'op': 'advance', 'ms': 1000}]
                 verify_class = 'if(!classes.known[' + json.dumps(cl['key']) + ']||classes.known[' + json.dumps(cl['key']) + '].subclass!==' + json.dumps(sub['key']) + ")throw Error('Wrong class/subclass selected');"
                 steps += [{'op': 'eval', 'code': verify_class + "var chosenClass=What('Class and Levels');"}, {'op': 'assert', 'values': {'Character Level': '3'}}]
+                if sub['key'] == 'druid-circle of wildfire':
+                    steps += [{'op': 'eval', 'code': "var spiritPrefix=What('Template.extras.AScomp').split(',').filter(Boolean).find(p=>What(p+'Comp.Race')==='Wildfire Spirit');if(!spiritPrefix)throw Error('Missing Wildfire Spirit');if(What(spiritPrefix+'Comp.Use.HD.Die')!==''||What(spiritPrefix+'Comp.Use.HD.Level')!=='')throw Error('Spirit must have empty hit dice');if(Number(What(spiritPrefix+'Comp.Use.HP.Max'))!==20)throw Error('Spirit level-3 HP must be 20');"}]
+
                 for level in [5, 11, 20, 3]:
                     code = '__host.command("ApplyClasses("+JSON.stringify(chosenClass.replace(/\\s*\\d+\\s*$/,\'\')+\' ' + str(level) + '\')+",false)")'
                     steps += [{'op': 'eval', 'code': code}, {'op': 'advance', 'ms': 1000}, {'op': 'eval', 'code': verify_class}, {'op': 'assert', 'values': {'Character Level': str(level), 'Proficiency Bonus': str(2 + (level - 1) // 4)}}]

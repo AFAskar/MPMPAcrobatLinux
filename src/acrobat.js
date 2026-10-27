@@ -55,6 +55,9 @@ var __host = (function () {
     for(const prop of ['display','readonly']){let stored=f[prop];Object.defineProperty(f,prop,{enumerable:true,get(){return stored},set(v){if(stored!==v)revision++;stored=v}})}
     let raw=x.value;
     Object.defineProperty(f,'value',{enumerable:true,get(){return x.kind!=='Btn'&&typeof raw==='string'&&/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(raw)?Number(raw):raw},set(v){
+      // Reader leaves the Wildfire Spirit's absent hit-die value as an empty
+      // field. Undefined must not leak into subsequent original Format events.
+      if(v===undefined)v='';
       if(raw===v)return;
       if(data.trace&&data.trace.includes(n))__log(n+': '+String(raw)+' -> '+String(v)+'\n'+new Error().stack);
       if(assigning.has(n)){raw=v;return}

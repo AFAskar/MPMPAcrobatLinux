@@ -314,4 +314,8 @@ mod tests {
             r#"var p=getPrintParams();p.firstPage===0&&p.lastPage===0&&p.interactive===0&&p.DuplexType===1&&JSON.stringify(p.constants)==='{"interactionLevel":{"full":0,"automatic":1,"silent":2},"duplexTypes":{"Simplex":1,"DuplexFlipLongEdge":2,"DuplexFlipShortEdge":3}}'"#,
         );
     }
+    #[test]
+    fn undefined_field_assignment_does_not_reach_original_string_formatting() {
+        host("getField('A').setAction('Format',\"event.value=event.value.replace(/x/g,'')\");getField('A').value=undefined;calculateNow();var state=JSON.parse(__host.snapshot());getField('A').valueAsString===''&&state.A.value===''&&state.A.formatted===''");
+    }
 }
