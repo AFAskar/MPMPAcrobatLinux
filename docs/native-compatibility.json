@@ -1296,5 +1296,17 @@
     "failed_suite": "output/testing/field-events-1793122032591996993/events.json",
     "scope": "Text .value normalizes NBSP before K/V/F and preserves tabs. RichText=false formats; RichText=true runs K/V/F even for unchanged mode/value. Source rich/plain and multiline flags retained. Reader payload recovered from the same completed add-on, saved/closed, canonical diagnostic and original script hashes verified independently.",
     "remaining": "The originating suite remains failed due to result-dialog cleanup. event.richValue, defaultStyle, rich XML persistence and broader styling remain incomplete; Ashnar Class Features/Extra.Notes canonical differences remain."
+  },
+  "serialized_state_comparison": {
+    "status": "Read-only comparison validated against a different-serialization Reader baseline and three damaged-native negative controls",
+    "evidence": "output/testing/state-verifier-1793122607117204869/verification.json",
+    "command": "tools/native/compare-state native.pdf reader.pdf comparison.json",
+    "scope": "Compare all canonical field values. Interpret changed .Stringified source expressions in a bounded Node context; CurrentSpells uses original ########## delimiter. Object key order is ignored, array order and primitive values retained; function source must match exactly. Nonserialized differences, parse errors and unsupported types fail explicitly.",
+    "limits": "Stored-state comparison does not establish function behavior, widget/appearance/render equivalence or complete MPMB compatibility. Ashnar Class Features/Extra.Notes differences still fail this comparator.",
+    "negative_controls": [
+      "Missing Character Level",
+      "Changed CurrentVars.Stringified object",
+      "Malformed CurrentVars.Stringified expression"
+    ]
   }
 }
