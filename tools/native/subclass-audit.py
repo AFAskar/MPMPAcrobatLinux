@@ -69,6 +69,8 @@ def main():
                     candidates.append((cl, sub))
                 if not cl['subs']:
                     item['not_exercised'].append({'class': cl['key'], 'reason': 'No subclasses; separate base-class qualification required'})
+            item['candidates']=[{'class':cl['key'],'subclass':sub['key']} for cl,sub in candidates]
+            item['candidate_count']=len(candidates)
             for index, (cl, sub) in enumerate(candidates):
                 if args.limit is not None and index >= args.limit:
                     item['not_exercised'].append({'class': cl['key'], 'subclass': sub['key'], 'reason': 'Command limit'}); continue
@@ -107,6 +109,9 @@ def main():
     except Exception as error:
         report['error'] = str(error); raise
     finally:
+        for fixture in report['fixtures']:
+            attempted={(case['class'],case['subclass']) for case in fixture['cases']}
+            fixture['unattempted_candidates']=[candidate for candidate in fixture.get('candidates',[]) if (candidate['class'],candidate['subclass']) not in attempted]
         (folder / 'subclasses.json').write_text(json.dumps(report, indent=2)); print(folder / 'subclasses.json', flush=True)
 
 if __name__ == '__main__':
