@@ -46,12 +46,12 @@ var __host = (function () {
       const span=Object.assign(copyData(f._defaultStyle),copyData(item));delete span.changeMarker;
       span.text=textValue(f,item.text===undefined?'':item.text);
       if(!span.endParagraph||i===input.length-1)delete span.endParagraph;
-      if(item.textColor){let rgb;if(item.textColor[0]==='RGB')rgb=item.textColor.slice(1);else if(item.textColor[0]==='G')rgb=[item.textColor[1],item.textColor[1],item.textColor[1]];else return unsupported('Field.richValue color '+item.textColor[0]);span.textColor=['RGB',...rgb.map(v=>Math.round(Math.floor(Math.max(0,Math.min(1,Number(v)))*65535/256)/255*65536)/65536)];}
+      if(item.textColor){let rgb;if(item.textColor[0]==='RGB')rgb=item.textColor.slice(1);else if(item.textColor[0]==='G')rgb=[item.textColor[1],item.textColor[1],item.textColor[1]];else return unsupported('Field.richValue color '+item.textColor[0]);span.textColor=['RGB',...rgb.map(v=>Math.round(Math.floor(Math.floor(Math.max(0,Math.min(1,Number(v)))*65536)/65536*255)/255*65536)/65536)];}
       if(span.text||span.endParagraph)result.push(span);
     }
     return result;
   }
-  function formatResult(f,e){const rich=f.richText?(e._valueWritten?null:normalizeRich(f,e._richData)):undefined;if(JSON.stringify(f._formatted)!==JSON.stringify(e.value)||JSON.stringify(f._formattedRichValue)!==JSON.stringify(rich))revision++;f._formatted=e.value;f._formattedRichValue=rich;}
+  function formatResult(f,e){const rich=f.richText?(e._valueWritten?null:e._richWritten?normalizeRich(f,e._richData):copyData(e._richData)):undefined;if(JSON.stringify(f._formatted)!==JSON.stringify(e.value)||JSON.stringify(f._formattedRichValue)!==JSON.stringify(rich))revision++;f._formatted=e.value;f._formattedRichValue=rich;}
   function reformat(f){if(!f._actions.F||calculating||formatting.has(f.name))return;formatting.add(f.name);try{formatResult(f,eventRun(f,'F',f.value));}finally{formatting.delete(f.name);}}
   function addField(n,x) {
     const f={name:n,value:x.value,defaultValue:x.default_value,userName:x.user_name,submitName:x.submit_name,

@@ -111,6 +111,9 @@ def main():
   run('validate rich getter copy',function(){f.value='copy original'},f);
   f.setAction('Validate',log);
   run('fractional rich span color',function(){f.richValue=[{text:'color',textColor:['RGB',0.25,0.5,0.75]}]},f);
+  run('MPMB skill and fractional rich colors',function(){f.richValue=[0,0.1,0.2,0.3,0.4,0.658,0.654,0.999,1].map(function(v){return {text:String(v),textColor:['RGB',v,v,v]}})},f);
+  run('copied MPMB rich colors',function(){f.richValue=f.richValue},f);
+  run('explicit paragraph boundary rich spans',function(){f.richValue=[{text:'first',endParagraph:true},{text:'second'}]},f);
   run('empty text rich span',function(){f.richValue=[{text:''}]},f);
 
   f.setAction('Validate',log+"event.richValue=[{text:'rich override',fontWeight:700}];");

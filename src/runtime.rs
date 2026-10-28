@@ -493,6 +493,15 @@ mod tests {
         host("var f=getField('A');f.richText=true;f.setAction('Validate',\"event.richValue=[{text:'rich',fontWeight:700}];\");f.value='input';var rich=f.valueAsString==='rich'&&f.richValue[0].fontWeight===700;f.setAction('Validate',\"event.value='plain';event.richValue=[{text:'ignored'}];\");f.value='input';var plain=f.valueAsString==='plain'&&f.richValue[0].fontWeight===400;f.setAction('Validate',\"event.richValue=[{text:'ignored'}];event.value='last';\");f.value='input';rich&&plain&&f.valueAsString==='last'");
     }
     #[test]
+    fn json_host_boundary_preserves_reader_fixed_point_color() {
+        let value: Value = serde_json::from_str("0.9960784912109375").unwrap();
+        assert_eq!(value.as_f64().unwrap(), 65279.0 / 65536.0);
+    }
+    #[test]
+    fn rich_colors_use_reader_fixed_input_truncation_and_getter_reassignment() {
+        host("var f=getField('A');f.richText=true;f.richValue=[{text:'skill',textColor:['RGB',.658,.654,.2]}];var first=JSON.stringify(f.richValue[0].textColor)==='[\"RGB\",0.6549072265625,0.6509857177734375,0.196075439453125]';f.richValue=f.richValue;first&&JSON.stringify(f.richValue[0].textColor)==='[\"RGB\",0.6549072265625,0.6509857177734375,0.1921539306640625]'");
+    }
+    #[test]
     fn rich_formatting_changes_display_without_replacing_stored_text_or_spans() {
         host("var f=getField('A');f.richText=true;f.setAction('Format',\"event.richValue=[{text:'display',fontWeight:700}];\");f.value='stored';var s=JSON.parse(__host.snapshot()).A;var rich=f.valueAsString==='stored'&&f.richValue[0].text==='stored'&&s.rawRichValue[0].text==='stored'&&s.richValue[0].text==='display'&&s.richRenderActive;f.setAction('Format',\"event.value='plain display';event.richValue=[{text:'ignored'}];\");f.value='next';s=JSON.parse(__host.snapshot()).A;rich&&f.valueAsString==='next'&&s.formatted==='plain display'&&!s.richRenderActive");
     }
