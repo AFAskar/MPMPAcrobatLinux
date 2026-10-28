@@ -148,7 +148,13 @@ def main():
                 steps = setup() + [{'op': 'eval', 'code': "__host.command(\"ApplyClasses('',false)\")"}, {'op': 'advance', 'ms': 1000}]
                 # Clearing Ashnar may open a changes notification before selection.
                 if fixture == 'ashnar':
-                    dialogs.insert(len(case_sources), {'title': 'CHANGES ALERT DIALOG', 'result': 'ok'})
+                    # Removing every Monk source already clears the initial
+                    # character while applying sources; no second changes
+                    # notification follows the explicit empty-class command.
+                    monk_sources = {book['key'] for entry in inventory if entry['key'] == 'monk' for book in entry['sources']}
+                    removed_sources = {book['key'] for book in excluded_books}
+                    if not monk_sources or not monk_sources <= removed_sources:
+                        dialogs.insert(len(case_sources), {'title': 'CHANGES ALERT DIALOG', 'result': 'ok'})
                 steps += [{'op': 'edit', 'field': ability, 'value': '18'} for ability in ['Str', 'Dex', 'Con', 'Int', 'Wis', 'Cha']]
                 steps += [{'op': 'eval', 'code': "__host.command('SelectClass()')"}, {'op': 'advance', 'ms': 1000}]
                 if args.isolate_shadowed:
