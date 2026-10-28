@@ -1,6 +1,7 @@
 mod appearance;
 mod bookmark_tree;
 mod buttons;
+mod rich_text;
 mod structure;
 use anyhow::{bail, Context, Result};
 use lopdf::{dictionary, Dictionary, Document, Object, ObjectId, Stream, StringFormat};
@@ -33,6 +34,7 @@ pub struct Field {
     pub display: i32,
     pub text_size: f64,
     pub text_font: String,
+    pub rich_metadata: Value,
     pub widgets: Vec<Widget>,
     pub actions: BTreeMap<String, String>,
     pub items: Vec<Value>,
@@ -280,7 +282,7 @@ fn walk(
     out.insert(
         name.clone(),
         Field {
-            name,
+            name: name.clone(),
             id,
             value: json!(value),
             default_value: json!(val(b"DV")),
@@ -291,6 +293,14 @@ fn walk(
             alignment: attrs.get(b"Q").and_then(Object::as_i64).unwrap_or(0),
             display,
             text_size,
+            rich_metadata: rich_text::metadata(
+                &val(b"DS"),
+                &val(b"RV"),
+                &text_font,
+                text_size,
+                attrs.get(b"Q").and_then(Object::as_i64).unwrap_or(0),
+            )
+            .with_context(|| format!("Rich-text metadata in {name}"))?,
             text_font,
             widgets,
             actions,

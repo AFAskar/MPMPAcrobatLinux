@@ -1441,6 +1441,7 @@ dependencies = [
  "image",
  "libloading",
  "lopdf",
+ "quick-xml",
  "rquickjs",
  "serde",
  "serde_json",

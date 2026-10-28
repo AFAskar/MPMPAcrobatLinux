@@ -7,6 +7,7 @@ edition = "2021"
 anyhow = "1"
 lopdf = { version = "0.46", default-features = false }
 rquickjs = "0.14"
+quick-xml = "0.41"
 ttf-parser = "0.25"
 libloading = "0.8"
 serde = { version = "1", features = ["derive"] }

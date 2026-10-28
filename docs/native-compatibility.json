@@ -1390,5 +1390,15 @@
     "reference": "output/testing/field-events-1793166586978653218/events.json",
     "scope": "Safe original-addon observer measures defaultStyle copy semantics, textSize/textFont/textColor/alignment coupling, defaultStyle assignment, restoration and Format events. Saved ASCII diagnostic checksum, Unicode sentinel and original scripts verified. No mutation repeated.",
     "observed": "Style setters update defaultStyle and format even unchanged. defaultStyle assignment updates field size/font/color/alignment. Plain rich getters raise InvalidGetError. Native rich event/default-style/spans/XML persistence and full style fidelity remain incomplete."
+  },
+  "source_rich_metadata": {
+    "status": "source metadata loading/projection preservation passes in all fixtures; live rich APIs/events/persistence still incomplete",
+    "evidence": "output/testing/rich-metadata-1793167003221679885/metadata.json",
+    "reader_reference": "output/testing/field-events-1793165936701805227/events.json",
+    "scope": "Parse original /DS styles and /RV XHTML, preserve paragraphs, spaceruns, entities and font/direction/line spacing. All 60 initial Ashnar Class Features spans and defaultStyle exactly equal independently measured Reader data. All three projections preserve original /DS, /RV and document scripts. Metadata remains separate from canonical /V and rendered appearances; it is not yet wired to live rich field APIs.",
+    "native_tests": 56,
+    "counterexample": "output/testing/rich-metadata-1793166700975414054/metadata.json",
+    "repair": "Reader converts NBSP within xfa-spacerun to spaces while preserving other NBSP. Parser now does the same; previous failed report retained.",
+    "limits": "Known source body/p/span and style vocabulary supported. Other XHTML/style/entity forms fail explicitly. Full edited XML serialization, rich events/API semantics and appearance fidelity remain incomplete."
   }
 }

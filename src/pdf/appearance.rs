@@ -251,6 +251,7 @@ mod tests {
             display: 0,
             text_size: 7.,
             text_font: String::new(),
+            rich_metadata: json!({}),
             widgets: vec![],
             actions: BTreeMap::new(),
             items: vec![],
