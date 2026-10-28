@@ -1,6 +1,7 @@
 mod appearance;
 mod bookmark_tree;
 mod buttons;
+mod field_style;
 mod rich_text;
 mod structure;
 use anyhow::{bail, Context, Result};
@@ -34,6 +35,7 @@ pub struct Field {
     pub display: i32,
     pub text_size: f64,
     pub text_font: String,
+    pub text_color: Value,
     pub rich_metadata: Value,
     pub widgets: Vec<Widget>,
     pub actions: BTreeMap<String, String>,
@@ -260,7 +262,20 @@ fn walk(
                 .collect()
         })
         .unwrap_or_default();
-    let da = val(b"DA");
+    // Reader getters use the first widget's local default appearance when it
+    // overrides the parent field (for example the AL asterisk's ScalaSans).
+    let da = widgets
+        .first()
+        .and_then(|w| d.get_dictionary(w.id).ok())
+        .and_then(|widget| widget.get(b"DA").ok())
+        .map(|appearance| text(d, appearance))
+        .unwrap_or_else(|| val(b"DA"));
+    let alignment = widgets
+        .first()
+        .and_then(|w| d.get_dictionary(w.id).ok())
+        .and_then(|widget| widget.get(b"Q").ok())
+        .and_then(|q| q.as_i64().ok())
+        .unwrap_or_else(|| attrs.get(b"Q").and_then(Object::as_i64).unwrap_or(0));
     let tokens: Vec<_> = da.split_whitespace().collect();
     let font_pos = tokens.iter().position(|t| *t == "Tf");
     let text_size = font_pos
@@ -271,6 +286,18 @@ fn walk(
         .and_then(|i| i.checked_sub(2))
         .map(|i| tokens[i].trim_start_matches('/').to_owned())
         .unwrap_or_else(|| "Helvetica".into());
+    // DA names address font resources. Reader's getter exposes the standard
+    // font name, rather than aliases such as ZaDb, Helv or HeBo.
+    let text_font = match text_font.as_str() {
+        "Helv" => "Helvetica".into(),
+        "HeBo" => "Helvetica-Bold".into(),
+        "Cour" => "Courier".into(),
+        "Symb" => "Symbol".into(),
+        "ZaDb" => "ZapfDingbats".into(),
+        _ => text_font,
+    };
+    let text_color =
+        field_style::color(&da).with_context(|| format!("Default appearance color in {name}"))?;
     let kind = val(b"FT");
     let flags = attrs.get(b"Ff").and_then(Object::as_i64).unwrap_or(0);
     let mut value = val(b"V");
@@ -290,7 +317,7 @@ fn walk(
             user_name: val(b"TU"),
             submit_name: val(b"TM"),
             flags,
-            alignment: attrs.get(b"Q").and_then(Object::as_i64).unwrap_or(0),
+            alignment,
             display,
             text_size,
             rich_metadata: rich_text::metadata(
@@ -298,10 +325,11 @@ fn walk(
                 &val(b"RV"),
                 &text_font,
                 text_size,
-                attrs.get(b"Q").and_then(Object::as_i64).unwrap_or(0),
+                alignment,
             )
             .with_context(|| format!("Rich-text metadata in {name}"))?,
             text_font,
+            text_color,
             widgets,
             actions,
             items,

@@ -1411,7 +1411,7 @@
     "native_tests": 57,
     "generated": "output/testing/native-generated-1793167848194981322/generated.json",
     "table": "output/testing/native-table-1793168367856154021/table.json",
-    "remaining": "Edited /DS /DA /Q persistence, broader font/color mappings and complete desktop/style fidelity remain incomplete. Plain-field defaultStyle assignment and non-RGB/grayscale style colors fail explicitly. Rich payload qualification is recorded separately in rich_runtime."
+    "remaining": "Edited /DS /DA /Q persistence, broader font/color mappings and complete desktop/style fidelity remain incomplete. Plain-field defaultStyle assignment and non-RGB/grayscale style colors fail explicitly. Rich payload qualification is recorded separately in rich_runtime. Reader partial/defaultStyle={} measurements additionally expose native merging omitted properties instead of replacing defaults; see loaded_widget_styles."
   },
   "rich_runtime": {
     "status": "partial; all 52 measured event cases exactly match Reader; edited persistence remains incomplete",
@@ -1495,5 +1495,27 @@
     ],
     "comparison_normalization": "None. Every captured property matches exactly, with getter errors caught locally. Saved ASCII result, independent Reader UTF-16 checksum, Unicode sentinel and original scripts verified.",
     "limits": "Initial rich fields only. No original actions replaced. Edited default styles, plain field styling, complete rich vocabulary and appearance fidelity remain incomplete."
+  },
+  "loaded_widget_styles": {
+    "status": "bounded source getters and four Reader-authored styled inputs pass; native style writing incomplete",
+    "controls": "output/testing/default-style-roundtrip-1793191123033627622/styles.json",
+    "old_binary_counterexample": "output/testing/default-style-roundtrip-1793191164521032233/styles.json",
+    "reader_references": [
+      "output/testing/default-style-roundtrip-1793190632227924814/styles.json",
+      "output/testing/default-style-roundtrip-1793191055887421696/styles.json"
+    ],
+    "native_reader_loads": [
+      "output/testing/default-style-roundtrip-1793191667549539036/styles.json",
+      "output/testing/default-style-roundtrip-1793191683765285347/styles.json"
+    ],
+    "binary_sha256": "43647697c363ce8f11fd002befd778c4fe921c45e0b15634bd7cd75664d41db8",
+    "unit_tests": 73,
+    "scope": "DA grayscale/RGB channels load using measured 16-bit fixed-point rounding. Known standard font aliases resolve to API names. First-widget DA/Q override the parent. Reader font-stretch:Normal loads as normal. Five source controls plus exact native captures of Reader before/reopened PDFs for partial size9/right/blue and empty defaultStyle assignments; existing spans remain separate. Reader documents and original scripts are preserved.",
+    "regressions": [
+      "output/testing/native-table-1793191699758910436/table.json",
+      "output/testing/native-acceptance-1793191845745641484/acceptance.json"
+    ],
+    "preceding_generated_binary": "output/testing/native-generated-1793191286141940113/generated.json",
+    "limits": "Native defaultStyle partial assignment still incorrectly merges omitted properties; native /DS and widget /DA /Q writing remains incomplete. Font and per-widget style breadth, CMYK API behavior and complete presentation remain unqualified."
   }
 }

@@ -89,7 +89,7 @@ fn css(style: &mut Style, input: &str) -> Result<()> {
                 style.insert("fontStyle".into(), json!(value));
             }
             "font-stretch" => {
-                style.insert("fontStretch".into(), json!(value));
+                style.insert("fontStretch".into(), json!(value.to_ascii_lowercase()));
             }
             "text-align" => {
                 style.insert("alignment".into(), json!(value));
@@ -512,6 +512,18 @@ pub fn serialize(spans: &[Value], defaults: &Value) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reader_default_style_font_stretch_keyword_is_case_insensitive() {
+        let value = metadata(
+            "font: Helvetica 9.0pt;font-stretch:Normal; text-align:right; color:#0000FF",
+            "",
+            "Helvetica",
+            9.,
+            2,
+        )
+        .unwrap();
+        assert_eq!(value["defaultStyle"]["fontStretch"], "normal");
+    }
     #[test]
     fn edited_xml_roundtrip_preserves_spans_styles_boundaries_and_entities() {
         let defaults =

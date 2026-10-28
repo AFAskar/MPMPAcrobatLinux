@@ -278,6 +278,7 @@ mod tests {
             display: 0,
             text_size: 7.,
             text_font: String::new(),
+            text_color: json!(["G", 0]),
             rich_metadata: json!({}),
             widgets: vec![],
             actions: BTreeMap::new(),

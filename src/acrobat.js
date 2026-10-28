@@ -69,7 +69,7 @@ var __host = (function () {
     const f={name:n,value:x.value,defaultValue:x.default_value,userName:x.user_name,submitName:x.submit_name,
       type:({Tx:'text',Ch:x.flags&131072?'combobox':'listbox',Btn:x.flags&65536?'button':x.flags&32768?'radiobutton':'checkbox'})[x.kind],
       readonly:!!(x.flags&1),display:x.display,textSize:x.text_size,textFont:x.text_font||'Helvetica',multiline:!!(x.flags&4096),
-      richText:x.kind==='Tx'&&!!(x.flags&33554432),richValue:x.rich_value||[],textColor:['G',0],fillColor:['T'],strokeColor:['G',0],
+      richText:x.kind==='Tx'&&!!(x.flags&33554432),richValue:x.rich_value||[],textColor:copyData(x.text_color)||['G',0],fillColor:['T'],strokeColor:['G',0],
       alignment:['left','center','right'][x.alignment||0],lineWidth:1,borderStyle:'solid',buttonPosition:0,buttonAlignX:50,buttonAlignY:50,
       calcOrderIndex:data.order.indexOf(n),items:x.items,exportValues:x.export_values||['Yes'],currentValueIndices:-1,
       page:x.widgets.length===1?x.widgets[0].page:x.widgets.map(w=>w.page),
@@ -134,7 +134,7 @@ var __host = (function () {
     for(const n of names)for(const w of fields[n]._widgets)if(w.page>=index)w.page++;
     for(const n of Object.keys(t.fields)){
       const x=JSON.parse(JSON.stringify(t.fields[n])),base=fields[n];
-      if(base){x.value=base.valueAsString;x.user_name=base.userName;x.submit_name=base.submitName;x.display=base.display;x.rich_value=copyData(base._richRaw);x.rich_metadata=Object.assign({},x.rich_metadata,{defaultStyle:copyData(base._defaultStyle),spans:copyData(base._richRaw)});}
+      if(base){x.value=base.valueAsString;x.user_name=base.userName;x.submit_name=base.submitName;x.display=base.display;x.text_color=copyData(base.textColor);x.rich_value=copyData(base._richRaw);x.rich_metadata=Object.assign({},x.rich_metadata,{defaultStyle:copyData(base._defaultStyle),spans:copyData(base._richRaw)});}
       for(const w of x.widgets){if(base){const live=base._widgets.filter(source=>JSON.stringify(source.id)===JSON.stringify(w.id))[0];if(live&&live.flags!==undefined)w.flags=live.flags;}w.page=index;}
       if(rename)addField(prefix+n,x);else{if(!fields[n])throw Error('Missing shared template field '+n);fields[n]._widgets.push(...x.widgets);}
 
