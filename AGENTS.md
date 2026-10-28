@@ -34,3 +34,4 @@ Read `docs/testing-environment.md` before changing or testing PDF behavior.
 - Scripted test replies must be valid controls/buttons offered by the actual dialog. Alert code 1 is OK, not Yes; Yes/No uses 4/3. Sidekick conversion requires explicit confirmation and base-creature hit dice; generic defaults do not exercise that class.
 
 - Diagnostics transported through a PDF text field must use ASCII-escaped JSON (or independently prove equivalent encoding). Include a Unicode sentinel and verify the saved field against a Reader code-unit/checksum summary; unescaped Unicode can be altered by the transport field itself.
+- Diagnostic event observers must catch unavailable-property getter errors locally. Letting logging throw from an original field action changes the behavior being measured; record the getter error without interrupting the event.

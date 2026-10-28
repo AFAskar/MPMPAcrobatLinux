@@ -74,8 +74,10 @@ def main():
         originals[name]={trigger:actions.get(key,'') for trigger,key in [('Keystroke','/K'),('Validate','/V'),('Format','/F'),('Calculate','/C')]}
     addon=ADDON.replace('__RESTORE__',json.dumps(originals)).replace('__FIELD__',json.dumps(args.field))
     if args.rich_data:
-        addon=addon.replace('value:String(event.value),willCommit:', 'value:String(event.value),richValue:event.richValue===undefined?null:JSON.parse(JSON.stringify(event.richValue)),willCommit:')
-        addon=addon.replace('richText:field.richText,', 'richValue:field.richValue===undefined?null:JSON.parse(JSON.stringify(field.richValue)),defaultStyle:field.defaultStyle===undefined?null:JSON.parse(JSON.stringify(field.defaultStyle)),richText:field.richText,')
+        addon=addon.replace('value:String(event.value),willCommit:', 'value:String(event.value),richValue:(function(){try{var v=event.richValue;return v===undefined?null:JSON.parse(JSON.stringify(v))}catch(e){return {getter_error:String(e)}}})(),willCommit:')
+        addon=addon.replace(' function run(', ' function optionalValue(fn){try{var v=fn();return v===undefined?null:JSON.parse(JSON.stringify(v))}catch(e){return {getter_error:String(e)}}}\n function run(')
+        addon=addon.replace('richText:field.richText,', 'richValue:optionalValue(function(){return field.richValue}),defaultStyle:optionalValue(function(){return field.defaultStyle}),richText:field.richText,')
+        addon=addon.replace("  run('script setter numeric'", "  run('initial rich data',function(){},f);\n  run('script setter numeric'")
         cases = r"""
   run('rich spans NBSP',function(){f.richValue=[{text:'alpha\u00a0beta',textSize:10,fontWeight:700,textColor:['RGB',0,0,1]},{text:'\r  second',fontFamily:['Helvetica','sans-serif'],textSize:8}]},f);
   run('rich getter copy',function(){var copy=f.richValue;copy[0].text='must not commit'},f);
@@ -98,7 +100,7 @@ def main():
             with c.desktop_lock():
                 assert not [e for e in c.command('inspect') if e.get('class')=='AcrobatSDIWindow' and '.pdf' in e.get('name','').lower()], 'Reference suite requires no pre-existing document'
                 path=c.remote_path('runs/field-events-'+str(time.time_ns())+'.pdf');c.powershell('Copy-Item '+c.literal(c.remote_path('fixtures/'+('ashnar.pdf' if args.fixture=='ashnar' else 'blank-'+args.fixture+'.pdf')))+' '+c.literal(path)+' -Force;(Get-Item '+c.literal(path)+').IsReadOnly=$false')
-                c.script('set',path=path,values={'User Script':addon});c.script('call',path=path,name='RunUserScript',args=[False])
+                c.script('set',path=path,values={'User Script':addon});ident=c.script_submit('call',path=path,name='RunUserScript',args=[False]);report['reader_request']=ident;c.script_result(ident,timeout=180)
                 summary=c.script('field_summary',path=path,fields=['PC Name'])['fields']['PC Name']
                 saved=path[:-4]+'-saved.pdf';c.script('save',path=path,output=saved);c.script('close',path=saved)
                 local=c.fetch(saved,folder/'reader-saved.pdf');assert script_hashes(local)==script_hashes(source)
