@@ -31,7 +31,11 @@ fn select_dialog_options(request: &Value, reply: &mut Value) -> Result<()> {
                 path.push(name.clone());
                 if let Some(n) = value.as_i64() {
                     let magnitude = n.saturating_abs().max(1);
-                    let selected = if qualified { path == labels } else { name == &labels[0] };
+                    let selected = if qualified {
+                        path == labels
+                    } else {
+                        name == &labels[0]
+                    };
                     *value = json!(if selected {
                         *matches += 1;
                         magnitude
@@ -49,11 +53,20 @@ fn select_dialog_options(request: &Value, reply: &mut Value) -> Result<()> {
         let labels = if let Some(label) = selection.as_str() {
             vec![label.to_owned()]
         } else {
-            selection.as_array().context("dialog selection must be a label or label path")?
-                .iter().map(|v| v.as_str().map(str::to_owned).context("dialog path labels must be strings"))
+            selection
+                .as_array()
+                .context("dialog selection must be a label or label path")?
+                .iter()
+                .map(|v| {
+                    v.as_str()
+                        .map(str::to_owned)
+                        .context("dialog path labels must be strings")
+                })
                 .collect::<Result<Vec<_>>>()?
         };
-        if labels.is_empty() { bail!("dialog selection path must not be empty") }
+        if labels.is_empty() {
+            bail!("dialog selection path must not be empty")
+        }
         if request["enabled"][&id] == false || request["visible"][&id] == false {
             bail!("dialog control {id} is unavailable")
         }
@@ -338,11 +351,20 @@ mod tests {
     }
     #[test]
     fn qualified_dialog_paths_disambiguate_duplicate_subclass_labels() {
-        let request = json!({"values":{"ExcL":{"Ranger":{"Hunter":-2},"Revised Ranger":{"Hunter":-5}}}});
+        let request =
+            json!({"values":{"ExcL":{"Ranger":{"Hunter":-2},"Revised Ranger":{"Hunter":-5}}}});
         let mut reply = json!({"select":{"ExcL":["Revised Ranger","Hunter"]}});
         select_dialog_options(&request, &mut reply).unwrap();
-        assert_eq!(reply["values"]["ExcL"], json!({"Ranger":{"Hunter":-2},"Revised Ranger":{"Hunter":5}}));
-        for path in [json!([]), json!(["Hunter"]), json!(["Missing","Hunter"]), json!([1,"Hunter"])] {
+        assert_eq!(
+            reply["values"]["ExcL"],
+            json!({"Ranger":{"Hunter":-2},"Revised Ranger":{"Hunter":5}})
+        );
+        for path in [
+            json!([]),
+            json!(["Hunter"]),
+            json!(["Missing", "Hunter"]),
+            json!([1, "Hunter"]),
+        ] {
             assert!(select_dialog_options(&request, &mut json!({"select":{"ExcL":path}})).is_err());
         }
     }
@@ -534,11 +556,15 @@ mod tests {
     }
     #[test]
     fn nonbreaking_spaces_normalize_before_plain_and_rich_commit_events() {
-        host(r#"var f=getField('A'),seen=[];f.setAction('Keystroke','seen.push(event.value)');f.value='a\u00a0b\tc';var plain=seen[0]==='a b\tc'&&f.valueAsString==='a b\tc';f.multiline=true;f.richText=true;f.value='a\u00a0b\r\u00a0\u00a0indented';plain&&seen[1]==='a b\tc'&&seen[2]==='a b\r  indented'&&f.valueAsString==='a b\r  indented'"#);
+        host(
+            r#"var f=getField('A'),seen=[];f.setAction('Keystroke','seen.push(event.value)');f.value='a\u00a0b\tc';var plain=seen[0]==='a b\tc'&&f.valueAsString==='a b\tc';f.multiline=true;f.richText=true;f.value='a\u00a0b\r\u00a0\u00a0indented';plain&&seen[1]==='a b\tc'&&seen[2]==='a b\r  indented'&&f.valueAsString==='a b\r  indented'"#,
+        );
     }
     #[test]
     fn rich_text_mode_assignments_deliver_reader_commit_and_format_events() {
-        host(r#"var f=getField('A'),seen=[];f.setAction('Keystroke',"seen.push('K')");f.setAction('Validate',"seen.push('V')");f.setAction('Format',"seen.push('F')");f.richText=false;f.richText=false;f.richText=true;f.richText=true;JSON.stringify(seen)==='["F","F","K","V","F","K","V","F"]'&&f.valueAsString==='2'"#);
+        host(
+            r#"var f=getField('A'),seen=[];f.setAction('Keystroke',"seen.push('K')");f.setAction('Validate',"seen.push('V')");f.setAction('Format',"seen.push('F')");f.richText=false;f.richText=false;f.richText=true;f.richText=true;JSON.stringify(seen)==='["F","F","K","V","F","K","V","F"]'&&f.valueAsString==='2'"#,
+        );
     }
     #[test]
     fn untouched_widgets_retain_print_bits_and_display_assignment_normalizes_them() {

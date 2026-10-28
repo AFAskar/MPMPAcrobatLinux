@@ -830,13 +830,22 @@ mod action_tests {
             (32768, None, "Off"),
             (65536, None, ""),
         ] {
-            let mut field = dictionary! {"FT"=>"Btn","Ff"=>flags,"T"=>Object::string_literal("Check")};
+            let mut field =
+                dictionary! {"FT"=>"Btn","Ff"=>flags,"T"=>Object::string_literal("Check")};
             if let Some(value) = stored {
                 field.set("V", Object::string_literal(value));
             }
             let id = doc.add_object(field.clone());
             let mut fields = BTreeMap::new();
-            walk(&doc, &id.into(), "", &Dictionary::new(), &BTreeMap::new(), &mut fields).unwrap();
+            walk(
+                &doc,
+                &id.into(),
+                "",
+                &Dictionary::new(),
+                &BTreeMap::new(),
+                &mut fields,
+            )
+            .unwrap();
             assert_eq!(fields["Check"].value, json!(expected));
             assert_eq!(doc.get_dictionary(id).unwrap(), &field);
         }
