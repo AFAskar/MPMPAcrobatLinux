@@ -1400,5 +1400,17 @@
     "counterexample": "output/testing/rich-metadata-1793166700975414054/metadata.json",
     "repair": "Reader converts NBSP within xfa-spacerun to spaces while preserving other NBSP. Parser now does the same; previous failed report retained.",
     "limits": "Known source body/p/span and style vocabulary supported. Other XHTML/style/entity forms fail explicitly. Full edited XML serialization, rich events/API semantics and appearance fidelity remain incomplete."
+  },
+  "default_style_runtime": {
+    "status": "partial; seven runtime style cases exactly match Reader, rich payloads and persistence incomplete",
+    "native": "output/testing/field-events-1793167694066637997/events.json",
+    "reader": "output/testing/field-events-1793166586978653218/events.json",
+    "comparison": "output/testing/default-style-comparison-1793167694066637997.json",
+    "negative_controls": "output/testing/default-style-negative-controls-1793167934233100116/verification.json",
+    "scope": "Copied defaultStyle getter; font/size/color/alignment coupling, CSS color rounding, defaultStyle assignment and restoration; unchanged style assignments deliver Format. Comparison includes field/default-style state and events except richValue. Missing case and wrong-size native JSON are rejected; Reader input untouched.",
+    "native_tests": 57,
+    "generated": "output/testing/native-generated-1793167848194981322/generated.json",
+    "table": "output/testing/native-table-1793168367856154021/table.json",
+    "remaining": "Raw rich getters and event.richValue payloads, edited /DS /RV /DA/appearance persistence, broader font/color mappings and complete desktop/style fidelity remain incomplete. Plain-field defaultStyle assignment and non-RGB/grayscale style colors fail explicitly."
   }
 }
