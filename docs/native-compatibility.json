@@ -1392,10 +1392,10 @@
     "observed": "Style setters update defaultStyle and format even unchanged. defaultStyle assignment updates field size/font/color/alignment. Plain rich getters raise InvalidGetError. Native rich event/default-style/spans/XML persistence and full style fidelity remain incomplete."
   },
   "source_rich_metadata": {
-    "status": "source metadata loading/projection preservation passes in all fixtures; live rich APIs/events/persistence still incomplete",
+    "status": "source metadata and preservation qualified in all fixtures; exact initial Ashnar Class Features metadata matches Reader; broader loaded-property coverage incomplete",
     "evidence": "output/testing/rich-metadata-1793167003221679885/metadata.json",
     "reader_reference": "output/testing/field-events-1793165936701805227/events.json",
-    "scope": "Parse original /DS styles and /RV XHTML, preserve paragraphs, spaceruns, entities and font/direction/line spacing. All 60 initial Ashnar Class Features spans and defaultStyle exactly equal independently measured Reader data. All three projections preserve original /DS, /RV and document scripts. Metadata remains separate from canonical /V and rendered appearances; it is not yet wired to live rich field APIs.",
+    "scope": "Parse original /DS styles and /RV XHTML, preserve paragraphs, spaceruns, entities and font/direction/line spacing. All 60 initial Ashnar Class Features spans and defaultStyle exactly equal independently measured Reader data. All three projections preserve original /DS, /RV and document scripts. Metadata remains separate from canonical /V and rendered appearances; it now supplies live rich field APIs; see rich_runtime and edited_rich_persistence for bounded qualification.",
     "native_tests": 56,
     "counterexample": "output/testing/rich-metadata-1793166700975414054/metadata.json",
     "repair": "Reader converts NBSP within xfa-spacerun to spaces while preserving other NBSP. Parser now does the same; previous failed report retained.",
@@ -1411,13 +1411,13 @@
     "native_tests": 57,
     "generated": "output/testing/native-generated-1793167848194981322/generated.json",
     "table": "output/testing/native-table-1793168367856154021/table.json",
-    "remaining": "Raw rich getters and event.richValue payloads, edited /DS /RV /DA/appearance persistence, broader font/color mappings and complete desktop/style fidelity remain incomplete. Plain-field defaultStyle assignment and non-RGB/grayscale style colors fail explicitly."
+    "remaining": "Edited /DS /DA /Q persistence, broader font/color mappings and complete desktop/style fidelity remain incomplete. Plain-field defaultStyle assignment and non-RGB/grayscale style colors fail explicitly. Rich payload qualification is recorded separately in rich_runtime."
   },
   "rich_runtime": {
     "status": "partial; all 52 measured event cases exactly match Reader; edited persistence remains incomplete",
-    "comparison": "output/testing/rich-runtime-atomic-comparison-1793175547842420917.json",
+    "comparison": "output/testing/rich-writer-strict-runtime-comparison-1793181122048410080.json",
     "negative_controls": "output/testing/rich-runtime-negative-controls-1793173202998540234/verification.json",
-    "tests": 66,
+    "tests": 68,
     "scope": "Raw rich spans, copied getters, K/V payloads and validation precedence, Format display separation, ignored string assignments, adjacent/empty spans and color normalization. Layout retains paragraph ends, explicit line spacing, indentation and explicit empty display. Additional MPMB fractional colors, copied-color reassignment and explicit paragraph boundary measured. Span colors truncate input to 16 bits before byte conversion; formatted getters are not quantized again. Exact float parsing preserves fixed-point values across the JS/Rust JSON boundary.",
     "regressions": [
       "output/testing/native-generated-1793172354832619763/generated.json",
@@ -1426,5 +1426,30 @@
     ],
     "remaining": "Edited /RV /DS /DA persistence, style-only appearance updates, mixed-font/decorations rendering, all class/table choices and full Reader persistence coverage remain incomplete.",
     "color_counterexample": "output/testing/rich-runtime-expanded-comparison-1793175185230221459.json"
+  },
+  "edited_rich_persistence": {
+    "status": "partial; three authored Extra.Notes cases pass native and real Reader save/reopen; full persistence milestone incomplete",
+    "evidence": "output/testing/rich-persistence-1793181122160088003/persistence.json",
+    "independent": "output/testing/rich-persistence-verification-1793182419065445030/verification.json",
+    "negative_controls": "output/testing/rich-persistence-negative-1793179613681745680/verification.json",
+    "diagnostic": "output/testing/rich-markup-version-variants-1793179190272534945/variants.json",
+    "unit_tests": 68,
+    "binary_sha256": "0235b0ba3f720d21733922a1c1d56a6783c3dd60bb38b6320b97d2466ba21e27",
+    "scope": "Authored paragraph boundaries, CR, XML characters, leading/trailing spaces, colors, size and italic; unchanged-text span style changes; native blank clearing and blank rich-mode removal. Original scripts retained. Native and Reader-saved canonical values/widgets/appearance text checked independently and rendered; unedited native /DS and /RV text and bytes match source.",
+    "comparison_normalization": "None for captured value/span data. Native reopen, Reader capture and Reader-saved native reopen equal the authored runtime state exactly, including optional span properties. Transport sentinel is checked separately.",
+    "regressions": [
+      "output/testing/native-generated-1793182419234155471/generated.json",
+      "output/testing/native-table-1793182419234087641/table.json"
+    ],
+    "counterexamples": [
+      "output/testing/rich-persistence-1793176056321302278/persistence.json",
+      "output/testing/rich-persistence-1793176868625451479/persistence.json"
+    ],
+    "remaining": "Edited /DS /DA /Q, mixed-face/decorated appearances, broader rich vocabulary/loaded-property coverage and complete class/table persistence remain incomplete. Mixed alignment/line spacing inside one paragraph and weights other than 400/700 explicitly fail serialization."
+  },
+  "formatted_companion_ac": {
+    "status": "verified failure; fix pending",
+    "evidence": "output/testing/formatted-companion-ac-1793179731024048894/reopen-probe.json",
+    "scope": "Original 2024 wolf companion: reopen saved sheet, raise Dex 15 to 18. Canonical AC remains 10+Dex; original Format computes 14, saved widget appearance remains 12. Same-process saves did update correctly because projection still starts from the unfilled template."
   }
 }

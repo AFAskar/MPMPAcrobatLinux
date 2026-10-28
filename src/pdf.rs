@@ -606,6 +606,9 @@ impl Pdf {
                 .unwrap_or_else(|| s["value"].to_string());
             let original = f.value.as_str().unwrap_or("");
             let changed = value != original;
+            let rich_changed = f.kind == "Tx" && s["richValueChanged"] == true;
+            let rich_enabled = s["richText"].as_bool().unwrap_or(f.flags & 33554432 != 0);
+            let rich_mode_changed = rich_enabled != (f.flags & 33554432 != 0);
             let dict = doc.get_dictionary_mut(f.id)?;
             if changed {
                 if f.kind == "Btn" {
@@ -653,6 +656,16 @@ impl Pdf {
                     }
                 }
                 dict.set("Ff", flags);
+                if !rich_enabled && rich_mode_changed {
+                    dict.remove(b"RV");
+                } else if rich_enabled && (rich_changed || changed || rich_mode_changed) {
+                    let spans = s["rawRichValue"]
+                        .as_array()
+                        .context("Missing raw rich spans")?;
+                    let xml = rich_text::serialize(spans, &s["defaultStyle"])
+                        .with_context(|| format!("Serialize rich field {name}"))?;
+                    dict.set("RV", pdf_string(&xml));
+                }
             }
             if let Some(v) = s["submitName"].as_str() {
                 if v != f.submit_name {
@@ -718,7 +731,7 @@ impl Pdf {
                     buttons::project(&mut doc, &icon_source, &fields, w, &rect, s, (&face, font))?;
                     continue;
                 }
-                if !changed {
+                if !changed && !rich_changed && !rich_mode_changed {
                     continue;
                 }
                 if f.kind == "Btn" {

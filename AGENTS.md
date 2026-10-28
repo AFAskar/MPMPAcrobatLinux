@@ -35,3 +35,6 @@ Read `docs/testing-environment.md` before changing or testing PDF behavior.
 
 - Diagnostics transported through a PDF text field must use ASCII-escaped JSON (or independently prove equivalent encoding). Include a Unicode sentinel and verify the saved field against a Reader code-unit/checksum summary; unescaped Unicode can be altered by the transport field itself.
 - Diagnostic event observers must catch unavailable-property getter errors locally. Letting logging throw from an original field action changes the behavior being measured; record the getter error without interrupting the event.
+
+- Keep canonical /V, raw rich spans and formatted display separate. Record comparison normalization explicitly; a check that ignores properties is not exact API equality. Reassigning copied rich colors can requantize them in Reader.
+- Qualify emitted rich XML in real Reader, including version attributes. Native parsing/rendering of its own output alone does not establish interoperability.
