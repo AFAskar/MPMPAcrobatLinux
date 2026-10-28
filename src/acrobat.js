@@ -148,11 +148,14 @@ var __host = (function () {
   }
   function execDialog(def) {
 
-    const store={},enabled={},visible={};let ended=null,focus=null;
-    const dialog={load(x){Object.assign(store,x)},store(){return JSON.parse(JSON.stringify(store))},enable(x){Object.assign(enabled,x)},visible(x){Object.assign(visible,x)},end(x){ended=x},
+    const store={},enabled={},visible={},controls=[];let ended=null,focus=null;
+    // Acrobat popup-edit combos retain an option map for display, but store()
+    // returns the selected key as text. Ordinary popups/lists return maps.
+    function storedValues(){const result=JSON.parse(JSON.stringify(store));for(const c of controls){if(c.type==='edit_text'&&c.PopupEdit){const v=result[c.item_id];if(v&&typeof v==='object'){result[c.item_id]=c.SpinEdit?(Object.keys(v).filter(k=>Number(v[k])>0)[0]||''):'';}}}return result;}
+    const dialog={load(x){for(const key of Object.keys(x)){const c=controls.filter(c=>c.item_id===key)[0],v=x[key];if(c&&c.type==='edit_text'&&c.PopupEdit&&((c.SpinEdit&&typeof v==='string')||(!c.SpinEdit&&v&&typeof v==='object'))){if(store[key]===undefined)store[key]='';continue;}store[key]=v;}},store:storedValues,enable(x){Object.assign(enabled,x)},visible(x){Object.assign(visible,x)},end(x){ended=x},
       setForeColorRed(id){gap('Dialog.setForeColorRed visual')},focus(id){focus=id},setFocus(id){focus=id},insertEntryInList(o){for(const id of Object.keys(o))store[id]=Object.assign(store[id]||{},o[id])},removeAllEntriesFromList(id){store[id]={}},
     };
-    const controls=[];function collect(e){if(e.item_id)controls.push(e);(e.elements||[]).forEach(collect)}collect(def.description||{});
+    function collect(e){if(e.item_id)controls.push(e);(e.elements||[]).forEach(collect)}collect(def.description||{});
     if(def.initialize)def.initialize(dialog);
     function finish(result){if(def.destroy)def.destroy(dialog);return result;}
     for(let i=0;i<1000;i++) {

@@ -1361,5 +1361,19 @@
     "clippy": "output/testing/continuation-dialog-typing-clippy.log",
     "scope": "Persist edits on each changed frame; delay original field-handler dispatch until focus leaves. Actual egui input frames type A then B, retain AB, press Tab, receive one event and no repeated event.",
     "remaining": "Headless keyboard/event proof only; all desktop controls, popup-edit typing and dialog fidelity remain incomplete."
+  },
+  "popup_edit_dialog_contract": {
+    "status": "measured native/Reader contract match and original 2024 selected-spell regression pass",
+    "reader": "output/testing/popup-edit-1793165238224915767/popup-edit.json",
+    "reader_counterexamples": [
+      "output/testing/popup-edit-1793164840801097021/popup-edit.json",
+      "output/testing/popup-edit-1793165015424922091/popup-edit.json"
+    ],
+    "native_original_failure": "output/testing/spell-selection-2024-1793165056634208786/report.json",
+    "native_original_fixed": "output/testing/spell-selection-fixed-2024-1793165250432891553/report.json",
+    "scope": "PopupEdit+SpinEdit option maps remain available for display, while store returns the selected text key. Ordinary popup/list stores retain maps. Measured non-combo map/string-load behavior is preserved. The original 2024 dialog commits three actual offered cantrips and six known spells; no direct CurrentSpells injection. Reader saves independently checked against checksum, Unicode sentinel and original script hashes.",
+    "unit_tests": 52,
+    "generated_regression": "output/testing/native-generated-1793165271163238456/generated.json",
+    "remaining": "Reader original spell-selection gesture/workflow parity, other dialog controls and popup-edit desktop typing remain incomplete."
   }
 }

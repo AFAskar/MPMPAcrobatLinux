@@ -485,6 +485,10 @@ mod tests {
         host("var saved;globalThis.__dialog=function(){return JSON.stringify({result:'ok'})};__host.execDialog({description:{elements:[]},initialize:function(d){d.load({list:{A:-1}});d.insertEntryInList({list:{B:-2}});d.focus('list')},ok:function(d){saved=d.store().list},commit:function(d){d.removeAllEntriesFromList('list')}});saved.A===-1&&saved.B===-2");
     }
     #[test]
+    fn popup_edit_combos_store_selected_text_while_lists_retain_maps() {
+        host("var rows=[];globalThis.__dialog=()=>JSON.stringify({result:'ok'});__host.execDialog({description:{elements:[{type:'edit_text',item_id:'ed01',PopupEdit:true},{type:'edit_text',item_id:'ed02',PopupEdit:true,SpinEdit:true},{type:'edit_text',item_id:'ed03',PopupEdit:true,SpinEdit:true},{type:'popup',item_id:'pop1'},{type:'list_box',item_id:'list'}]},initialize(d){d.load({ed01:{Alpha:-1,Beta:2},ed02:{Alpha:-1,Beta:2},ed03:'Beta',pop1:{Alpha:-1,Beta:2},list:{Alpha:-1,Beta:2}});var copy=d.store();copy.list.Beta=99;rows.push(d.store())},commit(d){rows.push(d.store())}});rows.length===2&&rows.every(r=>r.ed01===''&&r.ed02==='Beta'&&r.ed03===''&&r.pop1.Beta===2&&r.list.Beta===2)");
+    }
+    #[test]
     fn dialog_destroy_runs_after_commit_cancel_and_custom_end() {
         host("var trace=[],reply={result:'ok'};globalThis.__dialog=()=>JSON.stringify(reply);var def={description:{elements:[]},commit(){trace.push('commit')},cancel(){trace.push('cancel')},destroy(){trace.push('destroy')},other(d){d.end('save')}};__host.execDialog(def);reply={result:'cancel'};__host.execDialog(def);reply={result:'other'};var result=__host.execDialog(def);result==='save'&&JSON.stringify(trace)==='[\"commit\",\"destroy\",\"cancel\",\"destroy\",\"destroy\"]'");
     }
