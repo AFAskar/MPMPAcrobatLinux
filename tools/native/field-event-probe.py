@@ -6,7 +6,7 @@ from pypdf import PdfReader
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tools/acrobat'))
 import control as c
-from verify import canonical_fields, field_text
+from verify import canonical_fields, field_text, script_hashes
 
 ADDON = r'''
 var iFileName = "Native field event probe.js";
@@ -52,13 +52,14 @@ var iFileName = "Native field event probe.js";
   for(var name in originals){var field=d.getField(name);for(var type in originals[name])field.setAction(type,originals[name][type]);}
   f.richText=saved.richText;f.value=saved.value;d.calculateNow();d.calculate=saved.calculate;app.calculate=saved.appCalculate;d.delay=saved.delay;
  }
- Value('PC Name',JSON.stringify(output));
+ output.push({name:'diagnostic transport sentinel',value:'\u00a0\u2028\ud83d\ude00'});
+ Value('PC Name',JSON.stringify(output).replace(/[\u007f-\uffff]/g,function(c){return "\\u"+('0000'+c.charCodeAt(0).toString(16)).slice(-4)}));
 })(tDoc, __RESTORE__);
 '''
 
 
 def main():
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--readiness',type=Path);parser.add_argument('--native-only',action='store_true');parser.add_argument('--field',default='Player Name');parser.add_argument('--fixture',choices=['2014','2024','ashnar'],default='2024');args=parser.parse_args()
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--readiness',type=Path);parser.add_argument('--native-only',action='store_true');parser.add_argument('--rich-data',action='store_true',help='Inspect rich spans/default styles and persist large Reader traces for independent decoding');parser.add_argument('--field',default='Player Name');parser.add_argument('--fixture',choices=['2014','2024','ashnar'],default='2024');args=parser.parse_args()
     if not args.native_only:
         assert args.readiness and json.loads(args.readiness.read_text())['passed']
     folder=ROOT/'output/testing'/('field-events-'+str(time.time_ns()));folder.mkdir()
@@ -71,20 +72,41 @@ def main():
                 action=action.get_object()
                 if action.get('/JS') is not None and key not in actions:actions[key]=field_text(action['/JS'])
         originals[name]={trigger:actions.get(key,'') for trigger,key in [('Keystroke','/K'),('Validate','/V'),('Format','/F'),('Calculate','/C')]}
-    addon=ADDON.replace('__RESTORE__',json.dumps(originals)).replace('__FIELD__',json.dumps(args.field));(folder/'probe-addon.js').write_text(addon)
-    report={'passed':False,'fixture':args.fixture,'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'field':args.field,'readiness':str(args.readiness) if args.readiness else None};print(folder,flush=True)
+    addon=ADDON.replace('__RESTORE__',json.dumps(originals)).replace('__FIELD__',json.dumps(args.field))
+    if args.rich_data:
+        addon=addon.replace('value:String(event.value),willCommit:', 'value:String(event.value),richValue:event.richValue===undefined?null:JSON.parse(JSON.stringify(event.richValue)),willCommit:')
+        addon=addon.replace('richText:field.richText,', 'richValue:field.richValue===undefined?null:JSON.parse(JSON.stringify(field.richValue)),defaultStyle:field.defaultStyle===undefined?null:JSON.parse(JSON.stringify(field.defaultStyle)),richText:field.richText,')
+        cases = r"""
+  run('rich spans NBSP',function(){f.richValue=[{text:'alpha\u00a0beta',textSize:10,fontWeight:700,textColor:['RGB',0,0,1]},{text:'\r  second',fontFamily:['Helvetica','sans-serif'],textSize:8}]},f);
+  run('rich getter copy',function(){var copy=f.richValue;copy[0].text='must not commit'},f);
+  run('rich getter reassigned',function(){var copy=f.richValue;copy[0].text='reassigned';f.richValue=copy},f);
+  run('rich spans LF',function(){f.richValue=[{text:'line1\nline2'}]},f);
+  run('rich paragraph flags',function(){f.richValue=[{text:'first',endParagraph:true},{text:'second',endParagraph:true}]},f);
+  run('rich empty array',function(){f.richValue=[]},f);
+  run('rich empty string',function(){f.richValue=''},f);
+"""
+        addon=addon.replace("  f.richText=saved.richText;\n  run('text setter array'", cases+"  f.richText=saved.richText;\n  run('text setter array'")
+    (folder/'probe-addon.js').write_text(addon)
+    report={'passed':False,'fixture':args.fixture,'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'addon_sha256':hashlib.sha256(addon.encode()).hexdigest(),'field':args.field,'rich_data':args.rich_data,'transport':'ASCII-escaped JSON with a Unicode sentinel; Reader saved diagnostic checksum verified','readiness':str(args.readiness) if args.readiness else None};print(folder,flush=True)
     try:
-        spec={'dialogs':[{'result':'ok'}]*30,'alerts':[1]*30,'steps':[{'op':'advance','ms':4100},{'op':'eval','code':"getField('User Script').value="+json.dumps(addon)},{'op':'eval','code':"__host.command('RunUserScript(false)')"},{'op':'advance','ms':1000},{'op':'eval','code':"JSON.parse(What('PC Name'))"}]}
+        spec={'dialogs':[{'result':'ok'}]*30,'alerts':[1]*30,'steps':[{'op':'advance','ms':4100},{'op':'eval','code':"getField('User Script').value="+json.dumps(addon)},{'op':'eval','code':"__host.command('RunUserScript(false)')"},{'op':'advance','ms':1000},{'op':'eval','code':"if(/[^\x00-\x7f]/.test(What('PC Name')))throw Error('Diagnostic transport must be ASCII');JSON.parse(What('PC Name'))"}]}
         scenario,evidence=folder/'native-scenario.json',folder/'native-report.json';scenario.write_text(json.dumps(spec))
         with (folder/'native.log').open('w') as log:proc=subprocess.run([str(binary),str(source),'--probe',str(scenario),str(evidence)],stdout=log,stderr=log,timeout=240)
-        data=json.loads(evidence.read_text());assert proc.returncode==0 and data['passed'],data.get('error');report['native']=data['stages'][-1]['result']
+        data=json.loads(evidence.read_text());assert proc.returncode==0 and data['passed'],data.get('error');report['native']=data['stages'][-1]['result'];assert report['native'][-1]=={'name':'diagnostic transport sentinel','value':'\u00a0\u2028\U0001f600'}
         (folder/'events.json').write_text(json.dumps(report,indent=2))
         if not args.native_only:
             with c.desktop_lock():
                 assert not [e for e in c.command('inspect') if e.get('class')=='AcrobatSDIWindow' and '.pdf' in e.get('name','').lower()], 'Reference suite requires no pre-existing document'
                 path=c.remote_path('runs/field-events-'+str(time.time_ns())+'.pdf');c.powershell('Copy-Item '+c.literal(c.remote_path('fixtures/'+('ashnar.pdf' if args.fixture=='ashnar' else 'blank-'+args.fixture+'.pdf')))+' '+c.literal(path)+' -Force;(Get-Item '+c.literal(path)+').IsReadOnly=$false')
-                c.script('set',path=path,values={'User Script':addon});c.script('call',path=path,name='RunUserScript',args=[False]);result=c.script('read',path=path,fields=['PC Name']);report['reader']=json.loads(result['fields']['PC Name'])
+                c.script('set',path=path,values={'User Script':addon});c.script('call',path=path,name='RunUserScript',args=[False])
+                summary=c.script('field_summary',path=path,fields=['PC Name'])['fields']['PC Name']
                 saved=path[:-4]+'-saved.pdf';c.script('save',path=path,output=saved);c.script('close',path=saved)
+                local=c.fetch(saved,folder/'reader-saved.pdf');assert script_hashes(local)==script_hashes(source)
+                text=canonical_fields(PdfReader(local))['PC Name']['/V'];assert text.isascii(), 'Reader diagnostic transport changed encoding';units=text.encode('utf-16-le');a,b=1,0
+                for i in range(0,len(units),2):
+                    a=(a+int.from_bytes(units[i:i+2],'little'))%65521;b=(b+a)%65521
+                assert summary=={'code_units':len(units)//2,'adler32_utf16':str((b*65536+a)&0xffffffff)},summary
+                report['reader']=json.loads(text);assert report['reader'][-1]=={'name':'diagnostic transport sentinel','value':'\u00a0\u2028\U0001f600'}, 'Reader diagnostic Unicode sentinel changed';report['reader_summary']=summary;report['reader_saved']=str(local)
             report['equal']=report['native']==report['reader']
         report['execution_completed']=True
         report['passed']=bool(report.get('equal')) if not args.native_only else None

@@ -32,3 +32,5 @@ Read `docs/testing-environment.md` before changing or testing PDF behavior.
 - Freeze the fingerprinted reference-harness inputs while qualification runs; see `docs/testing-environment.md`. Editing `tools/acrobat` source during readiness invalidates the entire suite, even when workflow cases passed.
 - Run reference suites one at a time through completion and cleanup; do not queue multiple desktop suites. Each suite must reject a pre-existing document before opening its disposable copy. A failed suite must retain/close its own document before another suite starts.
 - Scripted test replies must be valid controls/buttons offered by the actual dialog. Alert code 1 is OK, not Yes; Yes/No uses 4/3. Sidekick conversion requires explicit confirmation and base-creature hit dice; generic defaults do not exercise that class.
+
+- Diagnostics transported through a PDF text field must use ASCII-escaped JSON (or independently prove equivalent encoding). Include a Unicode sentinel and verify the saved field against a Reader code-unit/checksum summary; unescaped Unicode can be altered by the transport field itself.

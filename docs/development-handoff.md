@@ -249,3 +249,7 @@ The 73-pair shadowed 2014 sweep FAILED after 41 passing cases in `native-subclas
 
 The Ranger book-exclusion profile is now committed with the audit helper. Four cases in the remaining-32 run had passed at commit time; the run remains live. Its first Gloom Stalker case also checks UA:RR exclusion after native reopen. The prior failed 73-pair run remains failed. New reports describe sourcebook exclusions explicitly and use `profile_mode=isolated-shadowed`; legacy target-only reports are accepted for provenance-preserving resume.
 
+
+## Unicode-safe diagnostic transport
+
+`tools/native/field-event-probe.py` now escapes all non-ASCII JSON before writing its carrier field, includes a literal NBSP/U+2028/emoji sentinel, and independently checks a saved Reader output against `field_summary` UTF-16 length/Adler checksum. `--rich-data` records span/default-style/event state; it is diagnostic coverage, not an implementation claim. Python compilation passes. The retained escaped single-line output was independently rechecked for ASCII, sentinel, checksum, complete native trace equality and source script hashes. Its original suite remains failed; no mutation was repeated during recovery. Native-only rich-data evidence `field-events-1793124578797184537/events.json` has passed=null, as required. The repository rule now requires this encoding proof for field-carried diagnostics.
