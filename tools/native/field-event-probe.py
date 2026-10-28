@@ -59,7 +59,8 @@ var iFileName = "Native field event probe.js";
 
 
 def main():
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--readiness',type=Path);parser.add_argument('--native-only',action='store_true');parser.add_argument('--rich-data',action='store_true',help='Inspect rich spans/default styles and persist large Reader traces for independent decoding');parser.add_argument('--field',default='Player Name');parser.add_argument('--fixture',choices=['2014','2024','ashnar'],default='2024');args=parser.parse_args()
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--readiness',type=Path);parser.add_argument('--native-only',action='store_true');parser.add_argument('--rich-data',action='store_true',help='Inspect rich spans/default styles and persist large Reader traces for independent decoding');parser.add_argument('--style-data',action='store_true',help='Also measure defaultStyle copies and field-style coupling (requires --rich-data)');parser.add_argument('--field',default='Player Name');parser.add_argument('--fixture',choices=['2014','2024','ashnar'],default='2024');args=parser.parse_args()
+    assert not args.style_data or args.rich_data, '--style-data requires --rich-data'
     if not args.native_only:
         assert args.readiness and json.loads(args.readiness.read_text())['passed']
     folder=ROOT/'output/testing'/('field-events-'+str(time.time_ns()));folder.mkdir()
@@ -87,9 +88,21 @@ def main():
   run('rich empty array',function(){f.richValue=[]},f);
   run('rich empty string',function(){f.richValue=''},f);
 """
+        if args.style_data:
+            addon=addon.replace('richText:field.richText,', 'fieldStyle:{textSize:field.textSize,textFont:field.textFont,textColor:field.textColor,alignment:field.alignment},richText:field.richText,')
+            cases += r"""
+  var styleBefore={size:f.textSize,font:f.textFont,color:f.textColor,alignment:f.alignment,defaultStyle:optionalValue(function(){return f.defaultStyle})};
+  run('defaultStyle getter copy',function(){var copy=f.defaultStyle;copy.textSize=99;copy.fontFamily[0]='must not commit'},f);
+  run('textSize defaultStyle coupling',function(){f.textSize=9},f);
+  run('textFont defaultStyle coupling',function(){f.textFont='Helvetica'},f);
+  run('textColor defaultStyle coupling',function(){f.textColor=['RGB',0.25,0.5,0.75]},f);
+  run('alignment defaultStyle coupling',function(){f.alignment='right'},f);
+  run('defaultStyle assignment',function(){f.defaultStyle={alignment:'center',fontFamily:['Helvetica','sans-serif'],fontStretch:'normal',fontStyle:'italic',fontWeight:700,textColor:['RGB',1,0,0],textSize:11}},f);
+  run('restore field style',function(){try{f.defaultStyle=styleBefore.defaultStyle}finally{f.textSize=styleBefore.size;f.textFont=styleBefore.font;f.textColor=styleBefore.color;f.alignment=styleBefore.alignment}},f);
+"""
         addon=addon.replace("  f.richText=saved.richText;\n  run('text setter array'", cases+"  f.richText=saved.richText;\n  run('text setter array'")
     (folder/'probe-addon.js').write_text(addon)
-    report={'passed':False,'fixture':args.fixture,'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'addon_sha256':hashlib.sha256(addon.encode()).hexdigest(),'field':args.field,'rich_data':args.rich_data,'transport':'ASCII-escaped JSON with a Unicode sentinel; Reader saved diagnostic checksum verified','readiness':str(args.readiness) if args.readiness else None};print(folder,flush=True)
+    report={'passed':False,'fixture':args.fixture,'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'addon_sha256':hashlib.sha256(addon.encode()).hexdigest(),'field':args.field,'rich_data':args.rich_data,'style_data':args.style_data,'transport':'ASCII-escaped JSON with a Unicode sentinel; Reader saved diagnostic checksum verified','readiness':str(args.readiness) if args.readiness else None};print(folder,flush=True)
     try:
         spec={'dialogs':[{'result':'ok'}]*30,'alerts':[1]*30,'steps':[{'op':'advance','ms':4100},{'op':'eval','code':"getField('User Script').value="+json.dumps(addon)},{'op':'eval','code':"__host.command('RunUserScript(false)')"},{'op':'advance','ms':1000},{'op':'eval','code':"if(/[^\x00-\x7f]/.test(What('PC Name')))throw Error('Diagnostic transport must be ASCII');JSON.parse(What('PC Name'))"}]}
         scenario,evidence=folder/'native-scenario.json',folder/'native-report.json';scenario.write_text(json.dumps(spec))

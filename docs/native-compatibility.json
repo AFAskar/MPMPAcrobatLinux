@@ -1296,7 +1296,7 @@
     "clearing_failed_before_fix": "output/testing/checkbox-events-1793109091284805362/checkbox-events.json"
   },
   "text_commit_normalization": {
-    "status": "ASCII-escaped single-line trace equals recovered Reader output; multiline NBSP/rich span semantics remain under revalidation",
+    "status": "Escaped single-line and multiline measurements confirm text-value NBSP normalization; rich span APIs/events/styles remain incomplete",
     "native_tests": 49,
     "table": "output/testing/native-table-1793122033811218055/table.json",
     "generated": "output/testing/native-generated-1793122283200422875/generated.json",
@@ -1304,9 +1304,10 @@
     "failed_suite": "output/testing/field-events-1793122032591996993/events.json",
     "scope": "Text .value normalizes NBSP before K/V/F and preserves tabs. RichText=false formats; RichText=true runs K/V/F even for unchanged mode/value. Source rich/plain and multiline flags retained. Reader payload recovered from the same completed add-on, saved/closed, canonical diagnostic and original script hashes verified independently.",
     "remaining": "The originating suite remains failed due to result-dialog cleanup. event.richValue, defaultStyle, rich XML persistence and broader styling remain incomplete; Ashnar Class Features/Extra.Notes canonical differences remain.",
-    "measurement_caveat": "Earlier unescaped JSON could be normalized by PC Name. The recovered escaped single-line diagnostic preserves Unicode sentinel and matches Reader UTF-16 checksum and native trace. Its original suite remains failed; multiline and rich data require separate escaped qualification.",
+    "measurement_caveat": "Earlier unescaped traces could be normalized by their carrier. Escaped single-line and non-interfering multiline probes now verify Reader checksums and a Unicode sentinel. Full rich-data equality remains false due to missing APIs/events, not a normalization qualification.",
     "escaped_singleline_trace": "output/testing/field-events-1793162025932570113/recovered-escaped.json",
-    "escaped_singleline_original_failed": "output/testing/field-events-1793162025932570113/events.json"
+    "escaped_singleline_original_failed": "output/testing/field-events-1793162025932570113/events.json",
+    "escaped_multiline_trace": "output/testing/field-events-1793165936701805227/events.json"
   },
   "serialized_state_comparison": {
     "status": "Read-only comparison validated against a different-serialization Reader baseline and three damaged-native negative controls",
@@ -1383,5 +1384,11 @@
     "native": "output/testing/native-warlock-spells-1793165446484448545/warlock-spells.json",
     "scope": "Original 2024 source controls, exact offered spell selections and cantrip-specific invocation menu. Select three cantrips and six known spells; generate, add Agonizing Blast, regenerate, remove/regenerate, readd/regenerate. Assert exact lists, choices, attack effects and generated Eldritch Blast description, saved fields/appearances/scripts and native reopen. Option discovery cancels the actual original dialog before using its validated offered labels; no direct CurrentSpells injection.",
     "remaining": "Reader interaction/runtime parity, other spells/invocations/classes, spell slot use/rests, full generated appearance equivalence and comprehensive multiclass/table use remain unqualified."
+  },
+  "rich_style_reference": {
+    "status": "independent Reader diagnostic completed; native implementation remains incomplete",
+    "reference": "output/testing/field-events-1793166586978653218/events.json",
+    "scope": "Safe original-addon observer measures defaultStyle copy semantics, textSize/textFont/textColor/alignment coupling, defaultStyle assignment, restoration and Format events. Saved ASCII diagnostic checksum, Unicode sentinel and original scripts verified. No mutation repeated.",
+    "observed": "Style setters update defaultStyle and format even unchanged. defaultStyle assignment updates field size/font/color/alignment. Plain rich getters raise InvalidGetError. Native rich event/default-style/spans/XML persistence and full style fidelity remain incomplete."
   }
 }
