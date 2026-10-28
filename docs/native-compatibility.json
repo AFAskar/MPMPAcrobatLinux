@@ -1344,5 +1344,13 @@
     ],
     "probe_correction": "2024 Wizard key is wizard-abjurer; legacy Fiend key is warlock-the fiend. Corrected from actual edition inventories; no runtime repair.",
     "remaining": "Invocations, Pact Boons, spell selections, slot expenditure/rest distinctions, all multiclass combinations, per-phase persistence and Reader equivalence remain unqualified."
+  },
+  "legacy_agonizing_blast": {
+    "status": "two native original-menu combat/progression/persistence cases pass; Reader parity pending",
+    "native": "output/testing/native-eldritch-blast-1793164303039769816/eldritch-blast.json",
+    "cases": 2,
+    "scope": "2014/Ashnar Fiend Warlock: original enabled feature menu adds/removes/reselects Agonizing Blast; assert exact invocation key, hit/damage before/after, Charisma 18\u219220, beam scaling at levels 5/11/20 and down to 5, independent saved field/appearance/script checks, fresh native reopen and further menu removal/readdition.",
+    "remaining": "2024 cantrip-specific invocation model, other invocations, spell-page effects, complete feature choices and independent Reader parity remain unqualified.",
+    "failed_probe": "First full probe expected unsigned hit text; source canonical +7 was preserved and the assertion was corrected. No product runtime change."
   }
 }
