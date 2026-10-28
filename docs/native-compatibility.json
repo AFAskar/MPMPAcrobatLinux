@@ -1352,5 +1352,14 @@
     "scope": "2014/Ashnar Fiend Warlock: original enabled feature menu adds/removes/reselects Agonizing Blast; assert exact invocation key, hit/damage before/after, Charisma 18\u219220, beam scaling at levels 5/11/20 and down to 5, independent saved field/appearance/script checks, fresh native reopen and further menu removal/readdition.",
     "remaining": "2024 cantrip-specific invocation model, other invocations, spell-page effects, complete feature choices and independent Reader parity remain unqualified.",
     "failed_probe": "First full probe expected unsigned hit text; source canonical +7 was preserved and the assertion was corrected. No product runtime change."
+  },
+  "native_dialog_typing": {
+    "status": "fixed; concrete egui keyboard frames and 51 Rust tests pass",
+    "counterexample": "output/testing/continuation-dialog-typing-before.log",
+    "unit": "output/testing/continuation-dialog-typing-unit.log",
+    "build": "output/testing/continuation-dialog-typing-build.log",
+    "clippy": "output/testing/continuation-dialog-typing-clippy.log",
+    "scope": "Persist edits on each changed frame; delay original field-handler dispatch until focus leaves. Actual egui input frames type A then B, retain AB, press Tab, receive one event and no repeated event.",
+    "remaining": "Headless keyboard/event proof only; all desktop controls, popup-edit typing and dialog fidelity remain incomplete."
   }
 }

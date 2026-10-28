@@ -3,7 +3,7 @@ use anyhow::{bail, Result};
 use eframe::egui::{self, ColorImage};
 use serde_json::{json, Value};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     io::{Read, Write},
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -626,6 +626,7 @@ fn dialog_process() -> Result<()> {
         capture_requested: false,
         focus: data["focus"].as_str().map(str::to_owned),
         focus_requested: false,
+        edited_controls: BTreeSet::new(),
     };
     let title = data["description"]["name"]
         .as_str()
@@ -646,6 +647,7 @@ struct Dialog {
     capture_requested: bool,
     focus: Option<String>,
     focus_requested: bool,
+    edited_controls: BTreeSet<String>,
 }
 fn argb_image(value: &Value) -> Option<ColorImage> {
     let argb = value["argb"].as_str()?;
@@ -823,8 +825,11 @@ impl Dialog {
                         response.request_focus();
                         *focus_requested = true;
                     }
-                    if response.lost_focus() && text != value.as_str().unwrap_or("") {
+                    if response.changed() {
                         *value = json!(text);
+                        self.edited_controls.insert(id.to_owned());
+                    }
+                    if response.lost_focus() && self.edited_controls.remove(id) {
                         reply = Some(json!({"event":id}));
                     }
                 }
@@ -1025,5 +1030,67 @@ pub fn alert(value: &Value) -> Result<Value> {
         if reply["result"] == "cancel" {
             return Ok(json!({"button":2,"checked":values["ckbx"]}));
         }
+    }
+}
+
+#[cfg(test)]
+mod dialog_tests {
+    use super::*;
+
+    #[test]
+    fn dialog_typing_survives_frames_and_dispatches_after_focus_leaves() {
+        let ctx = egui::Context::default();
+        let mut dialog = Dialog {
+            description: json!({}),
+            values: BTreeMap::from([("text".into(), json!(""))]),
+            enabled: json!({}),
+            visible: json!({}),
+            result: Arc::new(Mutex::new(json!({}))),
+            images: BTreeMap::new(),
+            capture_requested: false,
+            focus: Some("text".into()),
+            focus_requested: false,
+            edited_controls: BTreeSet::new(),
+        };
+        let control = json!({"type":"edit_text","item_id":"text"});
+        let mut frame = |events: Vec<egui::Event>| {
+            let mut reply = None;
+            let _ = ctx.run(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        reply = dialog.element(ui, &control);
+                        ui.button("Next").clicked();
+                    });
+                },
+            );
+            (dialog.values["text"].clone(), reply)
+        };
+        frame(vec![]);
+        let (text, event) = frame(vec![egui::Event::Text("A".into())]);
+        assert_eq!(text, "A");
+        assert!(
+            event.is_none(),
+            "Typing must not invoke handlers on every character"
+        );
+        let (text, event) = frame(vec![egui::Event::Text("B".into())]);
+        assert_eq!(text, "AB");
+        assert!(event.is_none());
+        let (text, event) = frame(vec![egui::Event::Key {
+            key: egui::Key::Tab,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        assert_eq!(text, "AB");
+        assert_eq!(event, Some(json!({"event":"text"})));
+        assert!(
+            frame(vec![]).1.is_none(),
+            "A committed edit must not repeat its event"
+        );
     }
 }
