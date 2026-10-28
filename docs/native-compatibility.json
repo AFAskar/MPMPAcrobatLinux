@@ -1328,5 +1328,21 @@
     "failed_probe": "output/testing/widget-rect-1793163300677274871/rectangles.json",
     "probe_correction": "Remove the one-shot User Script before saving; retaining it reran the translation on reopen. Original failed report retained.",
     "remaining": "Reader parity, resizing/reflow, rotations and other indexed field properties remain unqualified."
+  },
+  "pact_multiclass": {
+    "status": "three bounded native profiles passed; independent Reader parity pending",
+    "cases": 3,
+    "progression_checkpoints_per_fixture": 12,
+    "evidence": [
+      "output/testing/native-pact-multiclass-1793163703651543396/pact-multiclass.json",
+      "output/testing/native-pact-multiclass-1793163896370283178/pact-multiclass.json"
+    ],
+    "scope": "Original source-selection controls and ApplyClasses; Wizard/Abjuration 5 plus Fiend Warlock 0/1/2/3/5/7/9/11/15/1/0/3. Assert exact edition-specific class/subclass keys, levels/proficiency, shared + Pact slot totals, Mystic Arcanum not added to levels 6\u20139 ordinary slots, both hit dice pools, removal/readdition, saved field/appearance/script checks and fresh native reopen.",
+    "failed_probe_inputs": [
+      "output/testing/native-pact-multiclass-1793163666974721232/pact-multiclass.json",
+      "output/testing/native-pact-multiclass-1793163790375710377/pact-multiclass.json"
+    ],
+    "probe_correction": "2024 Wizard key is wizard-abjurer; legacy Fiend key is warlock-the fiend. Corrected from actual edition inventories; no runtime repair.",
+    "remaining": "Invocations, Pact Boons, spell selections, slot expenditure/rest distinctions, all multiclass combinations, per-phase persistence and Reader equivalence remain unqualified."
   }
 }
