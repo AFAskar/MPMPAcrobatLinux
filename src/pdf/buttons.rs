@@ -107,7 +107,7 @@ pub(super) fn project(
                 .find(|f| f.widgets.iter().any(|w| w.id == widget.id))
                 .context("Button field missing")?;
             content.extend(appearance::content(
-                face, width, height, target, &s, caption,
+                face, width, height, target, &s, caption, None,
             )?);
         }
     }

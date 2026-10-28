@@ -40,3 +40,5 @@ Read `docs/testing-environment.md` before changing or testing PDF behavior.
 - Qualify emitted rich XML in real Reader, including version attributes. Native parsing/rendering of its own output alone does not establish interoperability.
 
 - Respect widget-local /DA and /Q before parent field attributes when loading styles. Reader can leave the parent's /DA unchanged while saving new styles on widget zero, even when that widget belongs to an inactive template. Keep /DS defaults, widget appearance defaults and existing rich spans separate; changing defaults does not restyle existing spans.
+
+- Rich layout metrics are not interchangeable: measured first baselines use the widget-default font's PDF bounds, while later leading uses run-font typographic metrics. Qualify changes against saved Reader appearances, including mixed sizes and default/explicit spacing; do not hardcode expected coordinates. Host-layout probes that clear field actions are isolated diagnostics, not original MPMB workflow passes.

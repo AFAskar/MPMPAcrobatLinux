@@ -1,7 +1,7 @@
 //! Default appearance data. /DA, /DS, canonical values and rich spans are distinct.
 use super::{resolved, text};
 use anyhow::{bail, Context, Result};
-use lopdf::Document;
+use lopdf::{Document, ObjectId};
 use serde_json::{json, Value};
 
 pub fn color(appearance: &str) -> Result<Value> {
@@ -99,6 +99,36 @@ fn color_operator(value: &Value) -> Result<String> {
         operands.push(n.to_string());
     }
     Ok(format!("{} {operator}", operands.join(" ")))
+}
+
+pub fn widget_font(doc: &Document, widget: ObjectId) -> Result<Option<String>> {
+    let mut next = Some(widget);
+    let mut seen = std::collections::BTreeSet::new();
+    while let Some(id) = next {
+        if !seen.insert(id) {
+            bail!("Cyclic widget style inheritance")
+        }
+        let dictionary = doc.get_dictionary(id)?;
+        if let Ok(da) = dictionary.get(b"DA") {
+            let da = text(doc, da);
+            let content = lopdf::content::Content::decode(da.as_bytes())?;
+            let font = content
+                .operations
+                .iter()
+                .rev()
+                .find(|op| op.operator == "Tf")
+                .and_then(|op| op.operands.first())
+                .and_then(|value| value.as_name().ok());
+            return font
+                .map(|name| String::from_utf8(name.to_vec()).map_err(Into::into))
+                .transpose();
+        }
+        next = dictionary
+            .get(b"Parent")
+            .ok()
+            .and_then(|parent| parent.as_reference().ok());
+    }
+    Ok(None)
 }
 
 #[cfg(test)]

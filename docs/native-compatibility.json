@@ -1547,5 +1547,43 @@
       "output/testing/default-style-writer-style-runtime-comparison-1793194200000000000.json"
     ],
     "limits": "Missing font resources fail explicitly. Broader font mapping, other style objects/color spaces, indexed/per-widget style state, mixed-face/decorated rendering, rich first baselines and complete per-character persistence remain incomplete."
+  },
+  "rich_baselines_and_leading": {
+    "status": "bounded metrics qualified across all fixtures; rendering and font fallback remain partial",
+    "binary_sha256": "c926cb87a39fa85767e873ad260d54933305d23d65227b787ceec2d3fe7f7dde",
+    "unit_tests": 84,
+    "native_comparisons": [
+      "output/testing/rich-baseline-1793196494347971809/baselines.json",
+      "output/testing/rich-baseline-1793196507526957041/baselines.json",
+      "output/testing/rich-baseline-1793196518342756380/baselines.json",
+      "output/testing/rich-baseline-1793196763532406097/baselines.json",
+      "output/testing/rich-baseline-1793197644416810243/baselines.json"
+    ],
+    "reader_references": [
+      "output/testing/rich-baseline-1793193782379266169/baselines.json",
+      "output/testing/rich-baseline-1793194536072800528/baselines.json",
+      "output/testing/rich-baseline-1793194994035766579/baselines.json",
+      "output/testing/rich-baseline-1793196537378808322/baselines.json",
+      "output/testing/rich-baseline-1793197009883706062/baselines.json"
+    ],
+    "font_diagnostic": "output/testing/rich-baseline-1793196529349915624/baselines.json",
+    "font_diagnostic_scope": "5/6 bundled faces match; suite remains FAILED because RavennaJW falls back to MyriadPro-Regular in Reader while native uses RavennaJW. Do not count this suite as a complete pass.",
+    "independent_reference_verification": "output/testing/rich-baseline-reference-verification-1793198071485369310.json",
+    "roundtrip": "output/testing/default-style-roundtrip-1793197701546258818/styles.json",
+    "render": "output/testing/field-render-1793197183172485517/render.json",
+    "pixel_limits": "The previous3px first-baseline shift is corrected. Strict notes-region equality still fails:66/54270 pixels differ at144DPI. Glyph width/antialiasing and fuller presentation remain incomplete.",
+    "scope": "30 field cases: single/two-line and size7-to9/9-to7, spacing11/14/default in2024; two-line cases in2014 and Ashnar. K/V/F are deliberately cleared to isolate host layout. First bounds use widget-default PDF metrics; normalized run typographic ascent/gap controls later leading, with fixed-point truncation and absolute gap. API captures match Reader exactly; baseline tolerance0.002pt. This is not per-class or full rendering qualification.",
+    "counterexamples": [
+      "output/testing/rich-baseline-1793194162282816488/baselines.json",
+      "output/testing/rich-baseline-1793194933905745911/baselines.json",
+      "output/testing/rich-baseline-1793195734576156784/baselines.json"
+    ],
+    "invalid_probe": "Inactive Background_Appearance selection; document saved/closed, suite failed. output/testing/rich-baseline-1793196762370010416/baselines.json",
+    "regressions": [
+      "output/testing/native-acceptance-1793197046088946415/acceptance.json",
+      "output/testing/native-generated-1793197117522942872/generated.json",
+      "output/testing/native-table-1793197280950719017/table.json"
+    ],
+    "limits": "RavennaJW rich fallback, mixed-face/decorated runs, glyph widths, richer layout/indexed styles and full class/table persistence remain incomplete."
   }
 }

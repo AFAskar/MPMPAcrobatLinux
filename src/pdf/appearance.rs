@@ -61,6 +61,42 @@ pub(super) fn rich_font_candidates(state: &Value) -> Vec<String> {
     vec![format!("{base},{suffix}"), format!("{base}-{suffix}")]
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct RichFontMetrics {
+    bbox_height: f32,
+    ascent: f32,
+    line_gap: f32,
+}
+impl RichFontMetrics {
+    pub(super) fn with_default_bounds(mut self, defaults: Self) -> Self {
+        self.bbox_height = defaults.bbox_height;
+        self
+    }
+    pub(super) fn from_face(face: &ttf_parser::Face<'_>, bbox_height: Option<f32>) -> Self {
+        let units = f32::from(face.units_per_em());
+        // Reader truncates through 16-bit fixed point before PDF's 1000-unit
+        // metrics. Decimal design metrics can lose one more unit (e.g. .868).
+        let normalized = |n: f64| normalized_metric(n, f64::from(face.units_per_em()));
+        let bbox = face.global_bounding_box();
+        Self {
+            bbox_height: bbox_height
+                .unwrap_or((f32::from(bbox.y_max) - f32::from(bbox.y_min)) / units),
+            ascent: normalized(f64::from(
+                face.typographic_ascender()
+                    .filter(|n| *n != 0)
+                    .unwrap_or(face.ascender()),
+            )),
+            line_gap: normalized(
+                f64::from(face.typographic_line_gap().unwrap_or(face.line_gap())).abs(),
+            ),
+        }
+    }
+}
+
+fn normalized_metric(value: f64, units: f64) -> f32 {
+    (((value / units * 65536.).floor() / 65536. * 1000.).floor() / 1000.) as f32
+}
+
 #[derive(Clone)]
 struct Glyph {
     c: char,
@@ -166,6 +202,7 @@ pub(super) fn content(
     field: &Field,
     state: &Value,
     value: &str,
+    font_metrics: Option<RichFontMetrics>,
 ) -> Result<Vec<u8>> {
     let wrap = state["multiline"]
         .as_bool()
@@ -272,8 +309,9 @@ pub(super) fn content(
     let units = face.units_per_em() as f32;
     let ascent = face.ascender() as f32 / units;
     let descent = face.descender() as f32 / units;
+    let rich_metrics = font_metrics.unwrap_or_else(|| RichFontMetrics::from_face(face, None));
     let mut y = if spans.is_some() {
-        height - line_sizes.first().copied().unwrap_or(size) * (ascent - descent)
+        height - line_sizes.first().copied().unwrap_or(size) * rich_metrics.bbox_height
     } else if wrap {
         height - 1. - line_sizes.first().copied().unwrap_or(size)
     } else {
@@ -336,11 +374,10 @@ pub(super) fn content(
             x += run.iter().map(|g| width(face, g)).sum::<f32>();
             start = end;
         }
-        y -= if let Some(spacing) = line_spacings[line_index] {
-            spacing
-        } else if spans.is_some() {
+        y -= if spans.is_some() {
             let next = line_sizes.get(line_index + 1).copied().unwrap_or(line_size);
-            line_size * (1. - ascent) + next * ascent
+            let leading = line_spacings[line_index].unwrap_or(next * (1. + rich_metrics.line_gap));
+            leading + (line_size - next) * (1. - rich_metrics.ascent)
         } else {
             line_size * 1.12
         };
@@ -376,13 +413,79 @@ mod tests {
         }
     }
     #[test]
+    fn reader_font_metrics_truncate_fixed_point_before_design_units() {
+        assert_eq!(normalized_metric(1491., 2048.), 0.728);
+        assert_eq!(normalized_metric(868., 1000.), 0.867);
+        assert_eq!(normalized_metric(720., 1000.), 0.719);
+        assert_eq!(normalized_metric(73., 1000.), 0.072);
+        assert_eq!(normalized_metric(201., 2048.), 0.098);
+    }
+    #[test]
+    fn mixed_size_rich_lines_use_typographic_ascent_with_explicit_or_normal_leading() {
+        let bytes = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
+        let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
+        let metrics = RichFontMetrics {
+            bbox_height: 1.57,
+            ascent: 0.728,
+            line_gap: 0.131,
+        };
+        for (spacing, expected_advance) in [(Some(11), 10.456), (None, 9.635)] {
+            let mut first = json!({"text":"A\r","textSize":7});
+            let mut next = json!({"text":"B","textSize":9});
+            if let Some(spacing) = spacing {
+                first["linespacing"] = json!(spacing);
+                next["linespacing"] = json!(spacing);
+            }
+            let state = json!({"richRenderActive":true,"richValue":[first,next]});
+            let output = String::from_utf8(
+                content(&face, 100., 50., &field(), &state, "A\rB", Some(metrics)).unwrap(),
+            )
+            .unwrap();
+            let tokens = output.split_whitespace().collect::<Vec<_>>();
+            let positions = tokens
+                .iter()
+                .enumerate()
+                .filter(|(_, v)| **v == "Tm")
+                .map(|(i, _)| tokens[i - 1].parse::<f32>().unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(positions.len(), 2);
+            assert!(
+                (positions[0] - positions[1] - expected_advance).abs() < 0.002,
+                "{output}"
+            );
+        }
+    }
+    #[test]
+    fn rich_first_baseline_uses_source_pdf_font_bounds_independently_of_line_spacing() {
+        let bytes = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
+        let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
+        for spacing in [11, 14] {
+            let state = json!({"textSize":7,"richRenderActive":true,"richValue":[{"text":"A","textSize":7,"linespacing":spacing}]});
+            let output = String::from_utf8(
+                content(
+                    &face,
+                    100.,
+                    50.,
+                    &field(),
+                    &state,
+                    "A",
+                    Some(RichFontMetrics::from_face(&face, Some(1.57))),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            assert!(output.contains("1 0 0 1 0 39.01 Tm"), "{output}");
+        }
+    }
+    #[test]
     fn existing_rich_paragraph_alignment_survives_changed_field_default() {
         let bytes = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
         let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
         let state = json!({"textSize":9,"alignment":"right","richRenderActive":true,"richValue":[{"text":"style probe","textSize":7,"alignment":"left"}]});
-        let output =
-            String::from_utf8(content(&face, 100., 50., &field(), &state, "style probe").unwrap())
-                .unwrap();
+        let output = String::from_utf8(
+            content(&face, 100., 50., &field(), &state, "style probe", None).unwrap(),
+        )
+        .unwrap();
         assert!(
             output.contains(" rg 1 0 0 1 0 "),
             "Existing rich text must stay at its left paragraph position: {output}"
@@ -440,6 +543,7 @@ mod tests {
             &field(),
             &json!({"richRenderActive":true,"richValue":[],"textSize":7}),
             "canonical text",
+            None,
         )
         .unwrap();
         assert!(!String::from_utf8(output).unwrap().contains("Tj"));
@@ -448,7 +552,7 @@ mod tests {
     fn rich_paragraph_flags_and_explicit_spacing_control_baselines() {
         let bytes = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
         let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
-        let output = content(&face,100.,50.,&field(),&json!({"richRenderActive":true,"richValue":[{"text":"A","textSize":7,"linespacing":11,"endParagraph":true},{"text":"B","textSize":7,"linespacing":11}],"textSize":7}),"AB").unwrap();
+        let output = content(&face,100.,50.,&field(),&json!({"richRenderActive":true,"richValue":[{"text":"A","textSize":7,"linespacing":11,"endParagraph":true},{"text":"B","textSize":7,"linespacing":11}],"textSize":7}),"AB",None).unwrap();
         let decoded = lopdf::content::Content::decode(&output).unwrap();
         let baselines: Vec<f32> = decoded
             .operations

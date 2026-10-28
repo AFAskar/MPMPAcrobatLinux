@@ -450,7 +450,11 @@ fn unicode_font(doc: &mut Document, bytes: Vec<u8>, name: &str) -> Result<(Objec
 }
 // Reuse embedded TrueType faces and their actual metrics when the field's
 // requested font covers its text. Paid font bytes stay inside disposable PDFs.
-fn embedded_fonts(doc: &Document) -> Result<BTreeMap<String, Vec<u8>>> {
+struct EmbeddedFont {
+    bytes: Vec<u8>,
+    metrics: appearance::RichFontMetrics,
+}
+fn embedded_fonts(doc: &Document) -> Result<BTreeMap<String, EmbeddedFont>> {
     let mut result = BTreeMap::new();
     let form = resolved(doc, doc.catalog()?.get(b"AcroForm")?)?.as_dict()?;
     let Ok(resources) = form
@@ -488,8 +492,25 @@ fn embedded_fonts(doc: &Document) -> Result<BTreeMap<String, Vec<u8>>> {
         } else {
             stream.content.clone()
         };
-        if ttf_parser::Face::parse(&bytes, 0).is_ok() {
-            result.insert(String::from_utf8_lossy(key).into_owned(), bytes);
+        if let Ok(face) = ttf_parser::Face::parse(&bytes, 0) {
+            let bbox = face.global_bounding_box();
+            let fallback =
+                (f32::from(bbox.y_max) - f32::from(bbox.y_min)) / f32::from(face.units_per_em());
+            let bbox_height = descriptor
+                .get(b"FontBBox")
+                .ok()
+                .and_then(|v| resolved(doc, v).ok())
+                .and_then(|v| v.as_array().ok())
+                .and_then(|v| {
+                    Some((v.get(3)?.as_float().ok()? - v.get(1)?.as_float().ok()?) / 1000.)
+                })
+                .filter(|v| v.is_finite() && *v > 0.)
+                .unwrap_or(fallback);
+            let metrics = appearance::RichFontMetrics::from_face(&face, Some(bbox_height));
+            result.insert(
+                String::from_utf8_lossy(key).into_owned(),
+                EmbeddedFont { bytes, metrics },
+            );
         }
     }
     Ok(result)
@@ -843,29 +864,57 @@ impl Pdf {
                 } else {
                     appearance::display_text(f, s, &value)
                 };
-                let suitable = embedded.get(requested).filter(|bytes| {
-                    ttf_parser::Face::parse(bytes, 0).is_ok_and(|face| {
+                let suitable = embedded.get(requested).filter(|font| {
+                    ttf_parser::Face::parse(&font.bytes, 0).is_ok_and(|face| {
                         render_text
                             .chars()
                             .all(|c| c.is_control() || face.glyph_index(c).is_some())
                     })
                 });
-                let (appearance_font, content) = if let Some(bytes) = suitable {
+                let default_metrics = field_style::widget_font(&doc, w.id)?
+                    .and_then(|name| embedded.get(&name).map(|font| font.metrics));
+                let (appearance_font, content) = if let Some(font) = suitable {
                     if !font_cache.contains_key(requested) {
-                        let mapped =
-                            unicode_font(&mut doc, bytes.clone(), &format!("MPMB{requested}"))?;
+                        let mapped = unicode_font(
+                            &mut doc,
+                            font.bytes.clone(),
+                            &format!("MPMB{requested}"),
+                        )?;
                         font_cache.insert(requested.to_owned(), mapped);
                     }
                     let (id, bytes) = &font_cache[requested];
                     let face = ttf_parser::Face::parse(bytes, 0)?;
                     (
                         *id,
-                        appearance::content(&face, width, height, f, s, &value)?,
+                        appearance::content(
+                            &face,
+                            width,
+                            height,
+                            f,
+                            s,
+                            &value,
+                            Some(
+                                default_metrics
+                                    .map(|defaults| font.metrics.with_default_bounds(defaults))
+                                    .unwrap_or(font.metrics),
+                            ),
+                        )?,
                     )
                 } else {
                     (
                         font,
-                        appearance::content(&face, width, height, f, s, &value)?,
+                        appearance::content(
+                            &face,
+                            width,
+                            height,
+                            f,
+                            s,
+                            &value,
+                            default_metrics.map(|defaults| {
+                                appearance::RichFontMetrics::from_face(&face, None)
+                                    .with_default_bounds(defaults)
+                            }),
+                        )?,
                     )
                 };
 
