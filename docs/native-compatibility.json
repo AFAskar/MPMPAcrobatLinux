@@ -1463,5 +1463,37 @@
       "output/testing/native-table-1793187323552389557/table.json"
     ],
     "remaining": "Default style edits /DS /DA /Q, wider initial rich getters, mixed-face/decorated appearances and complete character/table persistence remain incomplete."
+  },
+  "initial_rich_getters": {
+    "status": "all initial rich text fields exactly match Reader in the three fixtures; broader edited styles and appearances incomplete",
+    "evidence": {
+      "2014": "output/testing/rich-initial-1793190374159866193/getters.json",
+      "2024": "output/testing/rich-initial-1793190159838317318/getters.json",
+      "ashnar": "output/testing/rich-initial-1793190495229915722/getters.json"
+    },
+    "fields": {
+      "2014": 68,
+      "2024": 72,
+      "ashnar": 58
+    },
+    "populated_fields": {
+      "2014": 5,
+      "2024": 5,
+      "ashnar": 17
+    },
+    "properties": [
+      "valueAsString",
+      "richText",
+      "multiline",
+      "readonly",
+      "alignment",
+      "textSize",
+      "textFont",
+      "textColor",
+      "defaultStyle",
+      "richValue"
+    ],
+    "comparison_normalization": "None. Every captured property matches exactly, with getter errors caught locally. Saved ASCII result, independent Reader UTF-16 checksum, Unicode sentinel and original scripts verified.",
+    "limits": "Initial rich fields only. No original actions replaced. Edited default styles, plain field styling, complete rich vocabulary and appearance fidelity remain incomplete."
   }
 }
