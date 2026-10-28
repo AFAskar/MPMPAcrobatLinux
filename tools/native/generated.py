@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Original companion, wild-shape and spell-generation workflows; immutable local evidence."""
-import hashlib,json,os,subprocess,sys,time
+import hashlib,json,os,shutil,subprocess,sys,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'tools/acrobat'))
@@ -8,11 +8,11 @@ from pypdf import PdfReader
 from verify import canonical_fields,inspect,script_hashes
 
 def main():
- folder=ROOT/'output/testing'/('native-generated-'+str(time.time_ns()));folder.mkdir(parents=True);report={'passed':False,'cases':[]}
+ folder=ROOT/'output/testing'/('native-generated-'+str(time.time_ns()));folder.mkdir(parents=True);binary=folder/'mpmb-reader';shutil.copy2(ROOT/'target/debug/mpmb-reader',binary);report={'passed':False,'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'cases':[]}
  def run(pdf,spec,label):
   scenario=folder/(label+'-scenario.json');evidence=folder/(label+'-report.json');scenario.write_text(json.dumps(spec))
   with (folder/(label+'.log')).open('w') as log:
-   result=subprocess.run([str(ROOT/'target/debug/mpmb-reader'),str(pdf),'--probe',str(scenario),str(evidence)],cwd=ROOT,stdout=log,stderr=log,timeout=360)
+   result=subprocess.run([str(binary),str(pdf),'--probe',str(scenario),str(evidence)],cwd=ROOT,stdout=log,stderr=log,timeout=360)
   data=json.loads(evidence.read_text());assert result.returncode==0 and data['passed'] and not data['diagnostics']['errors'],(label,data.get('error'),data.get('diagnostics',{}).get('errors'))
   return data,evidence
  try:

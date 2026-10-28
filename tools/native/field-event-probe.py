@@ -59,8 +59,8 @@ var iFileName = "Native field event probe.js";
 
 
 def main():
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--readiness',type=Path);parser.add_argument('--native-only',action='store_true');parser.add_argument('--rich-data',action='store_true',help='Inspect rich spans/default styles and persist large Reader traces for independent decoding');parser.add_argument('--style-data',action='store_true',help='Also measure defaultStyle copies and field-style coupling (requires --rich-data)');parser.add_argument('--field',default='Player Name');parser.add_argument('--fixture',choices=['2014','2024','ashnar'],default='2024');args=parser.parse_args()
-    assert not args.style_data or args.rich_data, '--style-data requires --rich-data'
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--readiness',type=Path);parser.add_argument('--native-only',action='store_true');parser.add_argument('--rich-data',action='store_true',help='Inspect rich spans/default styles and persist large Reader traces for independent decoding');parser.add_argument('--style-data',action='store_true',help='Also measure defaultStyle copies and field-style coupling (requires --rich-data)');parser.add_argument('--rich-events',action='store_true',help='Also measure rich event assignments/precedence and clearing (requires --rich-data)');parser.add_argument('--field',default='Player Name');parser.add_argument('--fixture',choices=['2014','2024','ashnar'],default='2024');args=parser.parse_args()
+    assert not (args.style_data or args.rich_events) or args.rich_data, 'Rich style/event probes require --rich-data'
     if not args.native_only:
         assert args.readiness and json.loads(args.readiness.read_text())['passed']
     folder=ROOT/'output/testing'/('field-events-'+str(time.time_ns()));folder.mkdir()
@@ -100,9 +100,44 @@ def main():
   run('defaultStyle assignment',function(){f.defaultStyle={alignment:'center',fontFamily:['Helvetica','sans-serif'],fontStretch:'normal',fontStyle:'italic',fontWeight:700,textColor:['RGB',1,0,0],textSize:11}},f);
   run('restore field style',function(){try{f.defaultStyle=styleBefore.defaultStyle}finally{f.textSize=styleBefore.size;f.textFont=styleBefore.font;f.textColor=styleBefore.color;f.alignment=styleBefore.alignment}},f);
 """
+        if args.rich_events:
+            cases += r"""
+  f.setAction('Validate',log+"var spans=event.richValue;if(spans){spans.forEach(function(s){s.linespacing=11});event.richValue=spans;}");
+  run('value NBSP with validated rich assignment',function(){f.value='alpha\u00a0beta'},f);
+  run('spans NBSP with validated rich assignment',function(){f.richValue=[{text:'alpha\u00a0beta'}]},f);
+  run('adjacent identical rich spans',function(){f.richValue=[{text:'first'},{text:'second'}]},f);
+  run('multiline value with validated rich assignment',function(){f.value='line1\nline2'},f);
+  f.setAction('Validate',log+"var spans=event.richValue;if(spans&&spans.length)spans[0].text='must not commit';");
+  run('validate rich getter copy',function(){f.value='copy original'},f);
+  f.setAction('Validate',log);
+  run('fractional rich span color',function(){f.richValue=[{text:'color',textColor:['RGB',0.25,0.5,0.75]}]},f);
+  run('empty text rich span',function(){f.richValue=[{text:''}]},f);
+
+  f.setAction('Validate',log+"event.richValue=[{text:'rich override',fontWeight:700}];");
+  run('validate rich override',function(){f.value='plain input'},f);
+  f.setAction('Validate',log+"event.richValue=[{text:'rich first'}];event.value='plain last';");
+  run('validate rich then plain',function(){f.value='input'},f);
+  f.setAction('Validate',log+"event.value='plain first';event.richValue=[{text:'rich last'}];");
+  run('validate plain then rich',function(){f.value='input'},f);
+  f.setAction('Keystroke',log+"event.richValue=[{text:'keystroke override'}];");f.setAction('Validate',log);
+  run('keystroke rich override',function(){f.value='input'},f);
+  run('keystroke rich override of styled input',function(){f.richValue=[{text:'styled input',fontWeight:700}]},f);
+  f.setAction('Keystroke',log);f.setAction('Format',log+"event.richValue=[{text:'formatted override',fontWeight:700}];");
+  run('format rich display',function(){f.value='stored original'},f);
+  f.setAction('Format',log+"event.value='formatted plain';");
+  run('format plain display',function(){f.value='stored second'},f);
+  f.setAction('Format',log);f.value='clear test';d.calculateNow();
+  run('rich clear nonempty with string',function(){f.richValue=''},f);
+  run('rich set nonempty string',function(){f.richValue='typed rich'},f);
+  f.value='style content';d.calculateNow();var textStyleSize=f.textSize;
+  run('existing rich content textSize coupling',function(){f.textSize=9},f);f.textSize=textStyleSize;
+  run('disable styled rich content',function(){f.richText=false},f);
+  run('reenable styled rich content',function(){f.richText=true},f);
+  f.setAction('Keystroke',log);f.setAction('Validate',log);f.setAction('Format',log);
+"""
         addon=addon.replace("  f.richText=saved.richText;\n  run('text setter array'", cases+"  f.richText=saved.richText;\n  run('text setter array'")
     (folder/'probe-addon.js').write_text(addon)
-    report={'passed':False,'fixture':args.fixture,'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'addon_sha256':hashlib.sha256(addon.encode()).hexdigest(),'field':args.field,'rich_data':args.rich_data,'style_data':args.style_data,'transport':'ASCII-escaped JSON with a Unicode sentinel; Reader saved diagnostic checksum verified','readiness':str(args.readiness) if args.readiness else None};print(folder,flush=True)
+    report={'passed':False,'fixture':args.fixture,'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'addon_sha256':hashlib.sha256(addon.encode()).hexdigest(),'field':args.field,'rich_data':args.rich_data,'style_data':args.style_data,'rich_events':args.rich_events,'transport':'ASCII-escaped JSON with a Unicode sentinel; Reader saved diagnostic checksum verified','readiness':str(args.readiness) if args.readiness else None};print(folder,flush=True)
     try:
         spec={'dialogs':[{'result':'ok'}]*30,'alerts':[1]*30,'steps':[{'op':'advance','ms':4100},{'op':'eval','code':"getField('User Script').value="+json.dumps(addon)},{'op':'eval','code':"__host.command('RunUserScript(false)')"},{'op':'advance','ms':1000},{'op':'eval','code':"if(/[^\x00-\x7f]/.test(What('PC Name')))throw Error('Diagnostic transport must be ASCII');JSON.parse(What('PC Name'))"}]}
         scenario,evidence=folder/'native-scenario.json',folder/'native-report.json';scenario.write_text(json.dumps(spec))
