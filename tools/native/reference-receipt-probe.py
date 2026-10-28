@@ -17,6 +17,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('source', type=Path, help='Disposable real Reader-generated spell output')
     parser.add_argument('--preflight', type=Path, required=True)
+    parser.add_argument('--exercise-rich-events', action='store_true', help='Stress rendering/calculation before checking small and oversized result receipts')
     args = parser.parse_args(); assert json.loads(args.preflight.read_text())['passed']
     assert args.source.resolve().is_relative_to(ROOT / 'output/testing')
     original = next((ROOT / 'Testing').glob('*_2014_*.pdf'))
@@ -34,8 +35,16 @@ def main():
             remote = 'runs/receipt-control-' + str(time.time_ns()) + '.pdf'; path = c.remote_path(remote)
             subprocess.run(c.SCP + [str(args.source.resolve()), 'mpmb-test@127.0.0.1:MPMB-Testing/' + remote], check=True, capture_output=True)
             c.ensure_document(path)
+            if args.exercise_rich_events:
+                stress = "var iFileName='Receipt rendering stress.js';(function(d){var f=d.getField('Player Name'),value=f.valueAsString,rich=f.richText;try{for(var i=0;i<24;i++){f.richText=i%2===0;f.value='Receipt rendering cycle '+i;d.calculateNow();}}finally{f.richText=rich;f.value=value;}})(tDoc);"
+                c.script('set', path=path, values={'User Script': stress})
+                stress_request = c.script_submit('call', path=path, name='RunUserScript', args=[False])
+                report['rendering_stress_request'] = stress_request
+                completed = c.script_result(stress_request, timeout=180)
+                assert completed.get('value') is True, completed
+                report['rendering_stress_completed'] = True
             ident = c.script_submit('read', path=path, fields=names)
-            deadline = time.monotonic() + 30; elements = []
+            deadline = time.monotonic() + 30; elements = []; receipts = []
             while time.monotonic() < deadline:
                 elements = c.command('inspect')
                 receipts = [e for e in elements if e.get('name', '').startswith('MPMB_RESULT') and json.loads(e['name'][11:].strip())['id'] == ident]

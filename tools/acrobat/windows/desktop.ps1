@@ -246,15 +246,16 @@ function Acknowledge-Reader-Result($element) {
  if([DesktopNative]::GetForegroundWindow() -ne $owner){throw 'Reader result dialog could not receive focus'}
  $bounds=[DesktopNative]::Bounds([IntPtr]$button.handle)
  $x=[int]($bounds[0]+$bounds[2]/2);$y=[int]($bounds[1]+$bounds[3]/2)
- if([DesktopNative]::HandleAt($x,$y) -eq [IntPtr]$button.handle){
+ if([DesktopNative]::FocusedControl() -eq [IntPtr]$button.handle){
+  # Prefer the already-focused control: heavy rich-text updates can delay
+  # pointer delivery even after the alert has become visible.
+  [DesktopNative]::Key(0x20)
+ }elseif([DesktopNative]::HandleAt($x,$y) -eq [IntPtr]$button.handle){
   [DesktopNative]::SetCursorPos($x,$y)|Out-Null
   [DesktopNative]::mouse_event(2,0,0,0,[UIntPtr]::Zero)
   [DesktopNative]::mouse_event(4,0,0,0,[UIntPtr]::Zero)
  }else{
-  # Oversized app.alert bodies can clip the button behind the taskbar. Never
-  # click through it; Space is allowed only on this exact focused native OK.
-  if([DesktopNative]::FocusedControl() -ne [IntPtr]$button.handle){throw 'Occluded Reader result button does not own keyboard focus'}
-  [DesktopNative]::Key(0x20)
+  throw 'Reader result button is occluded and does not own keyboard focus'
  }
  $watch=[Diagnostics.Stopwatch]::StartNew()
  do {
