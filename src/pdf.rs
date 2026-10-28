@@ -741,15 +741,17 @@ impl Pdf {
                 let width = (rect[2] - rect[0]).abs() as f32;
                 let height = (rect[3] - rect[1]).abs() as f32;
                 let requested = s["textFont"].as_str().unwrap_or(&f.text_font);
-                let render_text =
-                    if let Some(spans) = s["richValue"].as_array().filter(|v| !v.is_empty()) {
-                        spans
-                            .iter()
-                            .filter_map(|v| v["text"].as_str())
-                            .collect::<String>()
-                    } else {
-                        appearance::display_text(f, s, &value)
-                    };
+                let render_text = if let Some(spans) = s["richValue"]
+                    .as_array()
+                    .filter(|v| !v.is_empty() || s["richRenderActive"] == true)
+                {
+                    spans
+                        .iter()
+                        .filter_map(|v| v["text"].as_str())
+                        .collect::<String>()
+                } else {
+                    appearance::display_text(f, s, &value)
+                };
                 let suitable = embedded.get(requested).filter(|bytes| {
                     ttf_parser::Face::parse(bytes, 0).is_ok_and(|face| {
                         render_text

@@ -1412,5 +1412,18 @@
     "generated": "output/testing/native-generated-1793167848194981322/generated.json",
     "table": "output/testing/native-table-1793168367856154021/table.json",
     "remaining": "Raw rich getters and event.richValue payloads, edited /DS /RV /DA/appearance persistence, broader font/color mappings and complete desktop/style fidelity remain incomplete. Plain-field defaultStyle assignment and non-RGB/grayscale style colors fail explicitly."
+  },
+  "rich_runtime": {
+    "status": "partial; all 49 measured event cases exactly match Reader; edited persistence remains incomplete",
+    "comparison": "output/testing/rich-runtime-comparison-1793171514225698718.json",
+    "negative_controls": "output/testing/rich-runtime-negative-controls-1793173202998540234/verification.json",
+    "tests": 64,
+    "scope": "Raw rich spans, copied getters, K/V payloads and validation precedence, Format display separation, ignored string assignments, adjacent/empty spans and color normalization. Layout retains paragraph ends, explicit line spacing, indentation and explicit empty display.",
+    "regressions": [
+      "output/testing/native-generated-1793172354832619763/generated.json",
+      "output/testing/native-skill-layout-1793173175524339123/skill-layout.json",
+      "output/testing/native-table-1793173457611198417/table.json"
+    ],
+    "remaining": "Edited /RV /DS /DA persistence, style-only appearance updates, mixed-font/decorations rendering, all class/table choices and full Reader persistence coverage remain incomplete."
   }
 }

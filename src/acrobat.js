@@ -35,7 +35,24 @@ var __host = (function () {
   function copyData(v){return v===undefined?undefined:JSON.parse(JSON.stringify(v));}
   function invalidRichGet(){const e=new Error('Get not possible, invalid or unknown.');e.name='InvalidGetError';throw e;}
   function richStyleColor(value){if(!Array.isArray(value))throw Error('Invalid text color');let rgb;if(value[0]==='RGB'&&value.length===4)rgb=value.slice(1);else if(value[0]==='G'&&value.length===2)rgb=[value[1],value[1],value[1]];else return unsupported('Field.defaultStyle color '+value[0]);if(rgb.some(v=>!Number.isFinite(Number(v))))throw Error('Invalid text color');return ['RGB',...rgb.map(v=>Math.round(Math.round(Math.max(0,Math.min(1,Number(v)))*255)/255*65536)/65536)];}
-  function reformat(f){if(!f._actions.F||calculating||formatting.has(f.name))return;formatting.add(f.name);try{f._formatted=eventRun(f,'F',f.value).value;}finally{formatting.delete(f.name);}}
+  function textValue(f,value){return String(value).replace(/\u00a0/g,' ').replace(/\r\n|\r|\n/g,f.multiline?'\r':' ');}
+  function richChanges(value){return (String(value).match(/[^\r]*\r|[^\r]+$/g)||[]).map(text=>({changeMarker:true,text}));}
+  function richText(spans){return (spans||[]).map(span=>span.text===undefined?'':String(span.text)).join('');}
+  function normalizeRich(f,input){
+    if(!Array.isArray(input))return [];
+    const result=[];
+    for(let i=0;i<input.length;i++){
+      const item=input[i];if(!item||typeof item!=='object'||Array.isArray(item))throw Error('Invalid rich span');
+      const span=Object.assign(copyData(f._defaultStyle),copyData(item));delete span.changeMarker;
+      span.text=textValue(f,item.text===undefined?'':item.text);
+      if(!span.endParagraph||i===input.length-1)delete span.endParagraph;
+      if(item.textColor){let rgb;if(item.textColor[0]==='RGB')rgb=item.textColor.slice(1);else if(item.textColor[0]==='G')rgb=[item.textColor[1],item.textColor[1],item.textColor[1]];else return unsupported('Field.richValue color '+item.textColor[0]);span.textColor=['RGB',...rgb.map(v=>Math.round(Math.floor(Math.max(0,Math.min(1,Number(v)))*65535/256)/255*65536)/65536)];}
+      if(span.text||span.endParagraph)result.push(span);
+    }
+    return result;
+  }
+  function formatResult(f,e){const rich=f.richText?(e._valueWritten?null:normalizeRich(f,e._richData)):undefined;if(JSON.stringify(f._formatted)!==JSON.stringify(e.value)||JSON.stringify(f._formattedRichValue)!==JSON.stringify(rich))revision++;f._formatted=e.value;f._formattedRichValue=rich;}
+  function reformat(f){if(!f._actions.F||calculating||formatting.has(f.name))return;formatting.add(f.name);try{formatResult(f,eventRun(f,'F',f.value));}finally{formatting.delete(f.name);}}
   function addField(n,x) {
     const f={name:n,value:x.value,defaultValue:x.default_value,userName:x.user_name,submitName:x.submit_name,
       type:({Tx:'text',Ch:x.flags&131072?'combobox':'listbox',Btn:x.flags&65536?'button':x.flags&32768?'radiobutton':'checkbox'})[x.kind],
@@ -62,26 +79,28 @@ var __host = (function () {
     function fontInfo(font){if(font===(x.text_font||'Helvetica'))return {family:initialStyle.fontFamily[0],weight:initialStyle.fontWeight,style:initialStyle.fontStyle};const suffix=/(?:-)?(BoldItalic|BoldOblique|Bold|Italic|Oblique)$/.exec(font);let family=suffix?font.slice(0,suffix.index):font;family=({'SegoeUI':'Segoe UI','Times-Roman':'Times'})[family]||family;return {family,weight:suffix&&/Bold/.test(suffix[1])?700:400,style:suffix&&/Italic|Oblique/.test(suffix[1])?'italic':'normal'};}
     function fontName(style){const family=style.fontFamily[0],bold=Number(style.fontWeight)>=600,italic=/italic|oblique/i.test(style.fontStyle);if(family===initialStyle.fontFamily[0]&&Number(style.fontWeight)===Number(initialStyle.fontWeight)&&style.fontStyle===initialStyle.fontStyle)return x.text_font||'Helvetica';if(family==='Helvetica'||family==='Courier')return family+(bold||italic?'-'+(bold?'Bold':'')+(italic?'Oblique':''):'');if(family==='Times')return 'Times-'+(bold?(italic?'BoldItalic':'Bold'):(italic?'Italic':'Roman'));const base=family==='Segoe UI'?'SegoeUI':family;if(bold||italic)gap('Field.defaultStyle nonstandard font face mapping');return base+(bold||italic?'-'+(bold?'Bold':'')+(italic?'Italic':''):'');}
     Object.defineProperty(f,'defaultStyle',{enumerable:true,get(){if(x.kind!=='Tx'||!f.richText)return invalidRichGet();return copyData(f._defaultStyle)},set(v){if(x.kind!=='Tx'||!f.richText)return unsupported('Field.defaultStyle assignment on plain field');if(!v||typeof v!=='object'||Array.isArray(v))throw Error('Invalid default style');const next=Object.assign(copyData(f._defaultStyle),copyData(v));if(!Array.isArray(next.fontFamily)||!next.fontFamily.length||!Number.isFinite(Number(next.textSize))||Number(next.textSize)<0||!['left','center','right'].includes(next.alignment))throw Error('Invalid default style');next.textColor=richStyleColor(next.textColor);const font=fontName(next);gap('Field.defaultStyle appearance/persistence');styleBatch=true;try{f.textSize=Number(next.textSize);f.textFont=font;f.textColor=next.textColor;f.alignment=next.alignment;f._defaultStyle=next;}finally{styleBatch=false;}reformat(f);}});
-    for(const prop of ['textSize','textFont','richText','richValue','textColor','fillColor','strokeColor','alignment','lineWidth','borderStyle']){
+    for(const prop of ['textSize','textFont','richText','textColor','fillColor','strokeColor','alignment','lineWidth','borderStyle']){
 
-      let stored=f[prop];Object.defineProperty(f,prop,{enumerable:true,get(){return prop==='textColor'?copyData(stored):stored},set(v){let next=prop==='richText'?!!v:v;let styleUpdate=null;if(prop==='textSize'){next=Number(v);if(!Number.isFinite(next)||next<0)throw Error('Invalid text size');styleUpdate={textSize:next};}else if(prop==='textFont'){next=String(v);const info=fontInfo(next);styleUpdate={fontFamily:[info.family,...f._defaultStyle.fontFamily.slice(1)],fontWeight:info.weight,fontStyle:info.style};}else if(prop==='textColor'){next=copyData(v);styleUpdate={textColor:richStyleColor(next)};}else if(prop==='alignment'){next=String(v);if(!['left','center','right'].includes(next))throw Error('Invalid alignment');styleUpdate={alignment:next};}if(JSON.stringify(next)!==JSON.stringify(stored)){gap('Field.'+prop+' appearance/persistence');revision++;}stored=next;if(styleUpdate){Object.assign(f._defaultStyle,styleUpdate);if(!styleBatch)reformat(f);}if(prop==='richText'){if(stored)f.value=f.valueAsString;else reformat(f);}if(prop==='richValue'){if(Array.isArray(v))f.value=v.map(span=>span.text||'').join('');else if(v==='')f.value='';}}});
+      let stored=f[prop];Object.defineProperty(f,prop,{enumerable:true,get(){return prop==='textColor'?copyData(stored):stored},set(v){let next=prop==='richText'?!!v:v;let styleUpdate=null;if(prop==='textSize'){next=Number(v);if(!Number.isFinite(next)||next<0)throw Error('Invalid text size');styleUpdate={textSize:next};}else if(prop==='textFont'){next=String(v);const info=fontInfo(next);styleUpdate={fontFamily:[info.family,...f._defaultStyle.fontFamily.slice(1)],fontWeight:info.weight,fontStyle:info.style};}else if(prop==='textColor'){next=copyData(v);styleUpdate={textColor:richStyleColor(next)};}else if(prop==='alignment'){next=String(v);if(!['left','center','right'].includes(next))throw Error('Invalid alignment');styleUpdate={alignment:next};}if(JSON.stringify(next)!==JSON.stringify(stored)){gap('Field.'+prop+' appearance/persistence');revision++;}stored=next;if(styleUpdate){Object.assign(f._defaultStyle,styleUpdate);if(!styleBatch)reformat(f);}if(prop==='richText'){if(stored)f.value=f.valueAsString;else reformat(f);}}});
     }
     for(const prop of ['userName','submitName']){let stored=f[prop];Object.defineProperty(f,prop,{enumerable:true,get(){return stored},set(v){stored=String(v)}})}
     Object.defineProperty(f,'display',{enumerable:true,get(){return widgetDisplay(f,0)},set(v){displayFlags(v,4);f._fallbackDisplay=Number(v);for(let i=0;i<f._widgets.length;i++)setWidgetDisplay(f,i,v);}});
     for(const prop of ['readonly']){let stored=f[prop];Object.defineProperty(f,prop,{enumerable:true,get(){return stored},set(v){if(stored!==v)revision++;stored=v}})}
-    let raw=x.value;
+    let raw=x.value,richInput,settingRich=false;
+    f._richRaw=copyData(x.rich_value||(x.rich_metadata&&x.rich_metadata.spans)||[]);if(f.richText&&!f._richRaw.length&&String(raw))f._richRaw=normalizeRich(f,[{text:String(raw)}]);
+    Object.defineProperty(f,'richValue',{enumerable:true,get(){if(x.kind!=='Tx'||!f.richText)return invalidRichGet();return copyData(f._richRaw)},set(v){if(x.kind!=='Tx'||!f.richText)return unsupported('Field.richValue assignment on plain field');if(typeof v==='string'){reformat(f);return;}if(!Array.isArray(v))return unsupported('Field.richValue non-array assignment');const previous=richInput,wasSetting=settingRich;richInput=copyData(v);settingRich=true;try{f.value=richText(v);}finally{richInput=previous;settingRich=wasSetting;}}});
     Object.defineProperty(f,'value',{enumerable:true,get(){return x.kind!=='Btn'&&typeof raw==='string'&&/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(raw)?Number(raw):raw},set(v){
       // Reader converts null/undefined to text, then runs the commit keystroke
       // and validation actions. Numeric MPMB fields reject that text themselves.
       // Text fields stringify arrays as comma-separated text, never JSON.
       if(v===undefined||v===null||(typeof v==='object'&&!(x.kind==='Ch'&&x.flags&2097152&&Array.isArray(v))))v=String(v);
       if(x.kind==='Btn'&&!(x.flags&65536)&&v==='')v='Off';
-      if(typeof v==='string'&&x.kind==='Tx')v=v.replace(/\u00a0/g,' ').replace(/\r\n|\r|\n/g,f.multiline?'\r':' ');
+      if(typeof v==='string'&&x.kind==='Tx')v=textValue(f,v);
       if(!f.richText&&String(raw)===String(v)){reformat(f);return;}
       if(data.trace&&data.trace.includes(n))__log(n+': '+String(raw)+' -> '+String(v)+'\n'+new Error().stack);
-      if(assigning.has(n)){raw=v;return}
+      if(assigning.has(n)){raw=v;if(f.richText)f._richRaw=normalizeRich(f,[{text:String(v)}]);return}
       assigning.add(n);
-      try {const original=v,text=String(v);let k=eventRun(f,'K',text);if(!k.rc){reformat(f);return;}let e=eventRun(f,'V',k.value);if(e.rc){const committed=String(e.value)===text?original:e.value;if(String(raw)!==String(committed))formatDirty.add(n);if(raw!==committed)revision++;raw=committed;f._formatted=undefined;if(globalThis.event&&event.target===f&&event.name==='Calculate')event.value=e.value;if(globalThis.calculate&&globalThis.app&&app.calculate&&!calculating)calculateNow();reformat(f);}} finally{assigning.delete(n)}
+      try {const original=v,text=String(v),input=settingRich?copyData(richInput):null;let k=eventRun(f,'K',text,undefined,f.richText?(settingRich?(text?input:null):(text?richChanges(text):null)):null);if(!k.rc){reformat(f);return;}let e=eventRun(f,'V',k.value,undefined,k._richData);if(e.rc){let committed=String(e.value)===text?original:e.value;let spans;if(f.richText){if(e._valueWritten||k._valueWritten){spans=normalizeRich(f,[{text:String(e.value)}]);}else if(e._richWritten){spans=normalizeRich(f,e._richData);committed=textValue(f,richText(spans));}else spans=normalizeRich(f,settingRich?input:[{text:String(e.value)}]);}if(String(raw)!==String(committed))formatDirty.add(n);if(raw!==committed||spans&&JSON.stringify(spans)!==JSON.stringify(f._richRaw))revision++;if(spans&&JSON.stringify(spans)!==JSON.stringify(f._richRaw))gap('Field.richValue appearance/persistence');raw=committed;if(spans)f._richRaw=spans;f._formatted=undefined;f._formattedRichValue=undefined;if(globalThis.event&&event.target===f&&event.name==='Calculate')event.value=committed;if(globalThis.calculate&&globalThis.app&&app.calculate&&!calculating)calculateNow();reformat(f);}} finally{assigning.delete(n)}
     }});
     Object.defineProperty(f,'valueAsString',{get(){return String(raw)}});
     Object.defineProperty(f,'rect',{get(){return widgetRect(f,0)},set(r){setWidgetRect(f,0,r)}});
@@ -102,7 +121,7 @@ var __host = (function () {
     for(const n of names)for(const w of fields[n]._widgets)if(w.page>=index)w.page++;
     for(const n of Object.keys(t.fields)){
       const x=JSON.parse(JSON.stringify(t.fields[n])),base=fields[n];
-      if(base){x.value=base.valueAsString;x.user_name=base.userName;x.submit_name=base.submitName;x.display=base.display;x.rich_value=base.richValue;}
+      if(base){x.value=base.valueAsString;x.user_name=base.userName;x.submit_name=base.submitName;x.display=base.display;x.rich_value=copyData(base._richRaw);x.rich_metadata=Object.assign({},x.rich_metadata,{defaultStyle:copyData(base._defaultStyle),spans:copyData(base._richRaw)});}
       for(const w of x.widgets){if(base){const live=base._widgets.filter(source=>JSON.stringify(source.id)===JSON.stringify(w.id))[0];if(live&&live.flags!==undefined)w.flags=live.flags;}w.page=index;}
       if(rename)addField(prefix+n,x);else{if(!fields[n])throw Error('Missing shared template field '+n);fields[n]._widgets.push(...x.widgets);}
 
@@ -121,9 +140,14 @@ var __host = (function () {
       if(hadWidgets&&!f._widgets.length){names.splice(i,1);delete fields[n];let c=data.order.indexOf(n);if(c>=0)data.order.splice(c,1);}}
     journal.push({op:'deletePages',start,end});globalThis.numPages-=end-start+1;globalThis.pageNum=Math.min(globalThis.pageNum,globalThis.numPages-1);globalThis.numFields=names.length;revision++;
   }
-  function eventRun(f,key,value,extra) {
+  function eventRun(f,key,value,extra,richInput) {
     let previous=globalThis.event;
     let e=Object.assign({target:f,targetName:f.name,source:fields[data.focus]||f,name:({C:'Calculate',V:'Validate',K:'Keystroke',F:'Format',U:'Mouse Up'})[key]||key,type:'Field',value:['K','V','C','F'].includes(key)?String(value):value,rc:true,willCommit:key==='K',change:'',selStart:0,selEnd:0},extra||{});
+    let eventValue=e.value,valueWritten=false,richWritten=false;
+    let richData=richInput===undefined?((key==='K'||key==='V')?(String(value)?richChanges(value):null):copyData(f._richRaw||[])):copyData(richInput);
+    Object.defineProperty(e,'value',{enumerable:true,get(){return eventValue},set(v){eventValue=v;valueWritten=true;}});
+    Object.defineProperty(e,'richValue',{enumerable:true,get(){if(f.type!=='text'||!f.richText||!['K','V','C','F'].includes(key))return invalidRichGet();return copyData(richData)},set(v){if(f.type!=='text'||!f.richText)return unsupported('Event.richValue on plain field');if(v!==null&&!Array.isArray(v))return unsupported('Event.richValue non-array assignment');richData=copyData(v);richWritten=true;}});
+    Object.defineProperties(e,{_valueWritten:{get(){return valueWritten}},_richWritten:{get(){return richWritten}},_richData:{get(){return copyData(richData)}}});
     globalThis.event=e;
     try {if(f._actions[key]) (0,eval)(f._actions[key]);return e;}
     catch(err){errors.push({stage:'field',field:f.name,event:key,error:String(err),stack:err.stack});throw err}
@@ -134,7 +158,7 @@ var __host = (function () {
     calculating=true;
     // A setter refreshes its own Format action. Calculation commits defer that
     // refresh until the pass finishes; unchanged fields do not run commit hooks.
-    try {let passes=0; do {pending=false;for(const n of data.order){let f=fields[n];if(!f)throw Error('Missing calculation target '+n);if(f._actions.C){const e=eventRun(f,'C',f.value);if(e.rc)f.value=e.value;}}if(++passes>8)throw Error('calculation did not settle');}while(pending);for(const n of names.slice()){const f=fields[n];if(f&&f._actions.F&&(data.order.includes(n)||(formatDirty.has(n)&&typeof f.value==='number'&&!f.richText)))f._formatted=eventRun(f,'F',f.value).value;}formatDirty.clear();}finally{calculating=false}
+    try {let passes=0; do {pending=false;for(const n of data.order){let f=fields[n];if(!f)throw Error('Missing calculation target '+n);if(f._actions.C){const e=eventRun(f,'C',f.value);if(e.rc)f.value=e.value;}}if(++passes>8)throw Error('calculation did not settle');}while(pending);for(const n of names.slice()){const f=fields[n];if(f&&f._actions.F&&(data.order.includes(n)||(formatDirty.has(n)&&typeof f.value==='number'&&!f.richText)))formatResult(f,eventRun(f,'F',f.value));}formatDirty.clear();}finally{calculating=false}
   }
   function edit(n,v) {
     let f=fields[n];if(!f)throw Error('Unknown field '+n);if(f.readonly)throw Error('Read-only field '+n);
@@ -207,7 +231,7 @@ var __host = (function () {
     exportDataObject(params){if(typeof params==='string')params={cName:params};const result=JSON.parse(__attachment(JSON.stringify(params)));attachmentExports.push(result);},
     print(params){const result=JSON.parse(__print(JSON.stringify({params,state:JSON.parse(__host.snapshot())})));printJobs.push(result);return undefined},
     ready(){let n=0;while(!globalThis.calculate||!app.calculate||globalThis.delay){let t=Array.from(timers.values()).sort((a,b)=>a.at-b.at)[0];if(!t||++n>100)throw Error('Document calculations suspended without a resumable timer');advance(Math.max(0,t.at-clock));}return true},
-    snapshot(){let o={__structure:journal,__order:data.order};if(data.bookmarksChanged)o.__bookmarks=bookmarkRoot;for(const n of names){let f=fields[n];o[n]={value:Array.isArray(f.value)?f.value:f.valueAsString,icon:f._icon,caption:f._caption,captions:f._captions,actions:f._modifiedActions,widgets:f._widgets,currentValueIndices:f.currentValueIndices,textSize:f.textSize,alignment:f.alignment,multiline:f.multiline,textColor:f.textColor,textFont:f.textFont,richText:f.richText,richValue:f.richValue,defaultStyle:copyData(f._defaultStyle),formatted:f._formatted===undefined?f.valueAsString:f._formatted,display:f.display,userName:f.userName,submitName:f.submitName,readonly:f.readonly,items:f.items};}return JSON.stringify(o)},
+    snapshot(){let o={__structure:journal,__order:data.order};if(data.bookmarksChanged)o.__bookmarks=bookmarkRoot;for(const n of names){let f=fields[n];o[n]={value:Array.isArray(f.value)?f.value:f.valueAsString,icon:f._icon,caption:f._caption,captions:f._captions,actions:f._modifiedActions,widgets:f._widgets,currentValueIndices:f.currentValueIndices,textSize:f.textSize,alignment:f.alignment,multiline:f.multiline,textColor:f.textColor,textFont:f.textFont,richText:f.richText,rawRichValue:copyData(f._richRaw),richValue:f.richText?(f._formattedRichValue===null?[]:copyData(f._formattedRichValue===undefined?f._richRaw:f._formattedRichValue)):[],richRenderActive:!!f.richText&&f._formattedRichValue!==null,defaultStyle:copyData(f._defaultStyle),formatted:f._formatted===undefined?f.valueAsString:f._formatted,display:f.display,userName:f.userName,submitName:f.submitName,readonly:f.readonly,items:f.items};}return JSON.stringify(o)},
     timer(code,ms){let id=++timerId;timers.set(id,{id,code:String(code),at:clock+Math.max(1,Number(ms)||1)});return id},clear(id){timers.delete(id)},
     diagnostics(){return JSON.stringify({gaps,errors,repairs,printJobs,attachmentExports,timers:timers.size,field_count:names.length,menus:Object.keys(menus)})}
   };

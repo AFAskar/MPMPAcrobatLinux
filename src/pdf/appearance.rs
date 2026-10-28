@@ -5,6 +5,7 @@ struct Glyph {
     c: char,
     size: f32,
     color: [f32; 3],
+    spacing: Option<f32>,
 }
 fn width(face: &ttf_parser::Face<'_>, g: &Glyph) -> f32 {
     if g.c == '\n' {
@@ -25,12 +26,14 @@ fn lines(
     let mut result = Vec::new();
     let mut line: Vec<Glyph> = Vec::new();
     let mut current = 0.;
+    let mut soft_start = false;
     for glyph in glyphs {
         if glyph.c == '\n' {
             // A blank rich line still carries the newline span's font size.
             line.push(glyph);
             result.push(std::mem::take(&mut line));
             current = 0.;
+            soft_start = false;
             continue;
         }
         let added = width(face, &glyph);
@@ -44,10 +47,12 @@ fn lines(
                 result.push(std::mem::take(&mut line));
                 current = 0.;
             }
+            soft_start = line.is_empty();
         }
-        if glyph.c == ' ' && line.is_empty() {
+        if glyph.c == ' ' && line.is_empty() && soft_start {
             continue;
         }
+        soft_start = false;
         current += added;
         line.push(glyph);
     }
@@ -103,7 +108,9 @@ pub(super) fn content(
     let wrap = state["multiline"]
         .as_bool()
         .unwrap_or(field.flags & 4096 != 0);
-    let spans = state["richValue"].as_array().filter(|v| !v.is_empty());
+    let spans = state["richValue"]
+        .as_array()
+        .filter(|v| !v.is_empty() || state["richRenderActive"] == true);
     let explicit = state["textSize"].as_f64().unwrap_or(field.text_size) as f32;
     let mut size = if explicit > 0. {
         explicit
@@ -126,12 +133,21 @@ pub(super) fn content(
                     } else {
                         color
                     };
-                    span["text"]
-                        .as_str()
-                        .unwrap_or("")
-                        .replace('\r', "\n")
-                        .chars()
-                        .map(move |c| Glyph { c, size, color })
+                    let mut text = span["text"].as_str().unwrap_or("").replace('\r', "\n");
+                    if span["endParagraph"] == true && !text.ends_with('\n') {
+                        text.push('\n');
+                    }
+                    let spacing = span["linespacing"]
+                        .as_f64()
+                        .map(|n| n as f32)
+                        .filter(|n| *n > 0.);
+                    text.chars()
+                        .map(move |c| Glyph {
+                            c,
+                            size,
+                            color,
+                            spacing,
+                        })
                         .collect::<Vec<_>>()
                 })
                 .collect()
@@ -139,7 +155,12 @@ pub(super) fn content(
             formatted
                 .replace('\r', "\n")
                 .chars()
-                .map(|c| Glyph { c, size, color })
+                .map(|c| Glyph {
+                    c,
+                    size,
+                    color,
+                    spacing: None,
+                })
                 .collect()
         }
     };
@@ -162,6 +183,10 @@ pub(super) fn content(
     let line_sizes: Vec<f32> = laid
         .iter()
         .map(|line| line.iter().map(|g| g.size).reduce(f32::max).unwrap_or(size))
+        .collect();
+    let line_spacings: Vec<Option<f32>> = laid
+        .iter()
+        .map(|line| line.iter().filter_map(|g| g.spacing).reduce(f32::max))
         .collect();
     let units = face.units_per_em() as f32;
     let ascent = face.ascender() as f32 / units;
@@ -223,7 +248,9 @@ pub(super) fn content(
             x += run.iter().map(|g| width(face, g)).sum::<f32>();
             start = end;
         }
-        y -= if spans.is_some() {
+        y -= if let Some(spacing) = line_spacings[line_index] {
+            spacing
+        } else if spans.is_some() {
             let next = line_sizes.get(line_index + 1).copied().unwrap_or(line_size);
             line_size * (1. - ascent) + next * ascent
         } else {
@@ -267,6 +294,54 @@ mod tests {
         assert_eq!(field.value, json!("10+Dex"));
     }
     #[test]
+    fn explicit_rich_indent_survives_start_and_paragraph_break() {
+        let bytes = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
+        let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
+        let glyphs = "  A\n  B"
+            .chars()
+            .map(|c| Glyph {
+                c,
+                size: 7.,
+                color: [0.; 3],
+                spacing: Some(11.),
+            })
+            .collect();
+        let layout = lines(&face, glyphs, 100., true);
+        assert_eq!(layout.len(), 2);
+        assert_eq!(layout[0].iter().map(|g| g.c).collect::<String>(), "  A\n");
+        assert_eq!(layout[1].iter().map(|g| g.c).collect::<String>(), "  B");
+    }
+    #[test]
+    fn explicit_empty_rich_display_does_not_fall_back_to_canonical_text() {
+        let bytes = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
+        let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
+        let output = content(
+            &face,
+            100.,
+            50.,
+            &field(),
+            &json!({"richRenderActive":true,"richValue":[],"textSize":7}),
+            "canonical text",
+        )
+        .unwrap();
+        assert!(!String::from_utf8(output).unwrap().contains("Tj"));
+    }
+    #[test]
+    fn rich_paragraph_flags_and_explicit_spacing_control_baselines() {
+        let bytes = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
+        let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
+        let output = content(&face,100.,50.,&field(),&json!({"richRenderActive":true,"richValue":[{"text":"A","textSize":7,"linespacing":11,"endParagraph":true},{"text":"B","textSize":7,"linespacing":11}],"textSize":7}),"AB").unwrap();
+        let decoded = lopdf::content::Content::decode(&output).unwrap();
+        let baselines: Vec<f32> = decoded
+            .operations
+            .iter()
+            .filter(|op| op.operator == "Tm")
+            .map(|op| op.operands[5].as_float().unwrap())
+            .collect();
+        assert_eq!(baselines.len(), 2);
+        assert!((baselines[0] - baselines[1] - 11.).abs() < 0.001);
+    }
+    #[test]
     fn blank_rich_lines_preserve_the_newline_font_size() {
         let bytes = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
         let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
@@ -276,6 +351,7 @@ mod tests {
                 c,
                 size,
                 color: [0.; 3],
+                spacing: None,
             })
             .collect();
         let layout = lines(&face, glyphs, 100., true);

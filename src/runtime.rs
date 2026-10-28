@@ -485,6 +485,22 @@ mod tests {
         host("var saved;globalThis.__dialog=function(){return JSON.stringify({result:'ok'})};__host.execDialog({description:{elements:[]},initialize:function(d){d.load({list:{A:-1}});d.insertEntryInList({list:{B:-2}});d.focus('list')},ok:function(d){saved=d.store().list},commit:function(d){d.removeAllEntriesFromList('list')}});saved.A===-1&&saved.B===-2");
     }
     #[test]
+    fn rich_getters_copy_normalized_spans_and_string_assignments_only_format() {
+        host("var f=getField('A');f.richText=true;f.richValue=[{text:'alpha\\u00a0beta',fontWeight:700},{text:'second',endParagraph:true}];var copy=f.richValue;copy[0].text='changed';var good=f.valueAsString==='alpha betasecond'&&f.richValue[0].text==='alpha beta'&&f.richValue[0].fontWeight===700&&!('endParagraph' in f.richValue[1]);var trace=[];f.setAction('Keystroke',\"trace.push('K')\");f.setAction('Validate',\"trace.push('V')\");f.setAction('Format',\"trace.push('F')\");f.richValue='';f.richValue='ignored';good&&f.valueAsString==='alpha betasecond'&&JSON.stringify(trace)==='[\"F\",\"F\"]'");
+    }
+    #[test]
+    fn validate_plain_assignment_wins_and_rich_assignment_alone_commits() {
+        host("var f=getField('A');f.richText=true;f.setAction('Validate',\"event.richValue=[{text:'rich',fontWeight:700}];\");f.value='input';var rich=f.valueAsString==='rich'&&f.richValue[0].fontWeight===700;f.setAction('Validate',\"event.value='plain';event.richValue=[{text:'ignored'}];\");f.value='input';var plain=f.valueAsString==='plain'&&f.richValue[0].fontWeight===400;f.setAction('Validate',\"event.richValue=[{text:'ignored'}];event.value='last';\");f.value='input';rich&&plain&&f.valueAsString==='last'");
+    }
+    #[test]
+    fn rich_formatting_changes_display_without_replacing_stored_text_or_spans() {
+        host("var f=getField('A');f.richText=true;f.setAction('Format',\"event.richValue=[{text:'display',fontWeight:700}];\");f.value='stored';var s=JSON.parse(__host.snapshot()).A;var rich=f.valueAsString==='stored'&&f.richValue[0].text==='stored'&&s.rawRichValue[0].text==='stored'&&s.richValue[0].text==='display'&&s.richRenderActive;f.setAction('Format',\"event.value='plain display';event.richValue=[{text:'ignored'}];\");f.value='next';s=JSON.parse(__host.snapshot()).A;rich&&f.valueAsString==='next'&&s.formatted==='plain display'&&!s.richRenderActive");
+    }
+    #[test]
+    fn rich_event_getters_are_copies_and_plain_getters_raise_reader_error() {
+        host("var f=getField('A');f.richText=true;f.setAction('Validate',\"var copy=event.richValue;copy[0].text='ignored';\");f.value='original';var good=f.valueAsString==='original';f.setAction('Validate','');f.setAction('Keystroke',\"event.richValue=[{text:'keystroke'}];\");var seen='';f.setAction('Validate',\"seen=event.richValue[0].text;\");f.richValue=[{text:'styled',fontWeight:700}];good=good&&seen==='keystroke'&&f.valueAsString==='styled'&&f.richValue[0].fontWeight===700;f.setAction('Keystroke','');f.setAction('Validate','');f.richText=false;var raised=false;try{f.richValue}catch(e){raised=String(e)==='InvalidGetError: Get not possible, invalid or unknown.'}good&&raised&&JSON.parse(__host.snapshot()).A.richValue.length===0");
+    }
+    #[test]
     fn default_style_is_copied_coupled_and_formats_after_unchanged_assignments() {
         host("var f=getField('A');f.richText=true;f.defaultStyle={alignment:'left',fontFamily:['Helvetica','sans-serif'],fontStretch:'normal',fontStyle:'normal',fontWeight:400,textColor:['RGB',0,0,0],textSize:10};var formats=0;f.setAction('Format','formats++');var copy=f.defaultStyle;copy.fontFamily[0]='changed';copy.textSize=99;var copied=f.defaultStyle.fontFamily[0]==='Helvetica'&&f.defaultStyle.textSize===10;f.textSize=9;f.textSize=9;f.textFont='Helvetica';f.textColor=['RGB',0.25,0.5,0.75];f.alignment='right';var s=f.defaultStyle,coupled=s.textSize===9&&s.alignment==='right'&&JSON.stringify(s.textColor)==='[\"RGB\",0.2509765625,0.5019683837890625,0.7490234375]'&&formats===5;f.defaultStyle={alignment:'center',fontFamily:['Helvetica','sans-serif'],fontStretch:'normal',fontStyle:'italic',fontWeight:700,textColor:['RGB',1,0,0],textSize:11};var assigned=f.textSize===11&&f.textFont==='Helvetica-BoldOblique'&&f.alignment==='center'&&formats===6;f.richText=false;var unavailable=false;try{f.defaultStyle}catch(e){unavailable=String(e)==='InvalidGetError: Get not possible, invalid or unknown.'}copied&&coupled&&assigned&&unavailable");
     }
