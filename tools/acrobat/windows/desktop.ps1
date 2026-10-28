@@ -229,8 +229,8 @@ function Resolve-Known-Dialog($elements){
  return $false
 }
 function Acknowledge-Reader-Result($element) {
- # Adobe result alerts can ignore posted BM_CLICK messages. Activate this
- # exact dialog, activate its observed native OK button, and verify close.
+ # Activate this exact result dialog and verify its native OK control.
+ # Every acknowledgement path must be followed by verified closure.
  $owner=[IntPtr]$element.owner
  if(-not [DesktopNative]::IsWindowVisible($owner)){return}
  Focus-Reader
@@ -244,24 +244,32 @@ function Acknowledge-Reader-Result($element) {
   [DesktopNative]::SetForegroundWindow($owner)|Out-Null
  }finally{[DesktopNative]::AttachThreadInput($ownThread,$ownerThread,$false)|Out-Null}
  if([DesktopNative]::GetForegroundWindow() -ne $owner){throw 'Reader result dialog could not receive focus'}
- $bounds=[DesktopNative]::Bounds([IntPtr]$button.handle)
- $x=[int]($bounds[0]+$bounds[2]/2);$y=[int]($bounds[1]+$bounds[3]/2)
- if([DesktopNative]::FocusedControl() -eq [IntPtr]$button.handle){
-  # Prefer the already-focused control: heavy rich-text updates can delay
-  # pointer delivery even after the alert has become visible.
-  [DesktopNative]::Key(0x20)
- }elseif([DesktopNative]::HandleAt($x,$y) -eq [IntPtr]$button.handle){
-  [DesktopNative]::SetCursorPos($x,$y)|Out-Null
-  [DesktopNative]::mouse_event(2,0,0,0,[UIntPtr]::Zero)
-  [DesktopNative]::mouse_event(4,0,0,0,[UIntPtr]::Zero)
- }else{
-  throw 'Reader result button is occluded and does not own keyboard focus'
- }
+ # Keep keyboard acknowledgement when OK already owns focus. If Acrobat
+ # filters it during startup, try the currently observed button position only
+ # after the exact same receipt is still present. Posted BM_CLICK can disturb
+ # subsequent PDF-field focus, so it is not used here.
+ $spaceSent=$false;$pointerSent=$false
  $watch=[Diagnostics.Stopwatch]::StartNew()
  do {
   if(-not [DesktopNative]::IsWindowVisible($owner)){return}
   $remaining=@(Native-Elements | Where-Object {$_.owner -eq $owner -and $_.name.StartsWith('MPMB_RESULT')})
   if(-not $remaining.Count){return}
+  if($remaining.Count -ne 1 -or $remaining[0].name -ne $element.name){throw 'Reader result receipt changed before acknowledgement completed'}
+  if($watch.Elapsed.TotalMilliseconds -ge 250){
+   if([DesktopNative]::GetForegroundWindow() -ne $owner){throw 'Reader result dialog lost foreground before acknowledgement'}
+   if(-not $spaceSent -and [DesktopNative]::FocusedControl() -eq [IntPtr]$button.handle){
+    [DesktopNative]::Key(0x20);$spaceSent=$true
+   }elseif(-not $pointerSent -and (-not $spaceSent -or $watch.Elapsed.TotalMilliseconds -ge 1000)){
+    $bounds=[DesktopNative]::Bounds([IntPtr]$button.handle)
+    $x=[int]($bounds[0]+$bounds[2]/2);$y=[int]($bounds[1]+$bounds[3]/2)
+    if([DesktopNative]::HandleAt($x,$y) -eq [IntPtr]$button.handle){
+     [DesktopNative]::SetCursorPos($x,$y)|Out-Null
+     [DesktopNative]::mouse_event(2,0,0,0,[UIntPtr]::Zero)
+     [DesktopNative]::mouse_event(4,0,0,0,[UIntPtr]::Zero)
+     $pointerSent=$true
+    }
+   }
+  }
   Start-Sleep -Milliseconds 50
  }while($watch.Elapsed.TotalSeconds -lt 10)
  throw 'Reader result dialog did not close after acknowledgement'
