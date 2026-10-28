@@ -1,5 +1,10 @@
 # MPMB compatibility audit — 2026-10-26
 
+Current qualification update (2026-10-28): all 597 registered fixture/class/subclass pairs (245 each in 2014/Ashnar, 107 in 2024) now have bounded default-choice progression/native-reopen evidence across separate frozen runs and defined alternate source profiles. Historical counts below describe earlier runs. This does not qualify every feature choice, Reader source selection or complete table use. Two additional valid Rune Scribe/Wizard profiles cover shared slots, hit dice, removal/readdition and native persistence; spell/feature choices and Reader parity remain incomplete. See [development-handoff.md](development-handoff.md) and [implementation-milestones.md](implementation-milestones.md) for current evidence and remaining acceptance work.
+
+ASCII-escaped diagnostic recovery establishes exact single-line native/Reader trace agreement with a Unicode sentinel and saved-field checksum. Earlier unescaped NBSP measurements are unproven because the carrier field could normalize Unicode. Multiline rich spans, defaultStyle/event.richValue/XML and the remaining Ashnar Class Features/Extra.Notes differences still need implementation and independent qualification. The original failed transport suites remain failed.
+
+
 **The 100% MPMB compatibility goal is not achieved.** The target is the complete behavior needed by the three supplied paid PDFs and real table usage with any predefined class. General Acrobat JavaScript completeness is not the target. The first runnable milestone and selected generation workflows are working, but do not meet that broader goal.
 
 ## Source-derived class checks
