@@ -1321,13 +1321,15 @@
     ]
   },
   "indexed_widget_rectangles": {
-    "status": "native implementation and disposable fixture persistence pass; Reader comparison pending qualification",
+    "status": "defined native/Reader original-addon trace and saved geometry match, with verified diagnostic transport",
     "native": "output/testing/widget-rect-1793163356548767738/rectangles.json",
     "unit_tests": 50,
     "scope": "2024 Save Modifiers Title: base rect changes widget 0 only; indexed rect reads/changes selected widget; getter returns a copy; saved widget geometry and fresh native reopen agree; source scripts retained. Translations retain size.",
     "failed_probe": "output/testing/widget-rect-1793163300677274871/rectangles.json",
     "probe_correction": "Remove the one-shot User Script before saving; retaining it reran the translation on reopen. Original failed report retained.",
-    "remaining": "Reader parity, resizing/reflow, rotations and other indexed field properties remain unqualified."
+    "remaining": "Translation-only case in 2024. Resizing/reflow, rotations, generated widget breadth and other indexed field properties remain unqualified.",
+    "reader": "output/testing/widget-rect-1793165733129201314/rectangles.json",
+    "reader_first_ascii_only": "output/testing/widget-rect-1793165371466706730/rectangles.json"
   },
   "pact_multiclass": {
     "status": "three bounded native profiles passed; independent Reader parity pending",
