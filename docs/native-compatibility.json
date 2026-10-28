@@ -1104,7 +1104,7 @@
   ],
   "historical_print_counterexamples_status": "Missing dependencies implemented; historical failures retained. Current native print evidence above; broader milestone remains in progress.",
   "subclass_dropdown_audit": {
-    "status": "Bounded default-choice progression across separate runs covers 172 selectable 2014 class/subclass pairs and 107 selectable 2024 pairs in the all-source profile; alternate profiles and Reader qualification incomplete",
+    "status": "All 597 registered fixture/class/subclass pairs have bounded default-choice progression/native reopen evidence across separate frozen runs; Reader source equivalence and full table coverage remain incomplete",
     "pilot": "output/testing/native-subclasses-1793074776109531946/subclasses.json",
     "broad_run": "output/testing/native-subclasses-1793074818475225818/subclasses.json",
     "scope": "Original source-selection buttons and offered class/subclass dropdowns; levels 3,5,11,20,3; independent saved output/script checks and native reopen. All-source profile only; default feature choices only. Reader equivalence and full table workflows unqualified.",
@@ -1129,16 +1129,21 @@
       "registered_nonexcluded_pairs": 245,
       "unique_subclass_keys": 235,
       "selectable_pairs_in_all_source_profile": 172,
-      "shadowed_pairs_unexercised": 73,
-      "limitations": "58 subclass pairs and the 15 pairs under the shadowed ranger class require alternate source selection. 172 is not the total predefined inventory."
+      "limitations": "73 pairs require defined alternate source profiles, now exercised. 172 is not the total predefined inventory; every feature and Reader behavior remain unqualified.",
+      "shadowed_pairs_requiring_alternate_profile": 73
     },
     "ashnar_regular": "output/testing/native-subclasses-1793107324207137425/subclasses.json",
     "ashnar_regular_cases": 169,
     "shadowed_profile_pilot": "output/testing/native-subclasses-1793121267996131353/subclasses.json",
-    "shadowed_profile_scope": "41 cases passed before original duplicate-leaf movement enabled both Ranger parents. Corrected Gloom Stalker profile passes by excluding UA:RR through original sourcebook controls. Remaining 32 run is incomplete; class/subclass, sourcebook exclusion and native reopen assertions remain strict. No Reader-equivalence or full feature claim.",
+    "shadowed_profile_scope": "2014: 41 prior cases plus 32 remaining; Ashnar: 69 prior plus four remaining. These cover 73 shadowed pairs per fixture through original sourcebook/class-element controls. Combined with 172 selectable pairs per fixture and 107 in 2024, all 597 registered fixture/pairs have bounded default-choice progression/native reopen evidence across separate runs. No single current-binary sweep, comprehensive choices, Reader source equivalence or full table mechanics claim.",
     "shadowed_profile_failed": "output/testing/native-subclasses-1793121437422195259/subclasses.json",
     "shadowed_profile_passes_before_boundary": 41,
-    "shared_ranger_book_pilot": "output/testing/native-subclasses-1793123485647904376/subclasses.json"
+    "shared_ranger_book_pilot": "output/testing/native-subclasses-1793123485647904376/subclasses.json",
+    "shadowed_remaining_2014": "output/testing/native-subclasses-1793123574153776825/subclasses.json",
+    "shadowed_remaining_2014_cases": 32,
+    "ashnar_shadowed_failed": "output/testing/native-subclasses-1793129497504843511/subclasses.json",
+    "ashnar_shadowed_remaining": "output/testing/native-subclasses-1793158468877370067/subclasses.json",
+    "ashnar_shadowed_remaining_cases": 4
   },
   "bookmarks": {
     "status": "defined native workflow and native desktop cases passed; Reader qualification pending",
@@ -1291,14 +1296,17 @@
     "clearing_failed_before_fix": "output/testing/checkbox-events-1793109091284805362/checkbox-events.json"
   },
   "text_commit_normalization": {
-    "status": "NBSP and richText mode event behavior implemented; recovered exact Reader trace and saved diagnostic match, clean reference rerun pending harness qualification",
+    "status": "ASCII-escaped single-line trace equals recovered Reader output; multiline NBSP/rich span semantics remain under revalidation",
     "native_tests": 49,
     "table": "output/testing/native-table-1793122033811218055/table.json",
     "generated": "output/testing/native-generated-1793122283200422875/generated.json",
     "reader_trace": "output/testing/field-events-1793122032591996993/recovered-and-cleaned.json",
     "failed_suite": "output/testing/field-events-1793122032591996993/events.json",
     "scope": "Text .value normalizes NBSP before K/V/F and preserves tabs. RichText=false formats; RichText=true runs K/V/F even for unchanged mode/value. Source rich/plain and multiline flags retained. Reader payload recovered from the same completed add-on, saved/closed, canonical diagnostic and original script hashes verified independently.",
-    "remaining": "The originating suite remains failed due to result-dialog cleanup. event.richValue, defaultStyle, rich XML persistence and broader styling remain incomplete; Ashnar Class Features/Extra.Notes canonical differences remain."
+    "remaining": "The originating suite remains failed due to result-dialog cleanup. event.richValue, defaultStyle, rich XML persistence and broader styling remain incomplete; Ashnar Class Features/Extra.Notes canonical differences remain.",
+    "measurement_caveat": "Earlier unescaped JSON could be normalized by PC Name. The recovered escaped single-line diagnostic preserves Unicode sentinel and matches Reader UTF-16 checksum and native trace. Its original suite remains failed; multiline and rich data require separate escaped qualification.",
+    "escaped_singleline_trace": "output/testing/field-events-1793162025932570113/recovered-escaped.json",
+    "escaped_singleline_original_failed": "output/testing/field-events-1793162025932570113/events.json"
   },
   "serialized_state_comparison": {
     "status": "Read-only comparison validated against a different-serialization Reader baseline and three damaged-native negative controls",
