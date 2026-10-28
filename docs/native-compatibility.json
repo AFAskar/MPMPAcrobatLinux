@@ -1375,5 +1375,11 @@
     "unit_tests": 52,
     "generated_regression": "output/testing/native-generated-1793165271163238456/generated.json",
     "remaining": "Reader original spell-selection gesture/workflow parity, other dialog controls and popup-edit desktop typing remain incomplete."
+  },
+  "warlock_selected_spells_2024": {
+    "status": "bounded native original spell/menu/regeneration/save/reopen workflow passes; Reader parity pending",
+    "native": "output/testing/native-warlock-spells-1793165446484448545/warlock-spells.json",
+    "scope": "Original 2024 source controls, exact offered spell selections and cantrip-specific invocation menu. Select three cantrips and six known spells; generate, add Agonizing Blast, regenerate, remove/regenerate, readd/regenerate. Assert exact lists, choices, attack effects and generated Eldritch Blast description, saved fields/appearances/scripts and native reopen. Option discovery cancels the actual original dialog before using its validated offered labels; no direct CurrentSpells injection.",
+    "remaining": "Reader interaction/runtime parity, other spells/invocations/classes, spell slot use/rests, full generated appearance equivalence and comprehensive multiclass/table use remain unqualified."
   }
 }
