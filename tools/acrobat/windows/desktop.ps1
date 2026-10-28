@@ -28,6 +28,7 @@ public static class DesktopNative {
  [StructLayout(LayoutKind.Sequential)] public struct GUIINFO {public int size;public uint flags;public IntPtr active,focus,capture,menuOwner,moveSize,caret;public RECT caretRect;}
  [DllImport("user32.dll")] static extern bool GetGUIThreadInfo(uint thread,ref GUIINFO info);
  public static bool MenuOpen(){var info=new GUIINFO();info.size=Marshal.SizeOf(info);return GetGUIThreadInfo(0,ref info)&&(info.flags&20)!=0;}
+ public static IntPtr FocusedControl(){var info=new GUIINFO();info.size=Marshal.SizeOf(info);return GetGUIThreadInfo(0,ref info)?info.focus:IntPtr.Zero;}
  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x,int y);
  [DllImport("user32.dll")] public static extern void mouse_event(uint f,uint x,uint y,uint d,UIntPtr extra);
@@ -45,6 +46,7 @@ public static class DesktopNative {
  [StructLayout(LayoutKind.Sequential)] public struct POINT {public int X;public int Y;public POINT(int x,int y){X=x;Y=y;}}
  [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(POINT p);
  public static uint PidAt(int x,int y){uint pid;GetWindowThreadProcessId(WindowFromPoint(new POINT(x,y)),out pid);return pid;}
+ public static IntPtr HandleAt(int x,int y){return WindowFromPoint(new POINT(x,y));}
  [DllImport("user32.dll")] static extern void keybd_event(byte key,byte scan,uint flags,UIntPtr extra);
  public static void Chord(byte modifier,byte key){keybd_event(modifier,0,0,UIntPtr.Zero);keybd_event(key,0,0,UIntPtr.Zero);keybd_event(key,0,2,UIntPtr.Zero);keybd_event(modifier,0,2,UIntPtr.Zero);}
  public static void Key(byte key){keybd_event(key,0,0,UIntPtr.Zero);keybd_event(key,0,2,UIntPtr.Zero);}
@@ -226,6 +228,43 @@ function Resolve-Known-Dialog($elements){
   }
  return $false
 }
+function Acknowledge-Reader-Result($element) {
+ # Adobe result alerts can ignore posted BM_CLICK messages. Activate this
+ # exact dialog, activate its observed native OK button, and verify close.
+ $owner=[IntPtr]$element.owner
+ if(-not [DesktopNative]::IsWindowVisible($owner)){return}
+ Focus-Reader
+ try{$button=Find-Native 'OK' 1 $owner}catch{if(-not [DesktopNative]::IsWindowVisible($owner)){return};throw}
+ [uint32]$ownerPid=0
+ $ownerThread=[DesktopNative]::GetWindowThreadProcessId($owner,[ref]$ownerPid)
+ if($ownerPid -notin @((Reader-Processes).Id)){throw 'Result dialog no longer belongs to Reader'}
+ $ownThread=[DesktopNative]::GetCurrentThreadId()
+ try {
+  [DesktopNative]::AttachThreadInput($ownThread,$ownerThread,$true)|Out-Null
+  [DesktopNative]::SetForegroundWindow($owner)|Out-Null
+ }finally{[DesktopNative]::AttachThreadInput($ownThread,$ownerThread,$false)|Out-Null}
+ if([DesktopNative]::GetForegroundWindow() -ne $owner){throw 'Reader result dialog could not receive focus'}
+ $bounds=[DesktopNative]::Bounds([IntPtr]$button.handle)
+ $x=[int]($bounds[0]+$bounds[2]/2);$y=[int]($bounds[1]+$bounds[3]/2)
+ if([DesktopNative]::HandleAt($x,$y) -eq [IntPtr]$button.handle){
+  [DesktopNative]::SetCursorPos($x,$y)|Out-Null
+  [DesktopNative]::mouse_event(2,0,0,0,[UIntPtr]::Zero)
+  [DesktopNative]::mouse_event(4,0,0,0,[UIntPtr]::Zero)
+ }else{
+  # Oversized app.alert bodies can clip the button behind the taskbar. Never
+  # click through it; Space is allowed only on this exact focused native OK.
+  if([DesktopNative]::FocusedControl() -ne [IntPtr]$button.handle){throw 'Occluded Reader result button does not own keyboard focus'}
+  [DesktopNative]::Key(0x20)
+ }
+ $watch=[Diagnostics.Stopwatch]::StartNew()
+ do {
+  if(-not [DesktopNative]::IsWindowVisible($owner)){return}
+  $remaining=@(Native-Elements | Where-Object {$_.owner -eq $owner -and $_.name.StartsWith('MPMB_RESULT')})
+  if(-not $remaining.Count){return}
+  Start-Sleep -Milliseconds 50
+ }while($watch.Elapsed.TotalSeconds -lt 10)
+ throw 'Reader result dialog did not close after acknowledgement'
+}
 function Script-Result($id,$timeout=25) {
  $cached="$Root\responses\reader-$id.json"
  if(Test-Path $cached){return (Get-Content $cached -Raw|ConvertFrom-Json)}
@@ -241,10 +280,10 @@ function Script-Result($id,$timeout=25) {
     $result|ConvertTo-Json -Depth 12 -Compress|Set-Content "$Root\responses\reader-$($result.id).json" -Encoding UTF8
     if($result.id -ne $id){
      $result | ConvertTo-Json -Depth 12 | Set-Content "$Root\responses\orphan-$($result.id).json" -Encoding UTF8
-     Invoke-Native (Find-Native 'OK' 1 ([IntPtr]$e.owner))
+     Acknowledge-Reader-Result $e
      break
     }
-    Invoke-Native (Find-Native 'OK' 1 ([IntPtr]$e.owner))
+    Acknowledge-Reader-Result $e
     return $result
    }
   }
@@ -288,7 +327,7 @@ function Settle-Dialogs {
    $result=$reply[0].name.Substring(11).Trim()|ConvertFrom-Json
    if($result.id -notmatch '^[a-f0-9]{32}$'){throw 'Invalid pending Reader response'}
    $result|ConvertTo-Json -Depth 12 -Compress|Set-Content "$Root\responses\reader-$($result.id).json" -Encoding UTF8
-   Invoke-Native (Find-Native 'OK' 1 ([IntPtr]$reply[0].owner));continue
+   Acknowledge-Reader-Result $reply[0];continue
   }
   if(@($elements|Where-Object {$_.class -eq '#32770'}).Count){throw 'An unexpected dialog blocks the Reader menu'}
   return

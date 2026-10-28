@@ -56,3 +56,11 @@ form glyphs; visual inspection confirmed the printable sentinels. Retained
 failures: `reader-print-output-1793079677723119752` and
 `reader-print-output-1793082174845072879` under the respective native-printing
 run folders. Successful picker execution alone is not a printing suite pass.
+
+## Result-dialog acknowledgement qualification (2026-10-28)
+
+Fresh `output/testing/readiness-1793160489.json` passed all 24 cases after 27-check preflight. `smoke-1793159933.json` passed keyboard/calculation/save/reopen in 139.173 seconds with at least 5415.2 MiB host memory available. The focused regression `reference-receipt-1793160305270823802/receipt-control.json` passed an oversized 128-field result receipt whose OK center lay outside its dialog, then verified PDF field focus with checked paste, independent saved canonical value and original script hashes.
+
+The helper acknowledges result dialogs using the observed native button. A mouse click requires an exact WindowFromPoint handle match. An occluded/off-dialog button uses Space only when the exact foreground Reader result dialog and native OK keyboard focus are verified. The helper waits for closure and preserves Acrobat's own focus restoration. No fixed coordinates or blind keyboard macro is used.
+
+Retained failed revisions: `readiness-1793122524.json` (posted acknowledgement did not close), `readiness-1793123713.json` (21 cases passed before refusing a taskbar-covered button center), and `readiness-1793158467.json` (forced native SetFocus disrupted PDF field focus). Each failed document was retained/closed before another suite. The final helper removes forced SetFocus; none of those failures is reclassified as a pass.

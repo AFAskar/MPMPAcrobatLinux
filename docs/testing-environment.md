@@ -104,3 +104,5 @@ The acceptance scope is the named workflows in `docs/testing-readiness-audit.md`
 ## Pinned upstream source
 
 The public 2024 source checkout is a reference submodule pinned to `5d6e57c861643ca77764131bd5dc865389879667`. Run `git submodule update --init --recursive` after cloning, then inspect `git submodule status`. Keep it unchanged while comparing behavior with the qualified fixtures. Submodule initialization does not retrieve the local-only paid PDFs, filled character, evidence or VM state. Extracted 2014 document scripts continue to live under ignored `output/testing/inventory`, not in the source submodule.
+
+Result-alert acknowledgement verifies the exact Reader dialog and native OK control before acting, and waits for closure. Large alert bodies can place the OK button outside the work area. The guarded keyboard fallback requires the exact native OK control to own focus; it does not force native SetFocus, which interfered with Acrobat's PDF field focus restoration. The final revision passed `readiness-1793160489.json` (24 cases) and the focused oversized-receipt/focus regression.
