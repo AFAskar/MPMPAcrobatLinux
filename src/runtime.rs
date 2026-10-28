@@ -506,6 +506,14 @@ mod tests {
         host("var f=getField('A');f.richText=true;f.setAction('Format',\"event.richValue=[{text:'display',fontWeight:700}];\");f.value='stored';var s=JSON.parse(__host.snapshot()).A;var rich=f.valueAsString==='stored'&&f.richValue[0].text==='stored'&&s.rawRichValue[0].text==='stored'&&s.richValue[0].text==='display'&&s.richRenderActive;f.setAction('Format',\"event.value='plain display';event.richValue=[{text:'ignored'}];\");f.value='next';s=JSON.parse(__host.snapshot()).A;rich&&f.valueAsString==='next'&&s.formatted==='plain display'&&!s.richRenderActive");
     }
     #[test]
+    fn formatted_display_invalidates_appearance_without_changing_canonical_value() {
+        host("var f=getField('A');var offset=10;f.setAction('Format','event.value=Number(event.value)+offset');f.value=2;f._appearanceDirty=false;offset=20;f.value=2;var s=JSON.parse(__host.snapshot()).A;s.value==='2'&&s.formatted===22&&s.appearanceDirty");
+    }
+    #[test]
+    fn rich_format_invalidation_survives_an_unchanged_value_commit() {
+        host("var f=getField('A');f.richText=true;var label='one';f.setAction('Format','event.richValue=[{text:label}]');f.value='stored';f._appearanceDirty=false;label='two';f.value='stored';var s=JSON.parse(__host.snapshot()).A;s.value==='stored'&&s.rawRichValue[0].text==='stored'&&s.richValue[0].text==='two'&&s.appearanceDirty");
+    }
+    #[test]
     fn rich_event_getters_are_copies_and_plain_getters_raise_reader_error() {
         host("var f=getField('A');f.richText=true;f.setAction('Validate',\"var copy=event.richValue;copy[0].text='ignored';\");f.value='original';var good=f.valueAsString==='original';f.setAction('Validate','');f.setAction('Keystroke',\"event.richValue=[{text:'keystroke'}];\");var seen='';f.setAction('Validate',\"seen=event.richValue[0].text;\");f.richValue=[{text:'styled',fontWeight:700}];good=good&&seen==='keystroke'&&f.valueAsString==='styled'&&f.richValue[0].fontWeight===700;f.setAction('Keystroke','');f.setAction('Validate','');f.richText=false;var raised=false;try{f.richValue}catch(e){raised=String(e)==='InvalidGetError: Get not possible, invalid or unknown.'}good&&raised&&JSON.parse(__host.snapshot()).A.richValue.length===0");
     }

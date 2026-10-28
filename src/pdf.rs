@@ -731,7 +731,7 @@ impl Pdf {
                     buttons::project(&mut doc, &icon_source, &fields, w, &rect, s, (&face, font))?;
                     continue;
                 }
-                if !changed && !rich_changed && !rich_mode_changed {
+                if !changed && !rich_changed && !rich_mode_changed && s["appearanceDirty"] != true {
                     continue;
                 }
                 if f.kind == "Btn" {

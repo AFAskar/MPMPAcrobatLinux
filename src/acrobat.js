@@ -55,7 +55,15 @@ var __host = (function () {
     }
     return result;
   }
-  function formatResult(f,e){const rich=f.richText?(e._valueWritten?null:e._richWritten?normalizeRich(f,e._richData):copyData(e._richData)):undefined;if(JSON.stringify(f._formatted)!==JSON.stringify(e.value)||JSON.stringify(f._formattedRichValue)!==JSON.stringify(rich))revision++;f._formatted=e.value;f._formattedRichValue=rich;}
+  function formatResult(f,e){
+    const rich=f.richText?(e._valueWritten?null:e._richWritten?normalizeRich(f,e._richData):copyData(e._richData)):undefined;
+    const signature=JSON.stringify([String(e.value),rich]);
+    // Retain the last display signature across value commits, which invalidate
+    // the Format cache even when the canonical value itself is unchanged.
+    if(f._formatSignature!==undefined&&f._formatSignature!==signature||rich==null&&String(e.value)!==f.valueAsString)f._appearanceDirty=true;
+    if(JSON.stringify(f._formatted)!==JSON.stringify(e.value)||JSON.stringify(f._formattedRichValue)!==JSON.stringify(rich))revision++;
+    f._formatSignature=signature;f._formatted=e.value;f._formattedRichValue=rich;
+  }
   function reformat(f){if(!f._actions.F||calculating||formatting.has(f.name))return;formatting.add(f.name);try{formatResult(f,eventRun(f,'F',f.value));}finally{formatting.delete(f.name);}}
   function addField(n,x) {
     const f={name:n,value:x.value,defaultValue:x.default_value,userName:x.user_name,submitName:x.submit_name,
@@ -236,7 +244,7 @@ var __host = (function () {
     exportDataObject(params){if(typeof params==='string')params={cName:params};const result=JSON.parse(__attachment(JSON.stringify(params)));attachmentExports.push(result);},
     print(params){const result=JSON.parse(__print(JSON.stringify({params,state:JSON.parse(__host.snapshot())})));printJobs.push(result);return undefined},
     ready(){let n=0;while(!globalThis.calculate||!app.calculate||globalThis.delay){let t=Array.from(timers.values()).sort((a,b)=>a.at-b.at)[0];if(!t||++n>100)throw Error('Document calculations suspended without a resumable timer');advance(Math.max(0,t.at-clock));}return true},
-    snapshot(){let o={__structure:journal,__order:data.order};if(data.bookmarksChanged)o.__bookmarks=bookmarkRoot;for(const n of names){let f=fields[n];o[n]={value:Array.isArray(f.value)?f.value:f.valueAsString,icon:f._icon,caption:f._caption,captions:f._captions,actions:f._modifiedActions,widgets:f._widgets,currentValueIndices:f.currentValueIndices,textSize:f.textSize,alignment:f.alignment,multiline:f.multiline,textColor:f.textColor,textFont:f.textFont,richText:f.richText,rawRichValue:copyData(f._richRaw),richValueChanged:!sameRich(f._richRaw,f._initialRichRaw),richValue:f.richText?(f._formattedRichValue===null?[]:copyData(f._formattedRichValue===undefined?f._richRaw:f._formattedRichValue)):[],richRenderActive:!!f.richText&&f._formattedRichValue!==null,defaultStyle:copyData(f._defaultStyle),formatted:f._formatted===undefined?f.valueAsString:f._formatted,display:f.display,userName:f.userName,submitName:f.submitName,readonly:f.readonly,items:f.items};}return JSON.stringify(o)},
+    snapshot(){let o={__structure:journal,__order:data.order};if(data.bookmarksChanged)o.__bookmarks=bookmarkRoot;for(const n of names){let f=fields[n];o[n]={value:Array.isArray(f.value)?f.value:f.valueAsString,icon:f._icon,caption:f._caption,captions:f._captions,actions:f._modifiedActions,widgets:f._widgets,currentValueIndices:f.currentValueIndices,textSize:f.textSize,alignment:f.alignment,multiline:f.multiline,textColor:f.textColor,textFont:f.textFont,richText:f.richText,rawRichValue:copyData(f._richRaw),richValueChanged:!sameRich(f._richRaw,f._initialRichRaw),appearanceDirty:!!f._appearanceDirty,richValue:f.richText?(f._formattedRichValue===null?[]:copyData(f._formattedRichValue===undefined?f._richRaw:f._formattedRichValue)):[],richRenderActive:!!f.richText&&f._formattedRichValue!==null,defaultStyle:copyData(f._defaultStyle),formatted:f._formatted===undefined?f.valueAsString:f._formatted,display:f.display,userName:f.userName,submitName:f.submitName,readonly:f.readonly,items:f.items};}return JSON.stringify(o)},
     timer(code,ms){let id=++timerId;timers.set(id,{id,code:String(code),at:clock+Math.max(1,Number(ms)||1)});return id},clear(id){timers.delete(id)},
     diagnostics(){return JSON.stringify({gaps,errors,repairs,printJobs,attachmentExports,timers:timers.size,field_count:names.length,menus:Object.keys(menus)})}
   };

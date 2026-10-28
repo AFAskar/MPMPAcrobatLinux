@@ -1448,8 +1448,20 @@
     "remaining": "Edited /DS /DA /Q, mixed-face/decorated appearances, broader rich vocabulary/loaded-property coverage and complete class/table persistence remain incomplete. Mixed alignment/line spacing inside one paragraph and weights other than 400/700 explicitly fail serialization."
   },
   "formatted_companion_ac": {
-    "status": "verified failure; fix pending",
-    "evidence": "output/testing/formatted-companion-ac-1793179731024048894/reopen-probe.json",
-    "scope": "Original 2024 wolf companion: reopen saved sheet, raise Dex 15 to 18. Canonical AC remains 10+Dex; original Format computes 14, saved widget appearance remains 12. Same-process saves did update correctly because projection still starts from the unfilled template."
+    "status": "passed bounded 2024 wolf workflow; broader formatted/style persistence incomplete",
+    "evidence": "output/testing/formatted-companion-ac-1793189920828452420/formatting.json",
+    "counterexamples": [
+      "output/testing/formatted-companion-ac-1793179731024048894/reopen-probe.json",
+      "output/testing/formatted-companion-ac-1793185173387132924/formatting.json"
+    ],
+    "binary_sha256": "6c9e31c2474f66122d466578177da1fcfab0ad7dd0986e5b937b83857545cff1",
+    "scope": "Original 2024 wolf: native fresh-process save/reopen and Dex 15 to 18 change, another save/reopen, plus independently authored Reader save/fresh reopen/change/save. Both retain canonical 10+Dex and display/render 12 then 14. The old native stale artifact is corrected on reopen/save. Original embedded scripts unchanged. Two runtime tests cover unchanged canonical commits and rich Format output changes.",
+    "unit_tests": 70,
+    "regressions": [
+      "output/testing/native-acceptance-1793187323553259690/acceptance.json",
+      "output/testing/native-generated-1793187323551554781/generated.json",
+      "output/testing/native-table-1793187323552389557/table.json"
+    ],
+    "remaining": "Default style edits /DS /DA /Q, wider initial rich getters, mixed-face/decorated appearances and complete character/table persistence remain incomplete."
   }
 }
