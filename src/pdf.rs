@@ -262,17 +262,14 @@ fn walk(
                 .collect()
         })
         .unwrap_or_default();
-    // Reader getters use the first widget's local default appearance when it
-    // overrides the parent field (for example the AL asterisk's ScalaSans).
-    let da = widgets
-        .first()
-        .and_then(|w| d.get_dictionary(w.id).ok())
+    // Reader base-field getters use widget zero even when it belongs to an
+    // inactive template. Do not prefer a visible widget over PDF Kids order.
+    let style_widget = widgets.first().and_then(|w| d.get_dictionary(w.id).ok());
+    let da = style_widget
         .and_then(|widget| widget.get(b"DA").ok())
         .map(|appearance| text(d, appearance))
         .unwrap_or_else(|| val(b"DA"));
-    let alignment = widgets
-        .first()
-        .and_then(|w| d.get_dictionary(w.id).ok())
+    let alignment = style_widget
         .and_then(|widget| widget.get(b"Q").ok())
         .and_then(|q| q.as_i64().ok())
         .unwrap_or_else(|| attrs.get(b"Q").and_then(Object::as_i64).unwrap_or(0));
@@ -637,7 +634,39 @@ impl Pdf {
             let rich_changed = f.kind == "Tx" && s["richValueChanged"] == true;
             let rich_enabled = s["richText"].as_bool().unwrap_or(f.flags & 33554432 != 0);
             let rich_mode_changed = rich_enabled != (f.flags & 33554432 != 0);
+            let style_field = f.kind == "Tx" || f.kind == "Ch";
+            let font_size = s["textSize"].as_f64().unwrap_or(f.text_size);
+            let font_name = s["textFont"].as_str().unwrap_or(&f.text_font);
+            let text_color = s.get("textColor").unwrap_or(&f.text_color);
+            let alignment = match s["alignment"].as_str() {
+                Some("center") => 1,
+                Some("right") => 2,
+                Some("left") => 0,
+                _ => f.alignment,
+            };
+            let da_changed = style_field
+                && (font_size != f.text_size
+                    || font_name != f.text_font
+                    || !field_style::same(text_color, &f.text_color));
+            let alignment_changed = style_field && alignment != f.alignment;
+            let style_changed = da_changed || alignment_changed;
+            let da = if da_changed {
+                Some(
+                    field_style::appearance(&doc, font_name, font_size, text_color)
+                        .with_context(|| format!("Persist appearance defaults in {name}"))?,
+                )
+            } else {
+                None
+            };
             let dict = doc.get_dictionary_mut(f.id)?;
+            if f.kind == "Tx"
+                && rich_enabled
+                && !field_style::same(&s["defaultStyle"], &f.rich_metadata["defaultStyle"])
+            {
+                let css = rich_text::style_css(&s["defaultStyle"])
+                    .with_context(|| format!("Persist default style in {name}"))?;
+                dict.set("DS", pdf_string(&css));
+            }
             if changed {
                 if f.kind == "Btn" {
                     if f.flags & (65536 | 32768) == 0 && value == "Off" {
@@ -754,12 +783,28 @@ impl Pdf {
                             .collect::<Vec<_>>(),
                     );
                 }
+                // Base style assignments target widget zero in Reader, including
+                // inactive template widgets. Other widgets retain their defaults.
+                if widget_index == 0 {
+                    if let Some(da) = &da {
+                        // DA is PDF content, not a Unicode PDF text string.
+                        wd.set("DA", Object::string_literal(da.as_bytes().to_vec()));
+                    }
+                    if alignment_changed {
+                        wd.set("Q", alignment);
+                    }
+                }
                 wd.set("F", flags);
                 if f.kind == "Btn" && f.flags & 65536 != 0 {
                     buttons::project(&mut doc, &icon_source, &fields, w, &rect, s, (&face, font))?;
                     continue;
                 }
-                if !changed && !rich_changed && !rich_mode_changed && s["appearanceDirty"] != true {
+                if !changed
+                    && !rich_changed
+                    && !rich_mode_changed
+                    && !style_changed
+                    && s["appearanceDirty"] != true
+                {
                     continue;
                 }
                 if f.kind == "Btn" {
@@ -781,7 +826,12 @@ impl Pdf {
                 }
                 let width = (rect[2] - rect[0]).abs() as f32;
                 let height = (rect[3] - rect[1]).abs() as f32;
-                let requested = s["textFont"].as_str().unwrap_or(&f.text_font);
+                let rich_fonts = appearance::rich_font_candidates(s);
+                let requested = rich_fonts
+                    .iter()
+                    .find(|name| embedded.contains_key(*name))
+                    .map(String::as_str)
+                    .unwrap_or_else(|| s["textFont"].as_str().unwrap_or(&f.text_font));
                 let render_text = if let Some(spans) = s["richValue"]
                     .as_array()
                     .filter(|v| !v.is_empty() || s["richRenderActive"] == true)

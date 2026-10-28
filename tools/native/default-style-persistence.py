@@ -25,8 +25,10 @@ spec = importlib.util.spec_from_file_location('rich_persistence', ROOT / 'tools/
 p = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(p)
 FIELD = 'Extra.Notes'
-CONTROLS = "(function(){var result={};['Background Extra','Text.PRsheet.AL.asterisk','AC Shield Weight Title','AmmoLeft.Top.1','DCI.Title'].forEach(function(name){var c=tDoc.getField(name);result[name]={textFont:c.textFont,textColor:c.textColor};});return result;})()"
-CAPTURE = "({value:f.valueAsString,defaultStyle:f.defaultStyle,textSize:f.textSize,textFont:f.textFont,textColor:f.textColor,alignment:f.alignment,spans:f.richValue,controls:" + CONTROLS + "})"
+SAFE_READ = "function read(o,k){try{var v=o[k];return v===undefined?{undefined_value:true}:JSON.parse(JSON.stringify(v))}catch(e){return {getter_error:String(e)}}}"
+CONTROLS = "(function(){" + SAFE_READ + "var result={};['Background Extra','Text.PRsheet.AL.asterisk','AC Shield Weight Title','AmmoLeft.Top.1','DCI.Title'].forEach(function(name){var c=tDoc.getField(name);result[name]={textFont:read(c,'textFont'),textColor:read(c,'textColor')};});return result;})()"
+CAPTURE = "(function(){" + SAFE_READ + "var result={value:read(f,'valueAsString')};['defaultStyle','textSize','textFont','textColor','alignment'].forEach(function(key){result[key]=read(f,key)});result.spans=read(f,'richValue');result.controls=" + CONTROLS + ";return result;})()"
+
 EDIT = "var f=getField('Extra.Notes');f.value='style probe';f.defaultStyle={textSize:9,alignment:'right',textColor:['RGB',0,0,1]};"
 # This includes a nonempty rich value before changing defaults, so default and
 # existing span styles must be recorded separately.
@@ -175,6 +177,21 @@ def main():
                 {'op': 'eval', 'code': '(function(){' + edit + 'return ' + CAPTURE + '})()'},
                 {'op': 'save', 'path': str(output)}])
             expected = report['native_before'] = data['stages'][-2]['result']
+            authored = PdfReader(output)
+            source_reader = PdfReader(source)
+            node = authored.get_object(canonical_fields(authored)[FIELD]['reference'])
+            source_node = source_reader.get_object(canonical_fields(source_reader)[FIELD]['reference'])
+            kids, source_kids = node.get('/Kids', [node]), source_node.get('/Kids', [source_node])
+            raw_da = kids[0].get_object()['/DA'].original_bytes
+            assert raw_da.isascii() and raw_da.decode('ascii') == str(kids[0].get_object()['/DA']), 'DA must be PDF content bytes, not UTF-16 text'
+            assert node.get('/DA').original_bytes == source_node.get('/DA').original_bytes, 'Parent DA unexpectedly changed'
+            assert len(kids) == len(source_kids)
+            for child, old in zip(kids[1:], source_kids[1:]):
+                assert child.get_object().get('/DA') == old.get_object().get('/DA')
+                assert child.get_object().get('/Q') == old.get_object().get('/Q')
+            report['widget_zero_content_bytes'] = raw_da.decode('ascii')
+            report['other_widget_defaults_preserved'] = True
+
             reopened = p.probe(binary, output, folder, 'native-reopen', [
                 {'op': 'eval', 'code': "(function(){var f=getField('Extra.Notes');return " + CAPTURE + '})()'}])['stages'][-1]['result']
             report['native_reopened'] = reopened

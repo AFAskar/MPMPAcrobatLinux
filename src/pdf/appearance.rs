@@ -1,11 +1,73 @@
 //! Plain and rich text layout for generated widget appearances.
 use super::*;
+/// A changed default font must not replace the font on existing rich spans.
+/// A homogeneous face can use its original embedded font. Mixed faces still
+/// require a renderer that switches resources between glyph runs.
+pub(super) fn rich_font_candidates(state: &Value) -> Vec<String> {
+    if state["richRenderActive"] != true {
+        return vec![];
+    }
+    let Some(spans) = state["richValue"].as_array() else {
+        return vec![];
+    };
+    let mut faces = spans
+        .iter()
+        .filter(|span| span["text"].as_str().is_some_and(|text| !text.is_empty()))
+        .map(|span| {
+            (
+                span["fontFamily"][0].as_str(),
+                span["fontWeight"].as_u64().unwrap_or(400),
+                span["fontStyle"].as_str().unwrap_or("normal"),
+            )
+        });
+    let Some(face) = faces.next() else {
+        return vec![];
+    };
+    if faces.any(|next| next != face) {
+        return vec![];
+    }
+    let defaults = &state["defaultStyle"];
+    if face
+        == (
+            defaults["fontFamily"][0].as_str(),
+            defaults["fontWeight"].as_u64().unwrap_or(400),
+            defaults["fontStyle"].as_str().unwrap_or("normal"),
+        )
+    {
+        // Preserve custom font resource names already represented by the field.
+        return vec![];
+    }
+    let Some(family) = face.0 else { return vec![] };
+    let base = match family {
+        "Segoe UI" => "SegoeUI",
+        _ => family,
+    };
+    let bold = match face.1 {
+        400 => false,
+        700 => true,
+        _ => return vec![],
+    };
+    let italic = match face.2 {
+        "normal" => false,
+        "italic" | "oblique" => true,
+        _ => return vec![],
+    };
+    let suffix = match (bold, italic) {
+        (false, false) => return vec![base.into()],
+        (true, false) => "Bold",
+        (false, true) => "Italic",
+        (true, true) => "BoldItalic",
+    };
+    vec![format!("{base},{suffix}"), format!("{base}-{suffix}")]
+}
+
 #[derive(Clone)]
 struct Glyph {
     c: char,
     size: f32,
     color: [f32; 3],
     spacing: Option<f32>,
+    alignment: Option<u8>,
 }
 fn width(face: &ttf_parser::Face<'_>, g: &Glyph) -> f32 {
     if g.c == '\n' {
@@ -111,6 +173,18 @@ pub(super) fn content(
     let spans = state["richValue"]
         .as_array()
         .filter(|v| !v.is_empty() || state["richRenderActive"] == true);
+    if let Some(spans) = spans {
+        for span in spans {
+            if let Some(alignment) = span["alignment"].as_str() {
+                if !["left", "center", "right"].contains(&alignment) {
+                    bail!(
+                        "Unsupported rich paragraph alignment in {}: {alignment}",
+                        field.name
+                    )
+                }
+            }
+        }
+    }
     let explicit = state["textSize"].as_f64().unwrap_or(field.text_size) as f32;
     let mut size = if explicit > 0. {
         explicit
@@ -147,6 +221,12 @@ pub(super) fn content(
                             size,
                             color,
                             spacing,
+                            alignment: match span["alignment"].as_str() {
+                                Some("left") => Some(0),
+                                Some("center") => Some(1),
+                                Some("right") => Some(2),
+                                _ => None,
+                            },
                         })
                         .collect::<Vec<_>>()
                 })
@@ -160,6 +240,7 @@ pub(super) fn content(
                     size,
                     color,
                     spacing: None,
+                    alignment: None,
                 })
                 .collect()
         }
@@ -200,11 +281,18 @@ pub(super) fn content(
     };
     for (line_index, line) in laid.into_iter().enumerate() {
         let line_size = line_sizes[line_index];
+        let alignment = line.iter().find_map(|g| g.alignment).unwrap_or_else(|| {
+            match state["alignment"].as_str() {
+                Some("center") => 1,
+                Some("right") => 2,
+                _ => 0,
+            }
+        });
         let line: Vec<_> = line.into_iter().filter(|g| g.c != '\n').collect();
         let total = line.iter().map(|g| width(face, g)).sum::<f32>();
-        let mut x = match state["alignment"].as_str().unwrap_or("left") {
-            "center" => (width_box - total) / 2.,
-            "right" => width_box - 1. - total,
+        let mut x = match alignment {
+            1 => (width_box - total) / 2.,
+            2 => width_box - 1. - total,
             _ => {
                 if spans.is_some() {
                     0.
@@ -288,6 +376,34 @@ mod tests {
         }
     }
     #[test]
+    fn existing_rich_paragraph_alignment_survives_changed_field_default() {
+        let bytes = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
+        let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
+        let state = json!({"textSize":9,"alignment":"right","richRenderActive":true,"richValue":[{"text":"style probe","textSize":7,"alignment":"left"}]});
+        let output =
+            String::from_utf8(content(&face, 100., 50., &field(), &state, "style probe").unwrap())
+                .unwrap();
+        assert!(
+            output.contains(" rg 1 0 0 1 0 "),
+            "Existing rich text must stay at its left paragraph position: {output}"
+        );
+    }
+    #[test]
+    fn matching_default_face_keeps_custom_font_resource_selection() {
+        let state = json!({"textFont":"Custom-BoldLF", "defaultStyle":{"fontFamily":["Custom"],"fontWeight":400,"fontStyle":"normal"}, "richRenderActive":true,"richValue":[{"text":"title","fontFamily":["Custom"],"fontWeight":400,"fontStyle":"normal"}]});
+        assert!(rich_font_candidates(&state).is_empty());
+    }
+    #[test]
+    fn existing_uniform_rich_face_survives_changed_default_font() {
+        let state = json!({"textFont":"Helvetica", "richRenderActive":true,"richValue":[{"text":"style probe","fontFamily":["Segoe UI","sans-serif"],"fontWeight":400,"fontStyle":"normal"}]});
+        assert_eq!(rich_font_candidates(&state), vec!["SegoeUI"]);
+    }
+    #[test]
+    fn mixed_rich_faces_do_not_claim_a_single_face_mapping() {
+        let state = json!({"richRenderActive":true,"richValue":[{"text":"one","fontFamily":["Segoe UI"],"fontWeight":400},{"text":"two","fontFamily":["Segoe UI"],"fontWeight":700}]});
+        assert!(rich_font_candidates(&state).is_empty());
+    }
+    #[test]
     fn numeric_format_result_is_displayed_without_overwriting_formula() {
         let field = field();
         let state = json!({"formatted":12});
@@ -305,6 +421,7 @@ mod tests {
                 size: 7.,
                 color: [0.; 3],
                 spacing: Some(11.),
+                alignment: Some(0),
             })
             .collect();
         let layout = lines(&face, glyphs, 100., true);
@@ -353,6 +470,7 @@ mod tests {
                 size,
                 color: [0.; 3],
                 spacing: None,
+                alignment: None,
             })
             .collect();
         let layout = lines(&face, glyphs, 100., true);

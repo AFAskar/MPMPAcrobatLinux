@@ -1411,7 +1411,7 @@
     "native_tests": 57,
     "generated": "output/testing/native-generated-1793167848194981322/generated.json",
     "table": "output/testing/native-table-1793168367856154021/table.json",
-    "remaining": "Edited /DS /DA /Q persistence, broader font/color mappings and complete desktop/style fidelity remain incomplete. Plain-field defaultStyle assignment and non-RGB/grayscale style colors fail explicitly. Rich payload qualification is recorded separately in rich_runtime. Reader partial/defaultStyle={} measurements additionally expose native merging omitted properties instead of replacing defaults; see loaded_widget_styles."
+    "remaining": "Two partial/empty defaultStyle replacements and their native/Reader persistence now pass (edited_default_style_persistence). Wider replacement vocabulary, font/color mappings, indexed styles and presentation remain incomplete."
   },
   "rich_runtime": {
     "status": "partial; all 52 measured event cases exactly match Reader; edited persistence remains incomplete",
@@ -1424,7 +1424,7 @@
       "output/testing/native-skill-layout-1793173175524339123/skill-layout.json",
       "output/testing/native-table-1793173457611198417/table.json"
     ],
-    "remaining": "Edited /RV /DS /DA persistence, style-only appearance updates, mixed-font/decorations rendering, all class/table choices and full Reader persistence coverage remain incomplete.",
+    "remaining": "Bounded edited /RV and /DS/widget DA/Q are qualified separately. Mixed-font/decorated rendering, richer layout, all class/table choices and complete per-character persistence remain incomplete.",
     "color_counterexample": "output/testing/rich-runtime-expanded-comparison-1793175185230221459.json"
   },
   "edited_rich_persistence": {
@@ -1445,7 +1445,7 @@
       "output/testing/rich-persistence-1793176056321302278/persistence.json",
       "output/testing/rich-persistence-1793176868625451479/persistence.json"
     ],
-    "remaining": "Edited /DS /DA /Q, mixed-face/decorated appearances, broader rich vocabulary/loaded-property coverage and complete class/table persistence remain incomplete. Mixed alignment/line spacing inside one paragraph and weights other than 400/700 explicitly fail serialization."
+    "remaining": "Two /DS/widget DA/Q edits now qualify separately. Rich baselines, mixed-face/decorated appearances, broader vocabulary/indexed styles and complete class/table persistence remain incomplete. Unsupported paragraph/style weights still fail explicitly."
   },
   "formatted_companion_ac": {
     "status": "passed bounded 2024 wolf workflow; broader formatted/style persistence incomplete",
@@ -1516,6 +1516,36 @@
       "output/testing/native-acceptance-1793191845745641484/acceptance.json"
     ],
     "preceding_generated_binary": "output/testing/native-generated-1793191286141940113/generated.json",
-    "limits": "Native defaultStyle partial assignment still incorrectly merges omitted properties; native /DS and widget /DA /Q writing remains incomplete. Font and per-widget style breadth, CMYK API behavior and complete presentation remain unqualified."
+    "limits": "Two native writes are now qualified separately in edited_default_style_persistence. Wider font/per-widget style breadth, CMYK API behavior and complete presentation remain unqualified."
+  },
+  "edited_default_style_persistence": {
+    "status": "two bounded cases pass native and real Reader; presentation and wider style coverage incomplete",
+    "evidence": [
+      "output/testing/default-style-roundtrip-1793193174745423641/styles.json",
+      "output/testing/default-style-roundtrip-1793193323262196517/styles.json"
+    ],
+    "reader_authored_references": [
+      "output/testing/default-style-roundtrip-1793190632227924814/styles.json",
+      "output/testing/default-style-roundtrip-1793191055887421696/styles.json"
+    ],
+    "binary_sha256": "dffd439a7c1706d8ea8d61608af1d23b1207d020b220346f9d89d01793bf1475",
+    "unit_tests": 81,
+    "scope": "2024 Extra.Notes: partial size9/right/blue and empty defaultStyle replacement; omitted defaults reset, styleSize12 differs from fieldSize0. Existing rich spans retain prior size/font/color/alignment. Native save/fresh reopen, exact independent Reader state comparison, Reader load/save of native output, native Reader-save reopen, canonical/appearance/script checks and Poppler renders. Parent DA bytes and other widgets remain unchanged; widget0 DA is ASCII PDF content, not UTF-16.",
+    "widget_ordering": "Base properties use Kids[0] even when it is an inactive template. The visible widget is not substituted. Native indexed style proxies still share base properties and require separate qualification/implementation.",
+    "appearance": "A homogeneous pre-existing rich face can retain its embedded font when defaults change; rich paragraph alignment is preserved. Partial-case notes crop is pixel-identical to Reader resave of native output. Independent Reader-author crop remains 3 pixels lower at144DPI: 557/54270 differing pixels; see render-comparison.json in first evidence folder.",
+    "counterexamples": [
+      "output/testing/default-style-roundtrip-1793190530350910091/styles.json",
+      "output/testing/default-style-roundtrip-1793192371417078373/styles.json",
+      "output/testing/default-style-roundtrip-1793192687370262249/styles.json"
+    ],
+    "regressions": [
+      "output/testing/native-acceptance-1793193557323749203/acceptance.json",
+      "output/testing/native-generated-1793193631913438539/generated.json",
+      "output/testing/native-table-1793193806356797742/table.json",
+      "output/testing/rich-metadata-1793193958780414755/metadata.json",
+      "output/testing/default-style-writer-rich-runtime-comparison-1793194000000000000.json",
+      "output/testing/default-style-writer-style-runtime-comparison-1793194200000000000.json"
+    ],
+    "limits": "Missing font resources fail explicitly. Broader font mapping, other style objects/color spaces, indexed/per-widget style state, mixed-face/decorated rendering, rich first baselines and complete per-character persistence remain incomplete."
   }
 }

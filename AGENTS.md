@@ -39,4 +39,4 @@ Read `docs/testing-environment.md` before changing or testing PDF behavior.
 - Keep canonical /V, raw rich spans and formatted display separate. Record comparison normalization explicitly; a check that ignores properties is not exact API equality. Reassigning copied rich colors can requantize them in Reader.
 - Qualify emitted rich XML in real Reader, including version attributes. Native parsing/rendering of its own output alone does not establish interoperability.
 
-- Respect widget-local /DA and /Q before parent field attributes when loading styles. Reader can leave the parent's /DA unchanged while saving new styles on active widgets. Keep /DS defaults, widget appearance defaults and existing rich spans separate; changing defaults does not restyle existing spans.
+- Respect widget-local /DA and /Q before parent field attributes when loading styles. Reader can leave the parent's /DA unchanged while saving new styles on widget zero, even when that widget belongs to an inactive template. Keep /DS defaults, widget appearance defaults and existing rich spans separate; changing defaults does not restyle existing spans.

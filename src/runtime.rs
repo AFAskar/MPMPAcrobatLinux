@@ -514,6 +514,14 @@ mod tests {
         host("var f=getField('A');f.richText=true;var label='one';f.setAction('Format','event.richValue=[{text:label}]');f.value='stored';f._appearanceDirty=false;label='two';f.value='stored';var s=JSON.parse(__host.snapshot()).A;s.value==='stored'&&s.rawRichValue[0].text==='stored'&&s.richValue[0].text==='two'&&s.appearanceDirty");
     }
     #[test]
+    fn partial_default_style_replaces_omitted_properties_and_keeps_existing_spans() {
+        host("var f=getField('A');f.richText=true;f.textFont='Courier';f.value='existing';var spans=JSON.stringify(f.richValue);f.defaultStyle={textSize:9,alignment:'right',textColor:['RGB',0,0,1]};f.textFont==='Helvetica'&&f.textSize===9&&f.defaultStyle.fontFamily[0]==='Helvetica'&&f.alignment==='right'&&JSON.stringify(f.richValue)===spans");
+    }
+    #[test]
+    fn empty_default_style_separates_default_size_from_auto_field_size() {
+        host("var f=getField('A');f.richText=true;f.defaultStyle={};f.textFont==='Helvetica'&&f.textSize===0&&f.defaultStyle.textSize===12&&f.alignment==='left'&&JSON.stringify(f.textColor)==='[\"G\",0]'&&JSON.stringify(f.defaultStyle.textColor)==='[\"RGB\",0,0,0]'");
+    }
+    #[test]
     fn rich_event_getters_are_copies_and_plain_getters_raise_reader_error() {
         host("var f=getField('A');f.richText=true;f.setAction('Validate',\"var copy=event.richValue;copy[0].text='ignored';\");f.value='original';var good=f.valueAsString==='original';f.setAction('Validate','');f.setAction('Keystroke',\"event.richValue=[{text:'keystroke'}];\");var seen='';f.setAction('Validate',\"seen=event.richValue[0].text;\");f.richValue=[{text:'styled',fontWeight:700}];good=good&&seen==='keystroke'&&f.valueAsString==='styled'&&f.richValue[0].fontWeight===700;f.setAction('Keystroke','');f.setAction('Validate','');f.richText=false;var raised=false;try{f.richValue}catch(e){raised=String(e)==='InvalidGetError: Get not possible, invalid or unknown.'}good&&raised&&JSON.parse(__host.snapshot()).A.richValue.length===0");
     }

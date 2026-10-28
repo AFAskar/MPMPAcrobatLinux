@@ -1,5 +1,7 @@
 //! Default appearance data. /DA, /DS, canonical values and rich spans are distinct.
+use super::{resolved, text};
 use anyhow::{bail, Context, Result};
+use lopdf::Document;
 use serde_json::{json, Value};
 
 pub fn color(appearance: &str) -> Result<Value> {
@@ -31,9 +33,92 @@ pub fn color(appearance: &str) -> Result<Value> {
     Ok(result)
 }
 
+pub fn same(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(a), Value::Number(b)) => a.as_f64() == b.as_f64(),
+        (Value::Array(a), Value::Array(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same(a, b))
+        }
+        (Value::Object(a), Value::Object(b)) => {
+            a.len() == b.len() && a.iter().all(|(k, v)| b.get(k).is_some_and(|b| same(v, b)))
+        }
+        _ => a == b,
+    }
+}
+
+pub fn appearance(doc: &Document, font: &str, size: f64, color: &Value) -> Result<String> {
+    if !size.is_finite() || size < 0. {
+        bail!("Invalid persisted field font size")
+    }
+    let form = resolved(doc, doc.catalog()?.get(b"AcroForm")?)?.as_dict()?;
+    let resources = resolved(doc, form.get(b"DR")?)?.as_dict()?;
+    let fonts = resolved(doc, resources.get(b"Font")?)?.as_dict()?;
+    let key = if fonts.has(font.as_bytes()) {
+        font.as_bytes().to_vec()
+    } else {
+        fonts
+            .iter()
+            .find_map(|(key, value)| {
+                let dictionary = resolved(doc, value).ok()?.as_dict().ok()?;
+                (text(doc, dictionary.get(b"BaseFont").ok()?) == font).then(|| key.clone())
+            })
+            .with_context(|| {
+                format!("Persisted field font absent from AcroForm resources: {font}")
+            })?
+    };
+    let name = key
+        .iter()
+        .map(|byte| {
+            if (33..=126).contains(byte) && !b"#%()/<>[]{}".contains(byte) {
+                (*byte as char).to_string()
+            } else {
+                format!("#{byte:02X}")
+            }
+        })
+        .collect::<String>();
+    Ok(format!("/{name} {size} Tf {}", color_operator(color)?))
+}
+
+fn color_operator(value: &Value) -> Result<String> {
+    let values = value.as_array().context("Invalid field text color")?;
+    let (count, operator) = match values.first().and_then(Value::as_str) {
+        Some("G") => (1, "g"),
+        Some("RGB") => (3, "rg"),
+        Some("CMYK") => (4, "k"),
+        _ => bail!("Unsupported persisted field text color"),
+    };
+    if values.len() != count + 1 {
+        bail!("Invalid field text color arity")
+    }
+    let mut operands = Vec::new();
+    for value in &values[1..] {
+        let n = value.as_f64().context("Invalid field text color channel")?;
+        if !n.is_finite() || !(0.0..=1.0).contains(&n) {
+            bail!("Invalid field text color channel")
+        }
+        operands.push(n.to_string());
+    }
+    Ok(format!("{} {operator}", operands.join(" ")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn style_numeric_representation_does_not_rewrite_unchanged_metadata() {
+        assert!(same(
+            &json!({"textSize":7.0,"textColor":["RGB",0.0,0.0,0.0]}),
+            &json!({"textColor":["RGB",0,0,0],"textSize":7})
+        ));
+        assert!(!same(&json!({"textSize":7.0}), &json!({"textSize":9})));
+    }
+    #[test]
+    fn serialized_default_colors_roundtrip_and_reject_invalid_input() {
+        for value in [json!(["G", 0.0]), json!(["RGB", 0.25, 0.5, 1.0])] {
+            assert_eq!(color(&color_operator(&value).unwrap()).unwrap(), value);
+        }
+        assert!(color_operator(&json!(["RGB", 0, 2, 0])).is_err());
+    }
     #[test]
     fn default_color_uses_last_color_operator_independently_of_font_position() {
         assert_eq!(
