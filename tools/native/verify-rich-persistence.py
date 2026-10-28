@@ -56,6 +56,9 @@ def main():
             assert metadata(native) == metadata(source), 'Untouched native rich metadata changed'
             stored = canonical_fields(PdfReader(saved))['PC Name']['/V']
             assert stored.isascii() and json.loads(stored) == case['reader']
+            assert case['native_reopen'] == case['expected'], 'Native reopened rich properties differ'
+            assert {key:case['reader'][key] for key in ['value','spans']} == case['expected'], 'Reader rich properties differ'
+            assert case['reader_saved_native_state'] == case['expected'], 'Reader-saved native rich properties differ'
             assert [ord(ch) for ch in case['reader']['sentinel']] == [160, 8232, 128512]
             a, b = 1, 0
             for ch in stored:
