@@ -864,61 +864,85 @@ impl Pdf {
                 } else {
                     appearance::display_text(f, s, &value)
                 };
-                let suitable = embedded.get(requested).filter(|font| {
-                    ttf_parser::Face::parse(&font.bytes, 0).is_ok_and(|face| {
-                        render_text
-                            .chars()
-                            .all(|c| c.is_control() || face.glyph_index(c).is_some())
+                let covers = |name: &str, text: &str| {
+                    embedded.get(name).is_some_and(|font| {
+                        ttf_parser::Face::parse(&font.bytes, 0).is_ok_and(|face| {
+                            text.chars()
+                                .all(|c| c.is_control() || face.glyph_index(c).is_some())
+                        })
                     })
-                });
+                };
+                let base = covers(requested, &render_text).then(|| requested.to_owned());
+                let mut selected = vec![base.clone()];
+                let mut span_fonts = Vec::new();
+                if let Some(spans) = s["richValue"]
+                    .as_array()
+                    .filter(|spans| !spans.is_empty() || s["richRenderActive"] == true)
+                {
+                    for span in spans {
+                        let text = span["text"].as_str().unwrap_or("");
+                        let span_state = json!({"richRenderActive":true,"richValue":[span],"defaultStyle":s["defaultStyle"]});
+                        let candidates = appearance::rich_font_candidates(&span_state);
+                        let chosen = candidates
+                            .into_iter()
+                            .find(|name| covers(name, text))
+                            .or_else(|| base.as_ref().filter(|name| covers(name, text)).cloned());
+                        let index = selected
+                            .iter()
+                            .position(|name| *name == chosen)
+                            .unwrap_or_else(|| {
+                                selected.push(chosen);
+                                selected.len() - 1
+                            });
+                        span_fonts.push(index);
+                    }
+                }
+                for key in selected.iter().flatten() {
+                    if !font_cache.contains_key(key) {
+                        let asset = &embedded[key];
+                        let mapped =
+                            unicode_font(&mut doc, asset.bytes.clone(), &format!("MPMB{key}"))?;
+                        font_cache.insert(key.clone(), mapped);
+                    }
+                }
                 let default_metrics = field_style::widget_font(&doc, w.id)?
                     .and_then(|name| embedded.get(&name).map(|font| font.metrics));
-                let (appearance_font, content) = if let Some(font) = suitable {
-                    if !font_cache.contains_key(requested) {
-                        let mapped = unicode_font(
-                            &mut doc,
-                            font.bytes.clone(),
-                            &format!("MPMB{requested}"),
-                        )?;
-                        font_cache.insert(requested.to_owned(), mapped);
-                    }
-                    let (id, bytes) = &font_cache[requested];
-                    let face = ttf_parser::Face::parse(bytes, 0)?;
-                    (
-                        *id,
-                        appearance::content(
-                            &face,
-                            width,
-                            height,
-                            f,
-                            s,
-                            &value,
-                            Some(
-                                default_metrics
-                                    .map(|defaults| font.metrics.with_default_bounds(defaults))
-                                    .unwrap_or(font.metrics),
-                            ),
-                        )?,
-                    )
-                } else {
-                    (
-                        font,
-                        appearance::content(
-                            &face,
-                            width,
-                            height,
-                            f,
-                            s,
-                            &value,
-                            default_metrics.map(|defaults| {
-                                appearance::RichFontMetrics::from_face(&face, None)
-                                    .with_default_bounds(defaults)
-                            }),
-                        )?,
-                    )
+                let metrics = base
+                    .as_ref()
+                    .map(|key| embedded[key].metrics)
+                    .unwrap_or_else(|| appearance::RichFontMetrics::from_face(&face, None));
+                let metrics = default_metrics
+                    .map(|defaults| metrics.with_default_bounds(defaults))
+                    .unwrap_or(metrics);
+                let mut font_resources = Dictionary::new();
+                let mut render_fonts = Vec::new();
+                for (index, key) in selected.iter().enumerate() {
+                    let resource = if index == 0 {
+                        "Helv".to_owned()
+                    } else {
+                        format!("Rich{index}")
+                    };
+                    let id = key.as_ref().map(|key| font_cache[key].0).unwrap_or(font);
+                    // Each parsed face borrows its existing cache bytes; no field
+                    // state is created by the appearance renderer.
+                    let parsed = if let Some(key) = key {
+                        ttf_parser::Face::parse(&font_cache[key].1, 0)?
+                    } else {
+                        ttf_parser::Face::parse(&font_bytes, 0)?
+                    };
+                    font_resources.set(resource.as_bytes().to_vec(), id);
+                    render_fonts.push(appearance::RenderFont {
+                        face: parsed,
+                        resource,
+                    });
+                }
+                let layout = appearance::FontLayout {
+                    fonts: render_fonts,
+                    span_fonts,
+                    metrics,
                 };
-
-                let ap=doc.add_object(Stream::new(dictionary!{"Type"=>"XObject","Subtype"=>"Form","BBox"=>vec![0.into(),0.into(),width.into(),height.into()],"Resources"=>dictionary!{"Font"=>dictionary!{"Helv"=>appearance_font}}},content));
+                let content = appearance::content_with_fonts(&layout, width, height, f, s, &value)?;
+                let ap=doc.add_object(Stream::new(dictionary!{"Type"=>"XObject","Subtype"=>"Form","BBox"=>vec![0.into(),0.into(),width.into(),height.into()],"Resources"=>dictionary!{"Font"=>font_resources}},content));
                 doc.get_dictionary_mut(w.id)?
                     .set("AP", dictionary! {"N"=>ap});
             }

@@ -1600,5 +1600,31 @@
       "output/testing/native-table-1793201486593913362/table.json"
     ],
     "limits": "Original notes workflow still fails appearance: one native face versus four Reader faces, missing underline/strike paths and heading layout differences. Indexed styles and fuller geometry behavior remain incomplete."
+  },
+  "mixed_rich_font_faces": {
+    "status": "per-span font selection implemented; original formatting workflow still FAILED",
+    "unit_tests": 87,
+    "binary_sha256": "0977c127bcc7a47fd730b2e8efa8abe2ceed7ff0a8bf8390052e906aa2c8b56a",
+    "native_original_workflow": "output/testing/rich-format-1793371498418903278/formatting.json",
+    "reader_original_workflow": "output/testing/rich-format-1793199447335267809/formatting.json",
+    "api_equal": true,
+    "font_faces_equal": true,
+    "overall_passed": false,
+    "scope": "Original 2024 notes formatting, unchanged original K/V/F actions and document scripts. Real SegoeUI normal/bold/italic/bold-italic embedded resources selected per span; glyph advances use the selected physical face. Saved PDF inspected independently. No full appearance or table compatibility claim.",
+    "regressions": [
+      "output/testing/native-acceptance-1793371730039641011/acceptance.json",
+      "output/testing/native-generated-1793371815296203809/generated.json",
+      "output/testing/native-table-1793372020494870397/table.json"
+    ],
+    "limits": "Underline and strike paths absent. Heading fractional size and short-leading first baseline differ (native365.04453, Reader366.882). Glyph widths, RavennaJW fallback, mixed-family typography and complete Reader/native per-class persistence remain incomplete.",
+    "reference_environment": {
+      "preflight": "output/testing/continuation-mixed-fonts-preflight.json",
+      "readiness": "output/testing/readiness-1793370996.json",
+      "checks_passed": [
+        27,
+        24
+      ]
+    },
+    "native_reopen": "output/testing/rich-font-roundtrip-1793372205249849255/fonts.json"
   }
 }

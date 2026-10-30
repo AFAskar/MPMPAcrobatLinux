@@ -7,6 +7,8 @@ ASCII-escaped diagnostic recovery establishes exact single-line native/Reader tr
 
 **The 100% MPMB compatibility goal is not achieved.** The target is the complete behavior needed by the three supplied paid PDFs and real table usage with any predefined class. General Acrobat JavaScript completeness is not the target. The first runnable milestone and selected generation workflows are working, but do not meet that broader goal.
 
+Original 2024 notes formatting now emits four embedded Segoe UI faces, selecting fonts and measuring advances per rich span. The 87-test build matches the captured Reader APIs and face set in `rich-format-1793371498418903278/formatting.json`, with original actions and scripts preserved. The overall comparison remains **FAILED**: underline/strike paths are absent and the heading baseline differs (365.04453 native, 366.882 Reader). These results are progress within Milestone 4, not completion. Fractional sizes, short leading, glyph widths, mixed-family typography and fuller class/table persistence still require qualification.
+
 ## Source-derived class checks
 
 `tools/native/class-audit` obtains class definitions and source-selection parsing from each original PDF runtime in the native reader. Each tested class is applied through the document application context at levels 1, 3, 5, 11, 17 and 20, checking the selected class, character level and proficiency calculation. All 38 fixture/class cases pass, totaling 228 level checkpoints.

@@ -1,8 +1,8 @@
 //! Plain and rich text layout for generated widget appearances.
 use super::*;
 /// A changed default font must not replace the font on existing rich spans.
-/// A homogeneous face can use its original embedded font. Mixed faces still
-/// require a renderer that switches resources between glyph runs.
+/// A homogeneous face can use its original embedded font. The projection also
+/// calls this for individual spans when a field contains several faces.
 pub(super) fn rich_font_candidates(state: &Value) -> Vec<String> {
     if state["richRenderActive"] != true {
         return vec![];
@@ -97,6 +97,21 @@ fn normalized_metric(value: f64, units: f64) -> f32 {
     (((value / units * 65536.).floor() / 65536. * 1000.).floor() / 1000.) as f32
 }
 
+pub(super) struct RenderFont<'a> {
+    pub face: ttf_parser::Face<'a>,
+    pub resource: String,
+}
+pub(super) struct FontLayout<'a> {
+    pub fonts: Vec<RenderFont<'a>>,
+    pub span_fonts: Vec<usize>,
+    pub metrics: RichFontMetrics,
+}
+impl FontLayout<'_> {
+    fn width(&self, glyph: &Glyph) -> f32 {
+        width(&self.fonts[glyph.font].face, glyph)
+    }
+}
+
 #[derive(Clone)]
 struct Glyph {
     c: char,
@@ -104,6 +119,7 @@ struct Glyph {
     color: [f32; 3],
     spacing: Option<f32>,
     alignment: Option<u8>,
+    font: usize,
 }
 fn width(face: &ttf_parser::Face<'_>, g: &Glyph) -> f32 {
     if g.c == '\n' {
@@ -116,7 +132,7 @@ fn width(face: &ttf_parser::Face<'_>, g: &Glyph) -> f32 {
         / face.units_per_em() as f32
 }
 fn lines(
-    face: &ttf_parser::Face<'_>,
+    measure: &impl Fn(&Glyph) -> f32,
     glyphs: Vec<Glyph>,
     max_width: f32,
     wrap: bool,
@@ -134,13 +150,13 @@ fn lines(
             soft_start = false;
             continue;
         }
-        let added = width(face, &glyph);
+        let added = measure(&glyph);
         if wrap && current + added > max_width && !line.is_empty() {
             if let Some(space) = line.iter().rposition(|g| g.c == ' ') {
                 let tail = line.split_off(space + 1);
                 line.pop();
                 result.push(std::mem::replace(&mut line, tail));
-                current = line.iter().map(|g| width(face, g)).sum();
+                current = line.iter().map(measure).sum();
             } else {
                 result.push(std::mem::take(&mut line));
                 current = 0.;
@@ -204,6 +220,26 @@ pub(super) fn content(
     value: &str,
     font_metrics: Option<RichFontMetrics>,
 ) -> Result<Vec<u8>> {
+    let layout = FontLayout {
+        fonts: vec![RenderFont {
+            face: face.clone(),
+            resource: "Helv".into(),
+        }],
+        span_fonts: vec![],
+        metrics: font_metrics.unwrap_or_else(|| RichFontMetrics::from_face(face, None)),
+    };
+    content_with_fonts(&layout, width_box, height, field, state, value)
+}
+pub(super) fn content_with_fonts(
+    layout: &FontLayout<'_>,
+    width_box: f32,
+    height: f32,
+    field: &Field,
+    state: &Value,
+    value: &str,
+) -> Result<Vec<u8>> {
+    let face = &layout.fonts[0].face;
+    let measure = |glyph: &Glyph| layout.width(glyph);
     let wrap = state["multiline"]
         .as_bool()
         .unwrap_or(field.flags & 4096 != 0);
@@ -237,7 +273,9 @@ pub(super) fn content(
         if let Some(spans) = spans {
             spans
                 .iter()
-                .flat_map(|span| {
+                .enumerate()
+                .flat_map(|(span_index, span)| {
+                    let font = layout.span_fonts.get(span_index).copied().unwrap_or(0);
                     let size = span["textSize"].as_f64().map(|v| v as f32).unwrap_or(size);
                     let color = if span.get("textColor").is_some() {
                         rgb(&span["textColor"])
@@ -258,6 +296,7 @@ pub(super) fn content(
                             size,
                             color,
                             spacing,
+                            font,
                             alignment: match span["alignment"].as_str() {
                                 Some("left") => Some(0),
                                 Some("center") => Some(1),
@@ -278,23 +317,24 @@ pub(super) fn content(
                     color,
                     spacing: None,
                     alignment: None,
+                    font: 0,
                 })
                 .collect()
         }
     };
-    let mut laid = lines(face, make(size), available, wrap);
+    let mut laid = lines(&measure, make(size), available, wrap);
     if explicit == 0. && spans.is_none() {
         loop {
             let too_tall = wrap && laid.len() as f32 * size * 1.12 > height - 2.;
             let too_wide = !wrap
                 && laid
                     .iter()
-                    .any(|line| line.iter().map(|g| width(face, g)).sum::<f32>() > available);
+                    .any(|line| line.iter().map(&measure).sum::<f32>() > available);
             if !(too_tall || too_wide) || size <= 3. {
                 break;
             }
             size = (size - 0.25).max(3.);
-            laid = lines(face, make(size), available, wrap);
+            laid = lines(&measure, make(size), available, wrap);
         }
     }
     let mut out = format!("/Tx BMC q 0 0 {width_box} {height} re W n BT ");
@@ -309,7 +349,7 @@ pub(super) fn content(
     let units = face.units_per_em() as f32;
     let ascent = face.ascender() as f32 / units;
     let descent = face.descender() as f32 / units;
-    let rich_metrics = font_metrics.unwrap_or_else(|| RichFontMetrics::from_face(face, None));
+    let rich_metrics = layout.metrics;
     let mut y = if spans.is_some() {
         height - line_sizes.first().copied().unwrap_or(size) * rich_metrics.bbox_height
     } else if wrap {
@@ -327,7 +367,7 @@ pub(super) fn content(
             }
         });
         let line: Vec<_> = line.into_iter().filter(|g| g.c != '\n').collect();
-        let total = line.iter().map(|g| width(face, g)).sum::<f32>();
+        let total = line.iter().map(&measure).sum::<f32>();
         let mut x = match alignment {
             1 => (width_box - total) / 2.,
             2 => width_box - 1. - total,
@@ -345,6 +385,7 @@ pub(super) fn content(
             while end < line.len()
                 && line[end].size == line[start].size
                 && line[end].color == line[start].color
+                && line[end].font == line[start].font
             {
                 end += 1
             }
@@ -358,7 +399,7 @@ pub(super) fn content(
                         field.name
                     )
                 }
-                if face.glyph_index(g.c).is_none() && !g.c.is_control() {
+                if layout.fonts[g.font].face.glyph_index(g.c).is_none() && !g.c.is_control() {
                     bail!(
                         "appearance font lacks glyph U+{:04X} in {}",
                         g.c as u32,
@@ -368,10 +409,14 @@ pub(super) fn content(
                 encoded.push_str(&format!("{:04X}", g.c as u32));
             }
             out.push_str(&format!(
-                "/Helv {} Tf {} {} {} rg 1 0 0 1 {x} {y} Tm <{encoded}> Tj ",
-                first.size, first.color[0], first.color[1], first.color[2]
+                "/{} {} Tf {} {} {} rg 1 0 0 1 {x} {y} Tm <{encoded}> Tj ",
+                layout.fonts[first.font].resource,
+                first.size,
+                first.color[0],
+                first.color[1],
+                first.color[2]
             ));
-            x += run.iter().map(|g| width(face, g)).sum::<f32>();
+            x += run.iter().map(&measure).sum::<f32>();
             start = end;
         }
         y -= if spans.is_some() {
@@ -411,6 +456,47 @@ mod tests {
             export_values: vec![],
             caption: String::new(),
         }
+    }
+    #[test]
+    fn mixed_faces_use_distinct_resources_and_face_specific_advances() {
+        let regular = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
+        let bold = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf").unwrap();
+        let normal = ttf_parser::Face::parse(&regular, 0).unwrap();
+        let heavy = ttf_parser::Face::parse(&bold, 0).unwrap();
+        let layout = FontLayout {
+            metrics: RichFontMetrics::from_face(&normal, None),
+            fonts: vec![
+                RenderFont {
+                    face: normal,
+                    resource: "Normal".into(),
+                },
+                RenderFont {
+                    face: heavy,
+                    resource: "Bold".into(),
+                },
+            ],
+            span_fonts: vec![0, 1],
+        };
+        let normal_glyph = Glyph {
+            c: 'W',
+            size: 7.,
+            color: [0.; 3],
+            spacing: None,
+            alignment: Some(0),
+            font: 0,
+        };
+        let bold_glyph = Glyph {
+            font: 1,
+            ..normal_glyph.clone()
+        };
+        assert!(layout.width(&bold_glyph) > layout.width(&normal_glyph));
+        let state = json!({"richRenderActive":true,"richValue":[{"text":"normal ","textSize":7},{"text":"bold","textSize":7}]});
+        let output = String::from_utf8(
+            content_with_fonts(&layout, 400., 50., &field(), &state, "normal bold").unwrap(),
+        )
+        .unwrap();
+        assert!(output.contains("/Normal 7 Tf"));
+        assert!(output.contains("/Bold 7 Tf"));
     }
     #[test]
     fn reader_font_metrics_truncate_fixed_point_before_design_units() {
@@ -525,9 +611,10 @@ mod tests {
                 color: [0.; 3],
                 spacing: Some(11.),
                 alignment: Some(0),
+                font: 0,
             })
             .collect();
-        let layout = lines(&face, glyphs, 100., true);
+        let layout = lines(&|glyph| width(&face, glyph), glyphs, 100., true);
         assert_eq!(layout.len(), 2);
         assert_eq!(layout[0].iter().map(|g| g.c).collect::<String>(), "  A\n");
         assert_eq!(layout[1].iter().map(|g| g.c).collect::<String>(), "  B");
@@ -575,9 +662,10 @@ mod tests {
                 color: [0.; 3],
                 spacing: None,
                 alignment: None,
+                font: 0,
             })
             .collect();
-        let layout = lines(&face, glyphs, 100., true);
+        let layout = lines(&|glyph| width(&face, glyph), glyphs, 100., true);
         assert_eq!(layout.len(), 3);
         assert_eq!(layout[1][0].c, '\n');
         assert_eq!(layout[1][0].size, 6.);
