@@ -56,8 +56,11 @@ def baselines(path, captured, cases):
             x, y, font_size = 0., 0., None
             first = None
             positions = []
+            drawing = []
             leading = 0.
             for args, op in ContentStream(ap, reader).operations:
+                if op in [b'w',b'm',b'l',b'S',b's',b'f',b'f*']:
+                    drawing.append({'operator':op.decode(),'operands':[str(value) for value in args]})
                 if op == b'Tf':
                     font_size = float(args[1])
                 elif op == b'Tm':
@@ -78,7 +81,7 @@ def baselines(path, captured, cases):
                     assert list(map(float,args)) == [1.,0.,0.,1.,0.,0.], 'Unsupported diagnostic graphics transform'
             assert first, case
             height = float(ap['/BBox'][3]) - float(ap['/BBox'][1])
-            rows.append(dict(case, page=pages[widget.indirect_reference.idnum], height=height, baseline=first, top_offset=height-first['y'], positions=positions, line_offsets=[height-position['y'] for position in positions], fonts={key:str(value.get_object().get('/BaseFont')) for key,value in ap['/Resources']['/Font'].items()}))
+            rows.append(dict(case, page=pages[widget.indirect_reference.idnum], height=height, baseline=first, top_offset=height-first['y'], positions=positions, line_offsets=[height-position['y'] for position in positions], drawing=drawing, fonts={key:str(value.get_object().get('/BaseFont')) for key,value in ap['/Resources']['/Font'].items()}))
     return rows
 
 
@@ -116,8 +119,14 @@ def main():
     parser.add_argument('--two-lines',action='store_true')
     parser.add_argument('--mixed-sizes',action='store_true',help='Use size7/9 on successive lines')
     parser.add_argument('--font-profile',action='store_true',help='Use six bundled faces with default line spacing')
+    parser.add_argument('--fractional-sizes',action='store_true',help='Measure fractional span sizes and short leading')
+    parser.add_argument('--decorations',action='store_true',help='Measure underline and strike at three sizes and four font faces')
+    parser.add_argument('--inline-sizes',action='store_true',help='Measure two different sizes within the first rich line')
+    parser.add_argument('--leading-threshold',action='store_true',help='With inline sizes, measure leading around the largest run size')
     parser.add_argument('--fixture',choices=['2014','2024','ashnar'],default='2024')
     args = parser.parse_args()
+    assert not (args.decorations and args.reference), 'Decoration profiles are measurements; baseline-only comparison cannot qualify their drawing paths'
+    assert not args.leading_threshold or args.inline_sizes, 'Leading-threshold measurement requires inline sizes'
     if not args.native_only:
         assert args.readiness
         ready = json.loads(args.readiness.read_text());assert ready['passed'] and len(ready['cases']) == 24
@@ -128,18 +137,30 @@ def main():
         # This character has no active background page; Flaw offers an active
         # multiline rich field for the same size/spacing case.
         cases[3]['field'] = 'Flaw'
+    if args.fractional_sizes:
+        cases = [dict(case,size=size,spacing=spacing) for case,size,spacing in zip(cases,[7.25,7.9,8.05,8.5,8.9,9.5],[7.25,7.25,7.25,11.5,14.75,None])]
+    if args.decorations:
+        cases = [dict(case,size=size,weight=weight,style=font_style) for case,size,weight,font_style in zip(cases,[7,9,12,7,9,12],[400,400,400,700,400,700],['normal','normal','normal','normal','italic','italic'])]
+    if args.inline_sizes:
+        cases = [dict(case,size=size,next_size=next_size,spacing=spacing) for case,size,next_size,spacing in zip(cases,[7,7,7,9,9,9],[8,8,8,7,7,7],[7.25,11,None,7.25,14,None])]
+    if args.leading_threshold:
+        cases = [dict(case,size=7,next_size=8,spacing=spacing) for case,spacing in zip(cases,[7.9,8,8.1,8.9,9,9.1])]
     if args.font_profile:
         cases = [dict(case,font=font,spacing=None) for case,font in zip(cases,['Segoe UI','ScalaSans','SegoePrint','SegoeScript','Pterra','RavennaJW'])]
     addon = ADDON.replace(json.dumps(CASES),json.dumps(cases))
     if args.font_profile:
         addon = addon.replace("fontFamily:['Segoe UI']", "fontFamily:[item.font]")
+    if args.decorations:
+        addon = addon.replace("fontWeight:400,fontStyle:'normal'", "fontWeight:item.weight,fontStyle:item.style,underline:true,strikethrough:true")
     if args.two_lines:
         addon = addon.replace("text:'Baseline '+i,", "text:'Baseline '+i+String.fromCharCode(13)+'Next',")
     if args.mixed_sizes:
         addon = addon.replace("f.richValue=[span];", "span.text='Baseline '+i+String.fromCharCode(13);var next=JSON.parse(JSON.stringify(span));next.text='Next';next.textSize=item.size===7?9:7;f.richValue=[span,next];")
+    if args.inline_sizes:
+        addon = addon.replace("f.richValue=[span];", "var next=JSON.parse(JSON.stringify(span));next.text=' Next';next.textSize=item.next_size;f.richValue=[span,next];")
     source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
     binary = folder/'mpmb-reader';shutil.copy2(ROOT/'target/debug/mpmb-reader',binary)
-    report = {'passed':None,'scope':__doc__,'readiness':str(args.readiness),'addon_sha256':hashlib.sha256(addon.encode()).hexdigest(),'fixture':args.fixture,'two_lines':args.two_lines,'mixed_sizes':args.mixed_sizes,'font_profile':args.font_profile,'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest()}
+    report = {'passed':None,'scope':__doc__,'readiness':str(args.readiness),'addon_sha256':hashlib.sha256(addon.encode()).hexdigest(),'fixture':args.fixture,'two_lines':args.two_lines,'mixed_sizes':args.mixed_sizes,'font_profile':args.font_profile,'fractional_sizes':args.fractional_sizes,'decorations':args.decorations,'inline_sizes':args.inline_sizes,'leading_threshold':args.leading_threshold,'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest()}
     print(folder,flush=True)
     try:
         reference=None
@@ -178,7 +199,8 @@ def main():
         assert hashlib.sha256(source.read_bytes()).hexdigest()==source_hash
         if args.reference:
             assert reference is not None
-            assert captured==reference['captured']
+            report['api_equal']=captured==reference['captured']
+            assert report['api_equal']
             assert len(report['baselines'])==len(reference_baselines)
             report['differences']=[]
             for native, reader in zip(report['baselines'],reference_baselines):

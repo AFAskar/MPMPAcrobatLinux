@@ -12,6 +12,12 @@ pub struct Runtime {
     _engine: Engine,
     pub loaded: usize,
 }
+// Reader's span metrics use one decimal with ties-to-even, applied to the
+// actual binary value (8.05 rounds up; 7.25 rounds down). Multiplication by ten
+// first would erase the distinction at some half-way values.
+fn round_rich_metric(value: f64) -> f64 {
+    format!("{value:.1}").parse().unwrap_or(value)
+}
 // Scripted probes select only options actually offered by the original dialog.
 // Preserve option magnitudes because Acrobat uses them as item identities.
 fn select_dialog_options(request: &Value, reply: &mut Value) -> Result<()> {
@@ -257,6 +263,7 @@ impl Runtime {
             })().map_err(|e|Exception::throw_message(&ctx,&format!("{e:#}")))
         })?)?;
         let initial=json!({"attachments":attachment_metadata,"repair_allowed":repair_allowed,"templates":pdf.templates,"trace":std::env::var("MPMB_TRACE_FIELDS").unwrap_or_default().split(',').collect::<Vec<_>>(),"bookmarks":pdf.bookmarks,"fields":pdf.fields,"order":pdf.order,"info":pdf.info,"file":pdf.path.file_name().unwrap().to_string_lossy(),"path":pdf.path,"pages":pdf.doc.get_pages().len()});
+        ctx.globals().set("__roundRichMetric",Function::new(ctx.clone(),round_rich_metric)?)?;
         ctx.globals().set("__initial",initial.to_string())?;
         ctx.eval::<(),_>(concat!(include_str!("acrobat.js"),"\nvoid 0;")).map_err(|e|anyhow!("Acrobat host: {e}: {:?}",ctx.catch()))?;
         Ok(())})?;
@@ -414,11 +421,16 @@ mod tests {
         engine.set_max_stack_size(1024 * 1024);
         let context = Context::full(&engine).unwrap();
         context.with(|ctx|{
+            ctx.globals().set("__roundRichMetric",Function::new(ctx.clone(),round_rich_metric).unwrap()).unwrap();
             let field=|name:&str,value:&str,actions:Value|json!({"name":name,"value":value,"default_value":"","user_name":"","submit_name":"","kind":"Tx","flags":0,"display":0,"text_size":10,"widgets":[],"items":[],"actions":actions});
             ctx.globals().set("__initial",json!({"fields":{"A":field("A","2",json!({"V":"if (Number(event.value)<0) event.rc=false;"})),"B":field("B","0",json!({"C":"event.value=getField('A').value+1;"})),"C":field("C","0",json!({"C":"event.value=getField('B').value+1;"})),"Unchecked":json!({"kind":"Btn","flags":0,"value":"Off","default_value":"","items":[],"widgets":[],"actions":{},"export_values":["True"]})},"order":["B","C"],"info":{},"bookmarks":{"children":[]},"pages":1,"templates":{"blank":{"fields":{},"order":[]}}}).to_string()).unwrap();
             ctx.eval::<(),_>(concat!(include_str!("acrobat.js"),"\nvoid 0;")).unwrap();
             assert!(ctx.eval::<bool,_>(test).unwrap());
         });
+    }
+    #[test]
+    fn rich_span_metrics_use_reader_decimal_rounding() {
+        host("var f=getField('A');f.richText=true;var sizes=[7.25,7.9,8.05,8.5,8.9,9.5,8.049999999999999];var expected=[7.2,7.9,8.1,8.5,8.9,9.5,8];var good=true;sizes.forEach(function(size,i){f.richValue=[{text:'metric',textSize:size,linespacing:14.75}];good=good&&f.richValue[0].textSize===expected[i]&&f.richValue[0].linespacing===14.8;});f.setAction('Format','event.richValue=[{text:\"formatted\",textSize:8.049999999999999,linespacing:7.25}]');f.value='stored';var span=JSON.parse(__host.snapshot()).A.richValue[0];good&&span.textSize===8&&span.linespacing===7.2");
     }
     #[test]
     fn original_order_and_numeric_values() {

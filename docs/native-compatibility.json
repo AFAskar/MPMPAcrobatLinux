@@ -1625,6 +1625,16 @@
         24
       ]
     },
-    "native_reopen": "output/testing/rich-font-roundtrip-1793372205249849255/fonts.json"
+    "native_reopen": "output/testing/rich-font-roundtrip-1793372205249849255/fonts.json",
+    "reader_roundtrip": "output/testing/rich-font-roundtrip-1793372372336365396/fonts.json"
+  },
+  "rich_span_decimal_metrics": {
+    "status": "bounded six-field API comparison exact; short-leading layout still failed before separate baseline fix",
+    "unit_tests": 88,
+    "reader": "output/testing/rich-baseline-1793372158550496530/baselines.json",
+    "native": "output/testing/rich-baseline-1793372412020922365/baselines.json",
+    "scope": "Original fixture text fields with K/V/F deliberately cleared for host diagnostics. Numeric rich span textSize and linespacing round to one decimal with ties-to-even on the original binary value:7.25->7.2,8.05->8.1,14.75->14.8,original MPMB computed8.049999999999999->8. Saved Reader output independently checked using ASCII carrier/checksum/sentinel and preserved scripts. Raw and formatted span normalization share this conversion.",
+    "actual_mpmb": "output/testing/rich-format-1793372544623347380/formatting.json",
+    "limits": "The six-field baseline suite remains FAILED at this stage: two short-leading first baselines differ. Original notes APIs and four faces match and heading Tf is8, but overall notes workflow still fails baseline and missing decorations. Fractional defaultStyle/scalar setters and immediate event getter timing remain unqualified."
   }
 }

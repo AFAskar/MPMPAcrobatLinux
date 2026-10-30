@@ -48,6 +48,7 @@ var __host = (function () {
     for(let i=0;i<input.length;i++){
       const item=input[i];if(!item||typeof item!=='object'||Array.isArray(item))throw Error('Invalid rich span');
       const span=Object.assign(copyData(f._defaultStyle),copyData(item));delete span.changeMarker;
+      for(const key of ['textSize','linespacing'])if(typeof span[key]==='number'&&Number.isFinite(span[key]))span[key]=__roundRichMetric(span[key]);
       span.text=textValue(f,item.text===undefined?'':item.text);
       if(!span.endParagraph||i===input.length-1)delete span.endParagraph;
       if(item.textColor){let rgb;if(item.textColor[0]==='RGB')rgb=item.textColor.slice(1);else if(item.textColor[0]==='G')rgb=[item.textColor[1],item.textColor[1],item.textColor[1]];else return unsupported('Field.richValue color '+item.textColor[0]);span.textColor=['RGB',...rgb.map(v=>Math.round(Math.floor(Math.floor(Math.max(0,Math.min(1,Number(v)))*65536)/65536*255)/255*65536)/65536)];}
