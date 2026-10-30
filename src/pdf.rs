@@ -1,6 +1,7 @@
 mod appearance;
 mod bookmark_tree;
 mod buttons;
+mod embedded_fonts;
 mod field_style;
 mod installed_fonts;
 mod rich_text;
@@ -456,71 +457,7 @@ struct EmbeddedFont {
     metrics: appearance::RichFontMetrics,
     font_name: String,
 }
-fn embedded_fonts(doc: &Document) -> Result<BTreeMap<String, EmbeddedFont>> {
-    let mut result = BTreeMap::new();
-    let form = resolved(doc, doc.catalog()?.get(b"AcroForm")?)?.as_dict()?;
-    let Ok(resources) = form
-        .get(b"DR")
-        .and_then(|o| doc.dereference(o).map(|(_, o)| o))
-        .and_then(Object::as_dict)
-    else {
-        return Ok(result);
-    };
-    let Ok(fonts) = resources
-        .get(b"Font")
-        .and_then(|o| doc.dereference(o).map(|(_, o)| o))
-        .and_then(Object::as_dict)
-    else {
-        return Ok(result);
-    };
-    for (key, value) in fonts {
-        let font = resolved(doc, value)?.as_dict()?;
-        let Ok(descriptor) = font
-            .get(b"FontDescriptor")
-            .and_then(|o| doc.dereference(o).map(|(_, o)| o))
-            .and_then(Object::as_dict)
-        else {
-            continue;
-        };
-        let Ok(stream) = descriptor
-            .get(b"FontFile2")
-            .and_then(|o| doc.dereference(o).map(|(_, o)| o))
-            .and_then(Object::as_stream)
-        else {
-            continue;
-        };
-        let bytes = if stream.dict.has(b"Filter") {
-            stream.decompressed_content()?
-        } else {
-            stream.content.clone()
-        };
-        if let Ok(face) = ttf_parser::Face::parse(&bytes, 0) {
-            let bbox = face.global_bounding_box();
-            let fallback =
-                (f32::from(bbox.y_max) - f32::from(bbox.y_min)) / f32::from(face.units_per_em());
-            let bbox_height = descriptor
-                .get(b"FontBBox")
-                .ok()
-                .and_then(|v| resolved(doc, v).ok())
-                .and_then(|v| v.as_array().ok())
-                .and_then(|v| {
-                    Some((v.get(3)?.as_float().ok()? - v.get(1)?.as_float().ok()?) / 1000.)
-                })
-                .filter(|v| v.is_finite() && *v > 0.)
-                .unwrap_or(fallback);
-            let metrics = appearance::RichFontMetrics::from_face(&face, Some(bbox_height));
-            result.insert(
-                String::from_utf8_lossy(key).into_owned(),
-                EmbeddedFont {
-                    bytes,
-                    metrics,
-                    font_name: String::from_utf8_lossy(key).into_owned(),
-                },
-            );
-        }
-    }
-    Ok(result)
-}
+
 impl Pdf {
     pub fn open(path: &Path) -> Result<Self> {
         eprintln!("PDF: loading {}", path.display());
@@ -640,7 +577,7 @@ impl Pdf {
             doc.get_dictionary_mut(form)?.set("CO", ids);
         }
         let icon_source = doc.clone();
-        let mut embedded = embedded_fonts(&doc)?;
+        let mut embedded = embedded_fonts::collect(&doc)?;
         let mut installed_fonts = installed_fonts::Resolver::default();
         let mut font_cache = BTreeMap::new();
         let fallback_path = std::env::var("MPMB_FONT")

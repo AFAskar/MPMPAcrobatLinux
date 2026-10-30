@@ -37,6 +37,7 @@ def main():
  pairs=list(zip(ordered(wa),ordered(wb)))
  out['appearance_comparison']={'scope':'Decoded normal appearance content, including named checkbox states. Resource semantics and rendering require separate checks.','same_content':sum(x['appearance'] is not None and x['appearance']==y['appearance'] for x,y in pairs),'both_missing':sum(x['appearance'] is None and y['appearance'] is None for x,y in pairs),'different_content':sum(x['appearance']!=y['appearance'] for x,y in pairs),'missing_native':sum(x['appearance'] is None for x in wa.values()),'missing_reader':sum(x['appearance'] is None for x in wb.values())}
  out['widget_flag_differences']=[{'name':x['name'],'page':x['page'],'native':x['flags'],'reader':y['flags']} for x,y in pairs if (x['page'],x['name'],x['rect'])==(y['page'],y['name'],y['rect']) and x['flags']!=y['flags']]
+ out['value_comparison']={'scope':'Canonical /V only; raw rich spans and formatted display are separate qualifications.','normalization':['string coercion','CRLF and CR to LF']}
  if args.render_page:
   from PIL import Image,ImageChops
   images=[]

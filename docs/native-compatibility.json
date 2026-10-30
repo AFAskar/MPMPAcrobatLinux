@@ -1678,5 +1678,22 @@
     "portable_unchanged_reopen": "output/testing/rich-font-roundtrip-1793373849948528703/fonts.json",
     "portable_edit_failure": "output/testing/rich-font-roundtrip-1793373979018774601/fonts.json",
     "limits": "Untouched saved appearances retain four faces without system font lookup. Edit/restore after reopening with fc-match unavailable loses italic/bold-italic, because discovery only reads AcroForm/DR and ignores Type0 appearance faces. New embedded-font discovery repair is separate pending work. All notes suites remain FAILED without decorations; full class/table/pixel compatibility incomplete."
+  },
+  "portable_rich_face_edits": {
+    "status": "bounded font reuse after native/Reader reopen and original-action edit/restore passes without system-font lookup",
+    "unit_tests": 91,
+    "native": "output/testing/rich-format-1793374207169824901/formatting.json",
+    "roundtrip": "output/testing/rich-font-roundtrip-1793374816845051065/fonts.json",
+    "earlier_roundtrip_without_reader_checksum": "output/testing/rich-font-roundtrip-1793374250279987135/fonts.json",
+    "counterexample": "output/testing/rich-font-roundtrip-1793373979018774601/fonts.json",
+    "regressions": [
+      "output/testing/native-acceptance-1793374466549523220/acceptance.json",
+      "output/testing/native-generated-1793374546542400842/generated.json"
+    ],
+    "canonical_comparison": "output/testing/portable-fonts-final-canonical-comparison-1793374900000000000.json",
+    "diagnostic_difference_analysis": "output/testing/portable-fonts-diagnostic-differences-1793374900000000000.json",
+    "scope": "Discover Type0 font programs from saved appearances by actual PostScript identity, including descendant descriptors; retain original DR priority. Fresh native probes disable executable lookup and edit/restore original notes through field events. Four faces, formatted spans, canonical notes, first baseline and original actions/scripts survive native resave, genuine Reader save, and native Reader-output edit/resave. Saved ASCII observer/checksum/sentinel independently match Reader summary and captured APIs.",
+    "canonical_limits": "4237/4241 canonical values match after declared string coercion and CR/CRLF normalization. Four diagnostic PC Name/mirror strings differ in JSON property order; all decode equally. Complete canonical comparison deliberately remains false. All2093 active widgets retain exact geometry/flags/states;28 decoded appearances differ, so full presentation remains incomplete.",
+    "limits": "Original notes workflow remains FAILED without decorations; glyph advances/pixels, broader font fallback/mixed-family metrics and complete class/table workflows still incomplete. CFF and other collection members remain unsupported. New faces not previously embedded still require an available font."
   }
 }
