@@ -35,3 +35,16 @@ python3 tools/native/warlock-reader-discovery.py \
 ```
 
 The tool cancels initial option discovery, captures offered exact labels through an original script observer, reopens the saved sheet and types them into nine observed enabled native ComboBox Edit children under the actual Cantrips/Spells headings. Each entry requires exact ownership/focus, clipboard readback, Tab and live-text readback without an unexpected dialog. It uses the actual offered list/generation buttons. No selected arrays or derived expected values are written to Reader. The saved ASCII observer verifies Unicode sentinel and Reader code-unit/checksum7035/963743635. Linux independently verifies selected arrays, exact derived/generated fields and original scripts; Reader termination is checked. Six comparison checks pass: source exclusions as sets, cantrip/spell sets, invocation list, exact attack values and generated description with declared CR/CRLF→LF normalization. This covers initial spell selection/generation only. Reader invocation gestures, subsequent edited reopen, native Reader-output reopen, full state/appearance parity and other class/table choices remain incomplete.
+
+The stronger selected-state cross-runtime cycle passes in `warlock-selected-roundtrip-1793403770667231750/roundtrip.json`: Reader-selected input → native edit/save changed description → fresh native reopen/restore → actual Reader weapon and description edits with changed-value save → fresh native changed-save/reopen/restore. Each phase preserves selected spell/invocation/source lists, class identity and checked derived/generated fields; independent PDF checks preserve original scripts and Reader checksum/sentinel961/3388285582. New native font resources prove the description AP rebuilt. First baselines remain within0.001pt of Reader (native2.9024901, Reader2.903). This qualifies only vertical centering/persistence, not full layout.
+
+Reproduce using the93-test native report and qualified readiness:
+
+```bash
+python3 tools/native/warlock-selected-roundtrip.py \
+  --reader output/testing/reader-warlock-discovery-1793401830310415656/discovery.json \
+  --native output/testing/native-warlock-spells-1793402517342364385/warlock-spells.json \
+  --readiness output/testing/readiness-1793400684.json
+```
+
+An earlier edit/restore-without-intermediate-save run FAILED its rebuild proof (`warlock-selected-roundtrip-1793403359805605908/roundtrip.json`): both readers retained valid old APs. Its Reader process closed. This is a qualification gap, not an application rendering failure. The old92 genuine generated AP remains a negative baseline counterexample in `warlock-single-line-old92-counterexample-1793404000000000000.json` (2.6520996 versus2.903). Full Reader/native saved comparison remains FAILED, including the explicitly documented platform preference and observer differences, tiny exact rectangle differences and appearance/pixel mismatches. The new EB crop still fails3311/18656 pixels; horizontal inset/advances and auto sizing remain gaps.

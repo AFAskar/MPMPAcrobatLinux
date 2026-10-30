@@ -69,7 +69,18 @@ fn read(
         })
         .filter(|value| value.is_finite() && *value > 0.)
         .unwrap_or(fallback);
-    let metrics = RichFontMetrics::from_face(&face, Some(bbox_height));
+    let mut metrics = RichFontMetrics::from_face(&face, Some(bbox_height));
+    let metric = |key: &[u8]| {
+        descriptor
+            .get(key)
+            .ok()
+            .and_then(|value| resolved(doc, value).ok())
+            .and_then(|value| value.as_float().ok())
+            .map(|value| value / 1000.)
+    };
+    if let (Some(ascent), Some(descent)) = (metric(b"Ascent"), metric(b"Descent")) {
+        metrics = metrics.with_pdf_vertical_metrics(ascent, descent);
+    }
     Ok(Some(EmbeddedFont {
         bytes,
         metrics,

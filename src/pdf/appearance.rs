@@ -64,10 +64,17 @@ pub(super) fn rich_font_candidates(state: &Value) -> Vec<String> {
 #[derive(Clone, Copy)]
 pub(super) struct RichFontMetrics {
     bbox_height: f32,
+    single_line_bounds: Option<(f32, f32)>,
     ascent: f32,
     line_gap: f32,
 }
 impl RichFontMetrics {
+    pub(super) fn with_pdf_vertical_metrics(mut self, ascent: f32, descent: f32) -> Self {
+        if ascent.is_finite() && descent.is_finite() && ascent > descent {
+            self.single_line_bounds = Some((ascent, descent));
+        }
+        self
+    }
     pub(super) fn with_default_bounds(mut self, defaults: Self) -> Self {
         self.bbox_height = defaults.bbox_height;
         self
@@ -79,6 +86,7 @@ impl RichFontMetrics {
         let normalized = |n: f64| normalized_metric(n, f64::from(face.units_per_em()));
         let bbox = face.global_bounding_box();
         Self {
+            single_line_bounds: None,
             bbox_height: bbox_height
                 .unwrap_or((f32::from(bbox.y_max) - f32::from(bbox.y_min)) / units),
             ascent: normalized(f64::from(
@@ -369,8 +377,12 @@ pub(super) fn content_with_fonts(
         .map(|line| line.iter().filter_map(|g| g.spacing).reduce(f32::max))
         .collect();
     let units = face.units_per_em() as f32;
-    let ascent = face.ascender() as f32 / units;
-    let descent = face.descender() as f32 / units;
+    // Single-line centering uses the PDF descriptor, which need not equal the
+    // embedded TrueType hhea metrics. Rich baseline/leading metrics are separate.
+    let (ascent, descent) = layout.metrics.single_line_bounds.unwrap_or((
+        face.ascender() as f32 / units,
+        face.descender() as f32 / units,
+    ));
     let rich_metrics = layout.metrics;
     let mut y = if spans.is_some() {
         let first = laid
@@ -518,6 +530,53 @@ mod tests {
         }
     }
     #[test]
+    fn single_line_center_uses_pdf_descriptor_without_replacing_rich_metrics() {
+        let bytes = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
+        let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
+        // Reader's original generated spell description: height 10.48, size
+        // 6.25, PDF ascent/descent 1159/-411, saved baseline 2.903 points.
+        // A different physical face deliberately proves descriptor precedence.
+        let metrics =
+            RichFontMetrics::from_face(&face, None).with_pdf_vertical_metrics(1.159, -0.411);
+        let defaults =
+            RichFontMetrics::from_face(&face, Some(1.57)).with_pdf_vertical_metrics(2., -0.5);
+        let metrics = metrics.with_default_bounds(defaults);
+        assert_eq!(metrics.single_line_bounds, Some((1.159, -0.411)));
+        assert_eq!(metrics.bbox_height, 1.57);
+        let baseline = |metrics| {
+            let bytes = content(
+                &face,
+                285.817,
+                10.48,
+                &field(),
+                &json!({"textSize":6.25}),
+                "2 beams",
+                metrics,
+            )
+            .unwrap();
+            let decoded = lopdf::content::Content::decode(&bytes).unwrap();
+            decoded
+                .operations
+                .iter()
+                .find(|op| op.operator == "Tm")
+                .unwrap()
+                .operands[5]
+                .as_float()
+                .unwrap()
+        };
+        assert!((baseline(Some(metrics)) - 2.903).abs() < 0.001);
+        assert!((baseline(None) - baseline(Some(metrics))).abs() > 0.05);
+        assert!(RichFontMetrics::from_face(&face, None)
+            .with_pdf_vertical_metrics(f32::NAN, -0.411)
+            .single_line_bounds
+            .is_none());
+        assert!(RichFontMetrics::from_face(&face, None)
+            .with_pdf_vertical_metrics(-1., 1.)
+            .single_line_bounds
+            .is_none());
+    }
+
+    #[test]
     fn decorations_keep_run_colors_and_paint_outside_text_objects() {
         let bytes = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
         let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
@@ -592,6 +651,7 @@ mod tests {
     fn first_rich_line_accounts_for_mixed_sizes_and_short_leading() {
         let metrics = RichFontMetrics {
             bbox_height: 1.57,
+            single_line_bounds: None,
             ascent: 0.728,
             line_gap: 0.131,
         };
@@ -666,6 +726,7 @@ mod tests {
         let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
         let metrics = RichFontMetrics {
             bbox_height: 1.57,
+            single_line_bounds: None,
             ascent: 0.728,
             line_gap: 0.131,
         };

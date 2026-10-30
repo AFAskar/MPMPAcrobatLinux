@@ -1383,7 +1383,7 @@
     "status": "defined native full invocation workflow and independent Reader initial spell-selection/generation comparison pass; broader phase/persistence parity incomplete",
     "native": "output/testing/native-warlock-spells-1793165446484448545/warlock-spells.json",
     "scope": "Original 2024 source controls, exact offered spell selections and cantrip-specific invocation menu. Select three cantrips and six known spells; generate, add Agonizing Blast, regenerate, remove/regenerate, readd/regenerate. Assert exact lists, choices, attack effects and generated Eldritch Blast description, saved fields/appearances/scripts and native reopen. Option discovery cancels the actual original dialog before using its validated offered labels; no direct CurrentSpells injection.",
-    "remaining": "Reader invocation add/remove/readd gestures, selected-state subsequent edited reopen, native reopening Reader-selected output, whole-state/appearance equivalence, other spells/invocations/classes, spell expenditure/rests and comprehensive multiclass/table use remain incomplete.",
+    "remaining": "Real Reader invocation add/remove/readd gestures, full state/appearance equivalence, other spells/invocations/classes, spell expenditure/rests and comprehensive multiclass/table use remain incomplete.",
     "native_current_92_tests": "output/testing/native-warlock-spells-1793378309651107868/warlock-spells.json",
     "native_default_sources": "output/testing/native-warlock-spells-1793401115160975684/warlock-spells.json",
     "source_profile_note": "New --default-sources case retains original startup defaults (51 exclusions at all four phases), verifies the same selected spell/invocation/regeneration/native persistence assertions, and captures exclusions for independent Reader comparison. Reader source equality and workflow parity remain pending.",
@@ -1396,7 +1396,8 @@
       "scope": "Default-source native before/after fresh reopen, actual weapon edit/restore and resave. All4520 canonical /V values match with declared string coercion and CR/CRLF\u2192LF normalization,2402 active widgets geometry/flags/states equal, original scripts equal. All1001 selected/1002 invocation populated normal AP contents match. Selected-state front page Poppler72dpi pixels identical and inspected. Raw rich spans, resource equivalence on other pages and independent Reader parity remain separate."
     },
     "reader_initial_selection": "output/testing/reader-warlock-discovery-1793401830310415656/discovery.json",
-    "reader_initial_scope": "Actual original PopupEdit text entry through nine observed enabled controls with exact offered labels, clipboard/live-text readback and Tab, offered generation buttons, original-script ASCII observer with Unicode sentinel and Reader checksum7035/963743635, independent canonical derived/generated fields and embedded script hashes, verified Reader process termination. Default source exclusions as sets, spell sets, invocation state, exact attack fields and generated EB description with declared line-ending normalization equal native initial phase."
+    "reader_initial_scope": "Actual original PopupEdit text entry through nine observed enabled controls with exact offered labels, clipboard/live-text readback and Tab, offered generation buttons, original-script ASCII observer with Unicode sentinel and Reader checksum7035/963743635, independent canonical derived/generated fields and embedded script hashes, verified Reader process termination. Default source exclusions as sets, spell sets, invocation state, exact attack fields and generated EB description with declared line-ending normalization equal native initial phase.",
+    "edited_cross_runtime_roundtrip": "output/testing/warlock-selected-roundtrip-1793403770667231750/roundtrip.json"
   },
   "rich_style_reference": {
     "status": "independent Reader diagnostic completed; native implementation remains incomplete",
@@ -1744,5 +1745,17 @@
     "readiness": "output/testing/readiness-1793400684.json",
     "readiness_cases": 24,
     "preflight_checks": 28
+  },
+  "plain_single_line_vertical_metrics": {
+    "status": "bounded Reader-derived descriptor centering and changed-save/reopen interoperability pass; full plain layout remains partial",
+    "native": "output/testing/native-warlock-spells-1793402517342364385/warlock-spells.json",
+    "reader": "output/testing/reader-warlock-discovery-1793401830310415656/discovery.json",
+    "roundtrip": "output/testing/warlock-selected-roundtrip-1793403770667231750/roundtrip.json",
+    "negative": "output/testing/warlock-single-line-old92-counterexample-1793404000000000000.json",
+    "tests": 93,
+    "acceptance": "output/testing/native-acceptance-1793402648753967370/acceptance.json",
+    "generated": "output/testing/native-generated-1793402782209209539/generated.json",
+    "scope": "Embedded PDF ascent/descent are retained separately from rich BBox and typographic leading, and used for plain single-line centering. Original generated Warlock spell description at6.25pt: baseline native2.9024901 vs Reader2.903 within0.001pt. Actual marker values are saved, freshly reopened in native, restored/resaved; Reader edits/saves marker and restores, then another fresh native marker/reopen/restore. New MPMB font resources prove native rebuilding, not old AP reuse. Source class/spell/invocation lists, source exclusions, derived/generated values, scripts and Reader checksum/sentinel961/3388285582 pass. Old92 actual generated artifact baseline2.6520996 fails. Invalid/missing descriptor metrics retain face fallback; original rich metrics remain separate.",
+    "remaining": "Horizontal inset/advances, automatic font sizing, full pixel equality, broader fonts/field styles and complete character/table coverage remain incomplete. New crop field-render-1793402718791168025 remains FAILED3311/18656 pixels; older3550/18656 also failed."
   }
 }

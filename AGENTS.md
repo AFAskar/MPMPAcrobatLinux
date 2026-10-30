@@ -47,3 +47,5 @@ Read `docs/testing-environment.md` before changing or testing PDF behavior.
 - Fontconfig can successfully return an unrelated substitute. Verify actual PostScript identity and glyph coverage before claiming a requested face, and retain embedded-font priority.
 
 - Read live cross-process Windows edit contents with bounded `WM_GETTEXT`, not cached `GetWindowText` captions. Empty UIA children or abbreviated owner-drawn combo strings do not prove empty/full option lists. Keep numeric combo state separate from exact offered labels. Select editable controls by observed type, ownership and role; the first class-dialog edit is the numeric level, not the class name.
+
+- Plain text edited and restored in one runtime can still reuse its original appearance. For a rebuild qualification, save the changed value, reopen that changed snapshot, then restore/resave; independently verify that the native appearance was rebuilt. Retaining a valid old AP is not a rendering failure, but it cannot prove the new renderer works after reopen.
