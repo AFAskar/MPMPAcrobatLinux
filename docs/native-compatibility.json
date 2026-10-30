@@ -1380,16 +1380,23 @@
     "remaining": "Reader original spell-selection gesture/workflow parity, other dialog controls and popup-edit desktop typing remain incomplete."
   },
   "warlock_selected_spells_2024": {
-    "status": "bounded native original spell/menu/regeneration/save/reopen workflow passes; Reader parity pending",
+    "status": "defined native full invocation workflow and independent Reader initial spell-selection/generation comparison pass; broader phase/persistence parity incomplete",
     "native": "output/testing/native-warlock-spells-1793165446484448545/warlock-spells.json",
     "scope": "Original 2024 source controls, exact offered spell selections and cantrip-specific invocation menu. Select three cantrips and six known spells; generate, add Agonizing Blast, regenerate, remove/regenerate, readd/regenerate. Assert exact lists, choices, attack effects and generated Eldritch Blast description, saved fields/appearances/scripts and native reopen. Option discovery cancels the actual original dialog before using its validated offered labels; no direct CurrentSpells injection.",
-    "remaining": "Reader interaction/runtime parity, other spells/invocations/classes, spell slot use/rests, full generated appearance equivalence and comprehensive multiclass/table use remain unqualified.",
+    "remaining": "Reader invocation add/remove/readd gestures, selected-state subsequent edited reopen, native reopening Reader-selected output, whole-state/appearance equivalence, other spells/invocations/classes, spell expenditure/rests and comprehensive multiclass/table use remain incomplete.",
     "native_current_92_tests": "output/testing/native-warlock-spells-1793378309651107868/warlock-spells.json",
     "native_default_sources": "output/testing/native-warlock-spells-1793401115160975684/warlock-spells.json",
     "source_profile_note": "New --default-sources case retains original startup defaults (51 exclusions at all four phases), verifies the same selected spell/invocation/regeneration/native persistence assertions, and captures exclusions for independent Reader comparison. Reader source equality and workflow parity remain pending.",
     "native_default_sources_edited_reopen": "output/testing/native-warlock-spells-1793401659301222978/warlock-spells.json",
     "native_all_sources_edited_reopen": "output/testing/native-warlock-spells-1793401732760222531/warlock-spells.json",
-    "edited_reopen_scope": "Separate initial-selection/final-invocation snapshots, fresh native opens, original Quarterstaff edit (derived 1d6+4), original Eldritch Blast restoration, exact selections/invocation/damage/generated-description assertions and independent saved fields/appearances/scripts. Reader parity still pending."
+    "edited_reopen_scope": "Separate initial-selection/final-invocation snapshots, fresh native opens, original Quarterstaff edit (derived 1d6+4), original Eldritch Blast restoration, exact selections/invocation/damage/generated-description assertions and independent saved fields/appearances/scripts. Reader parity still pending.",
+    "native_full_edited_reopen_comparisons": {
+      "selected": "output/testing/warlock-selected-edit-render-1793402100000000000.json",
+      "invocation": "output/testing/warlock-invocation-edit-canonical-1793402100000000000.json",
+      "scope": "Default-source native before/after fresh reopen, actual weapon edit/restore and resave. All4520 canonical /V values match with declared string coercion and CR/CRLF\u2192LF normalization,2402 active widgets geometry/flags/states equal, original scripts equal. All1001 selected/1002 invocation populated normal AP contents match. Selected-state front page Poppler72dpi pixels identical and inspected. Raw rich spans, resource equivalence on other pages and independent Reader parity remain separate."
+    },
+    "reader_initial_selection": "output/testing/reader-warlock-discovery-1793401830310415656/discovery.json",
+    "reader_initial_scope": "Actual original PopupEdit text entry through nine observed enabled controls with exact offered labels, clipboard/live-text readback and Tab, offered generation buttons, original-script ASCII observer with Unicode sentinel and Reader checksum7035/963743635, independent canonical derived/generated fields and embedded script hashes, verified Reader process termination. Default source exclusions as sets, spell sets, invocation state, exact attack fields and generated EB description with declared line-ending normalization equal native initial phase."
   },
   "rich_style_reference": {
     "status": "independent Reader diagnostic completed; native implementation remains incomplete",
@@ -1733,7 +1740,7 @@
     "failed_selector_probe": "output/testing/reader-dialog-input-1793400350712372382/input.json",
     "failed_cleanup_recovery": "output/testing/reader-dialog-input-1793400350712372382/cleanup.json",
     "scope": "Bounded cross-process WM_GETTEXT reads, exact owned editable-control focus, clipboard readback and Tab; original class callback changes numeric combo selection, wrong owner rejected, cancel preserves saved class and original scripts. Failed numeric-target run retained/closed. Native combo count/index are numeric diagnostics only; full owner-drawn option labels and dropdown pointer gestures are not qualified.",
-    "remaining": "Spell Unicode typing, selected original spell/invocation workflow parity and broad dialog coverage remain unqualified.",
+    "remaining": "Nine original spell controls now qualify exact offered Unicode text entry/Tab/live-text verification in the bounded Warlock pilot. Broader dialog controls, full dropdown pointer gestures and all other choices remain unqualified.",
     "readiness": "output/testing/readiness-1793400684.json",
     "readiness_cases": 24,
     "preflight_checks": 28
