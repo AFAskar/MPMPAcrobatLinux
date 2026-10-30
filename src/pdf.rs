@@ -2,6 +2,7 @@ mod appearance;
 mod bookmark_tree;
 mod buttons;
 mod field_style;
+mod installed_fonts;
 mod rich_text;
 mod structure;
 use anyhow::{bail, Context, Result};
@@ -453,6 +454,7 @@ fn unicode_font(doc: &mut Document, bytes: Vec<u8>, name: &str) -> Result<(Objec
 struct EmbeddedFont {
     bytes: Vec<u8>,
     metrics: appearance::RichFontMetrics,
+    font_name: String,
 }
 fn embedded_fonts(doc: &Document) -> Result<BTreeMap<String, EmbeddedFont>> {
     let mut result = BTreeMap::new();
@@ -509,7 +511,11 @@ fn embedded_fonts(doc: &Document) -> Result<BTreeMap<String, EmbeddedFont>> {
             let metrics = appearance::RichFontMetrics::from_face(&face, Some(bbox_height));
             result.insert(
                 String::from_utf8_lossy(key).into_owned(),
-                EmbeddedFont { bytes, metrics },
+                EmbeddedFont {
+                    bytes,
+                    metrics,
+                    font_name: String::from_utf8_lossy(key).into_owned(),
+                },
             );
         }
     }
@@ -634,7 +640,8 @@ impl Pdf {
             doc.get_dictionary_mut(form)?.set("CO", ids);
         }
         let icon_source = doc.clone();
-        let embedded = embedded_fonts(&doc)?;
+        let mut embedded = embedded_fonts(&doc)?;
+        let mut installed_fonts = installed_fonts::Resolver::default();
         let mut font_cache = BTreeMap::new();
         let fallback_path = std::env::var("MPMB_FONT")
             .unwrap_or_else(|_| "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf".into());
@@ -848,6 +855,29 @@ impl Pdf {
                 let width = (rect[2] - rect[0]).abs() as f32;
                 let height = (rect[3] - rect[1]).abs() as f32;
                 let rich_fonts = appearance::rich_font_candidates(s);
+                if s["richRenderActive"] == true {
+                    let mut requested_faces = vec![rich_fonts.clone()];
+                    if let Some(name) = s["textFont"].as_str() {
+                        requested_faces.push(vec![name.to_owned()]);
+                    }
+                    if let Some(spans) = s["richValue"].as_array() {
+                        for span in spans {
+                            let span_state = json!({"richRenderActive":true,"richValue":[span],"defaultStyle":s["defaultStyle"]});
+                            requested_faces.push(appearance::rich_font_candidates(&span_state));
+                        }
+                    }
+                    for candidates in requested_faces {
+                        if candidates.iter().any(|name| embedded.contains_key(name)) {
+                            continue;
+                        }
+                        for candidate in candidates {
+                            installed_fonts.resolve(&candidate, &mut embedded);
+                            if embedded.contains_key(&candidate) {
+                                break;
+                            }
+                        }
+                    }
+                }
                 let requested = rich_fonts
                     .iter()
                     .find(|name| embedded.contains_key(*name))
@@ -900,8 +930,11 @@ impl Pdf {
                 for key in selected.iter().flatten() {
                     if !font_cache.contains_key(key) {
                         let asset = &embedded[key];
-                        let mapped =
-                            unicode_font(&mut doc, asset.bytes.clone(), &format!("MPMB{key}"))?;
+                        let mapped = unicode_font(
+                            &mut doc,
+                            asset.bytes.clone(),
+                            &format!("MPMB{}", asset.font_name),
+                        )?;
                         font_cache.insert(key.clone(), mapped);
                     }
                 }

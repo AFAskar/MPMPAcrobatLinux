@@ -1664,5 +1664,19 @@
     "regression": "output/testing/native-acceptance-1793372713588885054/acceptance.json",
     "scope": "18 isolated field cases match captured APIs and baseline offsets within0.002pt, including fractional sizes, inline larger/smaller runs and the largest-em leading threshold. All3 original notes workflows match APIs and first baseline. Original2014/2024 use four matching fonts. First baseline starts with first-span PDF bounds, adds size-difference times typographic ascent+gap, and subtracts largest-size times gap when explicit leading is below largest size. Real Reader save and fresh native reopen retain the2024 corrected first baseline, spans, four faces, canonical text and original scripts/actions.",
     "limits": "All original notes workflow suites remain FAILED: decorations absent in all; Ashnar missing italic/bold-italic face lookup despite installed system fonts, giving2 versus4 Reader faces. Mixed-family typography, differing spacing per run, glyph advances, full appearance pixels and complete per-class persistence remain incomplete."
+  },
+  "installed_rich_faces": {
+    "status": "Ashnar exact four-face lookup and unchanged-state Reader/native roundtrip pass; portable editing still FAILED",
+    "unit_tests": 90,
+    "native": "output/testing/rich-format-1793373501083515876/formatting.json",
+    "reader_reference": "output/testing/rich-format-1793372844548349472/formatting.json",
+    "roundtrip": "output/testing/rich-font-roundtrip-1793373589948832107/fonts.json",
+    "regression": "output/testing/native-acceptance-1793374014421636143/acceptance.json",
+    "render": "output/testing/field-render-1793373676768418888/render.json",
+    "render_limits": "Poppler crops inspected: actual normal/bold/italic/bold-italic present. Strict pixel comparison remains FAILED at360/54270 changed pixels, including missing decorations.",
+    "scope": "Embedded candidate groups retain priority. Missing rich TrueType faces can use fc-match only after actual PostScript identity and glyph coverage checks. PDF comma style aliases keep actual installed PostScript names in new font resources. Unit negative controls reject a regular face masquerading as italic/bold; CFF and nonzero collection members remain unsupported. Exact Segoe faces already installed locally; no font bytes committed.",
+    "portable_unchanged_reopen": "output/testing/rich-font-roundtrip-1793373849948528703/fonts.json",
+    "portable_edit_failure": "output/testing/rich-font-roundtrip-1793373979018774601/fonts.json",
+    "limits": "Untouched saved appearances retain four faces without system font lookup. Edit/restore after reopening with fc-match unavailable loses italic/bold-italic, because discovery only reads AcroForm/DR and ignores Type0 appearance faces. New embedded-font discovery repair is separate pending work. All notes suites remain FAILED without decorations; full class/table/pixel compatibility incomplete."
   }
 }
