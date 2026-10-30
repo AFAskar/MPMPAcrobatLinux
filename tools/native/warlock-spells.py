@@ -20,7 +20,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--default-sources',action='store_true',help='Retain original startup source selection for Reader-profile comparison');args=parser.parse_args()
     source_dialogs=[{'title':audit.SOURCE,'result':'ok'}] if args.default_sources else audit.source_dialogs('2024')
     folder=ROOT/'output/testing'/('native-warlock-spells-'+str(time.time_ns()));folder.mkdir();binary=folder/'mpmb-reader';shutil.copy2(ROOT/'target/debug/mpmb-reader',binary)
-    source=next((ROOT/'Testing').glob('*_2024_*.pdf'));original_hash=hashlib.sha256(source.read_bytes()).hexdigest();output=folder/'2024.pdf';selected_output=folder/'selected-2024.pdf'
+    source=next((ROOT/'Testing').glob('*_2024_*.pdf'));original_hash=hashlib.sha256(source.read_bytes()).hexdigest();output=folder/'2024.pdf';selected_output=folder/'selected-2024.pdf';selected_edited=folder/'selected-edited-2024.pdf';final_edited=folder/'invocation-edited-2024.pdf'
     report={'passed':False,'scope':__doc__,'source_profile':'original startup defaults' if args.default_sources else 'all sources/classes enabled through original dialogs','binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest()};print(folder,flush=True)
     def run(label,steps,dialogs,pdf=source):
         spec,evidence=folder/(label+'-scenario.json'),folder/(label+'-report.json');spec.write_text(json.dumps({'steps':steps,'dialogs':dialogs,'alerts':[1]*100}))
@@ -54,10 +54,20 @@ def main():
         data,evidence=run('workflow',steps,dialogs);phases={s['result']['phase']:s['result'] for s in data['stages'] if isinstance(s.get('result'),dict) and 'phase' in s['result']};expected=phases['readded']['fields']
         assert inspect(output,expected)['passed'];assert script_hashes(output)==script_hashes(source)
         selected_expected=phases['selected-spells']['fields'];assert inspect(selected_output,selected_expected)['passed'];assert script_hashes(selected_output)==script_hashes(source)
-        _,selected_reopen=run('selected-reopen',[{'op':'advance','ms':4100},{'op':'assert','values':selected_expected},capture('selected-reopened',False)],[{'result':'ok'}]*30,selected_output)
-        _,reopen=run('reopen',[{'op':'advance','ms':4100},{'op':'assert','values':expected},capture('reopened',True)],[{'result':'ok'}]*30,output)
+        def edited_reopen(label,pdf,edited,values,selected):
+            # A read-only reopen can retain old APs. Change the actual weapon,
+            # verify its derived damage changed, then restore via original events.
+            steps=[{'op':'advance','ms':4100},{'op':'edit','field':'Attack.1.Weapon Selection','value':'Quarterstaff'},
+                   {'op':'advance','ms':1000},{'op':'eval','code':"if(/2[×x]1d10/.test(getField('Attack.1.Damage').valueAsString))throw Error('Weapon edit retained Eldritch Blast damage');getField('Attack.1.Damage').valueAsString"},
+                   {'op':'edit','field':'Attack.1.Weapon Selection','value':'Eldritch Blast'}, {'op':'advance','ms':1000},
+                   {'op':'assert','values':values},capture(label,selected),{'op':'save','path':str(edited)}]
+            _,evidence=run(label,steps,[{'result':'ok'}]*30,pdf)
+            assert inspect(edited,values)['passed'];assert script_hashes(edited)==script_hashes(source)
+            return evidence
+        selected_reopen=edited_reopen('selected-reopen',selected_output,selected_edited,selected_expected,False)
+        reopen=edited_reopen('reopen',output,final_edited,expected,True)
         assert hashlib.sha256(source.read_bytes()).hexdigest()==original_hash
-        report.update(passed=True,probe=evidence,reopen=reopen,selected_output=str(selected_output),selected_reopen=selected_reopen,output=str(output),phases=phases,expected=expected)
+        report.update(passed=True,probe=evidence,reopen=reopen,selected_output=str(selected_output),selected_edited_output=str(selected_edited),final_edited_output=str(final_edited),selected_reopen=selected_reopen,output=str(output),phases=phases,expected=expected)
     except Exception as error:report['error']=str(error);raise
     finally:(folder/'warlock-spells.json').write_text(json.dumps(report,indent=2)+'\n');print(folder/'warlock-spells.json',flush=True)
 
