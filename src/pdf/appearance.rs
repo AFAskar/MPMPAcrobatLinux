@@ -97,6 +97,23 @@ fn normalized_metric(value: f64, units: f64) -> f32 {
     (((value / units * 65536.).floor() / 65536. * 1000.).floor() / 1000.) as f32
 }
 
+fn first_rich_offset(
+    first: f32,
+    largest: f32,
+    spacing: Option<f32>,
+    metrics: RichFontMetrics,
+) -> f32 {
+    // Mixed first lines start from the first span's default bounds, adding
+    // typographic ascent/gap for larger runs. Reader omits the largest run's
+    // external gap when explicit leading is shorter than that run's em size.
+    first * metrics.bbox_height + (largest - first) * (metrics.ascent + metrics.line_gap)
+        - if spacing.is_some_and(|spacing| spacing < largest) {
+            largest * metrics.line_gap
+        } else {
+            0.
+        }
+}
+
 pub(super) struct RenderFont<'a> {
     pub face: ttf_parser::Face<'a>,
     pub resource: String,
@@ -351,7 +368,18 @@ pub(super) fn content_with_fonts(
     let descent = face.descender() as f32 / units;
     let rich_metrics = layout.metrics;
     let mut y = if spans.is_some() {
-        height - line_sizes.first().copied().unwrap_or(size) * rich_metrics.bbox_height
+        let first = laid
+            .first()
+            .and_then(|line| line.first())
+            .map(|g| g.size)
+            .unwrap_or(size);
+        height
+            - first_rich_offset(
+                first,
+                line_sizes.first().copied().unwrap_or(size),
+                line_spacings.first().copied().flatten(),
+                rich_metrics,
+            )
     } else if wrap {
         height - 1. - line_sizes.first().copied().unwrap_or(size)
     } else {
@@ -455,6 +483,28 @@ mod tests {
             items: vec![],
             export_values: vec![],
             caption: String::new(),
+        }
+    }
+    #[test]
+    fn first_rich_line_accounts_for_mixed_sizes_and_short_leading() {
+        let metrics = RichFontMetrics {
+            bbox_height: 1.57,
+            ascent: 0.728,
+            line_gap: 0.131,
+        };
+        // Independent Reader baseline offsets: uniform fractional and inline
+        // size7/8 or9/7 runs, with short, explicit normal and default leading.
+        for (first, largest, spacing, expected) in [
+            (7.9, 7.9, Some(7.2), 11.3681),
+            (8.1, 8.1, Some(7.2), 11.6559),
+            (7.2, 7.2, Some(7.2), 11.304),
+            (7., 8., Some(7.2), 10.801),
+            (7., 8., Some(11.), 11.849),
+            (7., 8., None, 11.849),
+            (9., 9., Some(7.2), 12.951),
+            (9., 9., None, 14.13),
+        ] {
+            assert!((first_rich_offset(first, largest, spacing, metrics) - expected).abs() < 0.002);
         }
     }
     #[test]

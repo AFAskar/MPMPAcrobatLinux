@@ -1636,5 +1636,33 @@
     "scope": "Original fixture text fields with K/V/F deliberately cleared for host diagnostics. Numeric rich span textSize and linespacing round to one decimal with ties-to-even on the original binary value:7.25->7.2,8.05->8.1,14.75->14.8,original MPMB computed8.049999999999999->8. Saved Reader output independently checked using ASCII carrier/checksum/sentinel and preserved scripts. Raw and formatted span normalization share this conversion.",
     "actual_mpmb": "output/testing/rich-format-1793372544623347380/formatting.json",
     "limits": "The six-field baseline suite remains FAILED at this stage: two short-leading first baselines differ. Original notes APIs and four faces match and heading Tf is8, but overall notes workflow still fails baseline and missing decorations. Fractional defaultStyle/scalar setters and immediate event getter timing remain unqualified."
+  },
+  "rich_mixed_first_baselines": {
+    "status": "bounded first-baseline qualification passes; original full formatting remains FAILED",
+    "unit_tests": 89,
+    "native_comparisons": [
+      "output/testing/rich-baseline-1793372644675861856/baselines.json",
+      "output/testing/rich-baseline-1793372658670312658/baselines.json",
+      "output/testing/rich-baseline-1793372836850283925/baselines.json"
+    ],
+    "reader_references": [
+      "output/testing/rich-baseline-1793372158550496530/baselines.json",
+      "output/testing/rich-baseline-1793372474742570790/baselines.json",
+      "output/testing/rich-baseline-1793372631340676683/baselines.json"
+    ],
+    "original_native_workflows": [
+      "output/testing/rich-format-1793372672983568167/formatting.json",
+      "output/testing/rich-format-1793372889184437303/formatting.json",
+      "output/testing/rich-format-1793373033351492707/formatting.json"
+    ],
+    "original_reader_references": [
+      "output/testing/rich-format-1793199447335267809/formatting.json",
+      "output/testing/rich-format-1793372739224297687/formatting.json",
+      "output/testing/rich-format-1793372844548349472/formatting.json"
+    ],
+    "first_baseline_retention": "output/testing/rich-font-roundtrip-1793372931228998769/fonts.json",
+    "regression": "output/testing/native-acceptance-1793372713588885054/acceptance.json",
+    "scope": "18 isolated field cases match captured APIs and baseline offsets within0.002pt, including fractional sizes, inline larger/smaller runs and the largest-em leading threshold. All3 original notes workflows match APIs and first baseline. Original2014/2024 use four matching fonts. First baseline starts with first-span PDF bounds, adds size-difference times typographic ascent+gap, and subtracts largest-size times gap when explicit leading is below largest size. Real Reader save and fresh native reopen retain the2024 corrected first baseline, spans, four faces, canonical text and original scripts/actions.",
+    "limits": "All original notes workflow suites remain FAILED: decorations absent in all; Ashnar missing italic/bold-italic face lookup despite installed system fonts, giving2 versus4 Reader faces. Mixed-family typography, differing spacing per run, glyph advances, full appearance pixels and complete per-class persistence remain incomplete."
   }
 }
