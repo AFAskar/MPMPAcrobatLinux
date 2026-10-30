@@ -42,3 +42,6 @@ Read `docs/testing-environment.md` before changing or testing PDF behavior.
 - Respect widget-local /DA and /Q before parent field attributes when loading styles. Reader can leave the parent's /DA unchanged while saving new styles on widget zero, even when that widget belongs to an inactive template. Keep /DS defaults, widget appearance defaults and existing rich spans separate; changing defaults does not restyle existing spans.
 
 - Rich layout metrics are not interchangeable: measured first baselines use the widget-default font's PDF bounds, while later leading uses run-font typographic metrics. Qualify changes against saved Reader appearances, including mixed sizes and default/explicit spacing; do not hardcode expected coordinates. Host-layout probes that clear field actions are isolated diagnostics, not original MPMB workflow passes.
+
+- Save/reopen qualification must include subsequent edits through original field actions that regenerate appearances. An unchanged resave can retain old appearances and hide missing renderer or font support. Test embedded-face portability with system-font command lookup disabled during fresh native probes.
+- Fontconfig can successfully return an unrelated substitute. Verify actual PostScript identity and glyph coverage before claiming a requested face, and retain embedded-font priority.
