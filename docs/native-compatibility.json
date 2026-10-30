@@ -1695,5 +1695,29 @@
     "scope": "Discover Type0 font programs from saved appearances by actual PostScript identity, including descendant descriptors; retain original DR priority. Fresh native probes disable executable lookup and edit/restore original notes through field events. Four faces, formatted spans, canonical notes, first baseline and original actions/scripts survive native resave, genuine Reader save, and native Reader-output edit/resave. Saved ASCII observer/checksum/sentinel independently match Reader summary and captured APIs.",
     "canonical_limits": "4237/4241 canonical values match after declared string coercion and CR/CRLF normalization. Four diagnostic PC Name/mirror strings differ in JSON property order; all decode equally. Complete canonical comparison deliberately remains false. All2093 active widgets retain exact geometry/flags/states;28 decoded appearances differ, so full presentation remains incomplete.",
     "limits": "Original notes workflow remains FAILED without decorations; glyph advances/pixels, broader font fallback/mixed-family metrics and complete class/table workflows still incomplete. CFF and other collection members remain unsupported. New faces not previously embedded still require an available font."
+  },
+  "native_rich_decorations": {
+    "status": "native underline/strike paths implemented and retained; Reader geometry and full formatting FAILED",
+    "unit_tests": 92,
+    "original_native": "output/testing/rich-format-1793375212589675299/formatting.json",
+    "reader_reference": "output/testing/rich-format-1793199447335267809/formatting.json",
+    "roundtrip": "output/testing/rich-font-roundtrip-1793375351608947791/fonts.json",
+    "path_presence": "output/testing/native-decoration-retention-1793375900000000000.json",
+    "old_missing_paths_counterexample": "output/testing/native-decoration-old-counterexample-1793375900000000000.json",
+    "render": "output/testing/field-render-1793375852795894672/render.json",
+    "regression": "output/testing/native-acceptance-1793375885723786854/acceptance.json",
+    "scope": "Original2024 notes actions/scripts retained. Glyph runs carry both decoration flags; selected TrueType run metrics supply top positions/thicknesses. Paths use run colors and actual advances and paint after ET under the widget clip. Unit checks plain/underline/strike/both flags, color isolation and valid text/graphics scope. Read-only PDF checks find below/above-baseline horizontal paths through edited native reopen, actual Reader save and subsequent edited native reopen without system lookup. Old91 actual artifact fails presence.",
+    "reader_geometry": {
+      "native_y": [
+        366.07025,
+        368.51923
+      ],
+      "reader_y": [
+        366.0439,
+        368.869
+      ],
+      "equal": false
+    },
+    "limits": "Reader uses different decoration offsets/thicknesses. Original full formatting still fails;2024 crop differs427/54270 pixels. This is visible native behavior and bounded persistence, not exact Reader metrics or milestone completion. Other fixture/class/choice/render coverage remains partial."
   }
 }

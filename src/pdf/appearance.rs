@@ -137,6 +137,7 @@ struct Glyph {
     spacing: Option<f32>,
     alignment: Option<u8>,
     font: usize,
+    decoration: u8,
 }
 fn width(face: &ttf_parser::Face<'_>, g: &Glyph) -> f32 {
     if g.c == '\n' {
@@ -314,6 +315,8 @@ pub(super) fn content_with_fonts(
                             color,
                             spacing,
                             font,
+                            decoration: u8::from(span["underline"] == true)
+                                | (u8::from(span["strikethrough"] == true) << 1),
                             alignment: match span["alignment"].as_str() {
                                 Some("left") => Some(0),
                                 Some("center") => Some(1),
@@ -335,6 +338,7 @@ pub(super) fn content_with_fonts(
                     spacing: None,
                     alignment: None,
                     font: 0,
+                    decoration: 0,
                 })
                 .collect()
         }
@@ -355,6 +359,7 @@ pub(super) fn content_with_fonts(
         }
     }
     let mut out = format!("/Tx BMC q 0 0 {width_box} {height} re W n BT ");
+    let mut decorations = String::new();
     let line_sizes: Vec<f32> = laid
         .iter()
         .map(|line| line.iter().map(|g| g.size).reduce(f32::max).unwrap_or(size))
@@ -414,6 +419,7 @@ pub(super) fn content_with_fonts(
                 && line[end].size == line[start].size
                 && line[end].color == line[start].color
                 && line[end].font == line[start].font
+                && line[end].decoration == line[start].decoration
             {
                 end += 1
             }
@@ -444,7 +450,31 @@ pub(super) fn content_with_fonts(
                 first.color[1],
                 first.color[2]
             ));
-            x += run.iter().map(&measure).sum::<f32>();
+            let advance = run.iter().map(&measure).sum::<f32>();
+            let face = &layout.fonts[first.font].face;
+            for (flag, metrics) in [(1, face.underline_metrics()), (2, face.strikeout_metrics())] {
+                if first.decoration & flag == 0 {
+                    continue;
+                }
+                let metrics = metrics
+                    .filter(|metrics| metrics.thickness > 0)
+                    .with_context(|| {
+                        format!("Appearance font lacks decoration metrics in {}", field.name)
+                    })?;
+                let scale = first.size / f32::from(face.units_per_em());
+                // OpenType positions specify the top edge; PDF strokes use
+                // their center line. Reader's own decoration geometry remains
+                // a separate qualification from these native font metrics.
+                let line_y =
+                    y + (f32::from(metrics.position) - f32::from(metrics.thickness) / 2.) * scale;
+                let thickness = f32::from(metrics.thickness) * scale;
+                let end_x = x + advance;
+                decorations.push_str(&format!(
+                    "{} {} {} RG {thickness} w {x} {line_y} m {end_x} {line_y} l S ",
+                    first.color[0], first.color[1], first.color[2]
+                ));
+            }
+            x += advance;
             start = end;
         }
         y -= if spans.is_some() {
@@ -455,7 +485,9 @@ pub(super) fn content_with_fonts(
             line_size * 1.12
         };
     }
-    out.push_str("ET Q EMC");
+    out.push_str("ET ");
+    out.push_str(&decorations);
+    out.push_str("Q EMC");
     Ok(out.into_bytes())
 }
 
@@ -484,6 +516,77 @@ mod tests {
             export_values: vec![],
             caption: String::new(),
         }
+    }
+    #[test]
+    fn decorations_keep_run_colors_and_paint_outside_text_objects() {
+        let bytes = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
+        let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
+        let state = json!({"textSize":7,"richRenderActive":true,"richValue":[
+            {"text":"plain "},
+            {"text":"under ","underline":true,"textColor":["RGB",1,0,0]},
+            {"text":"strike ","strikethrough":true,"textColor":["RGB",0,1,0]},
+            {"text":"both","underline":true,"strikethrough":true,"textColor":["RGB",0,0,1]},
+            {"text":" end"}]});
+        let output = content(
+            &face,
+            400.,
+            50.,
+            &field(),
+            &state,
+            "plain under strike both end",
+            None,
+        )
+        .unwrap();
+        let parsed = lopdf::content::Content::decode(&output).unwrap();
+        let mut in_text = false;
+        let mut baseline = None;
+        let mut starts = Vec::new();
+        let mut colors = Vec::new();
+        let mut strokes = 0;
+        for operation in parsed.operations {
+            match operation.operator.as_str() {
+                "BT" => in_text = true,
+                "ET" => in_text = false,
+                "Tm" => {
+                    baseline.get_or_insert(operation.operands[5].as_float().unwrap());
+                }
+                "RG" => colors.push(
+                    operation
+                        .operands
+                        .iter()
+                        .map(|value| value.as_float().unwrap())
+                        .collect::<Vec<_>>(),
+                ),
+                "w" | "m" | "l" | "S" => {
+                    assert!(!in_text, "Path painting inside a text object");
+                    match operation.operator.as_str() {
+                        "w" => assert!(operation.operands[0].as_float().unwrap() > 0.),
+                        "m" => starts.push((
+                            operation.operands[0].as_float().unwrap(),
+                            operation.operands[1].as_float().unwrap(),
+                        )),
+                        "S" => strokes += 1,
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(strokes, 4);
+        assert_eq!(
+            colors,
+            vec![
+                vec![1., 0., 0.],
+                vec![0., 1., 0.],
+                vec![0., 0., 1.],
+                vec![0., 0., 1.]
+            ]
+        );
+        let baseline = baseline.unwrap();
+        assert!(starts[0].0 > 0. && starts[0].1 < baseline);
+        assert!(starts[1].0 > starts[0].0 && starts[1].1 > baseline);
+        assert_eq!(starts[2].0, starts[3].0);
+        assert!(starts[2].1 < baseline && starts[3].1 > baseline);
     }
     #[test]
     fn first_rich_line_accounts_for_mixed_sizes_and_short_leading() {
@@ -534,6 +637,7 @@ mod tests {
             spacing: None,
             alignment: Some(0),
             font: 0,
+            decoration: 0,
         };
         let bold_glyph = Glyph {
             font: 1,
@@ -662,6 +766,7 @@ mod tests {
                 spacing: Some(11.),
                 alignment: Some(0),
                 font: 0,
+                decoration: 0,
             })
             .collect();
         let layout = lines(&|glyph| width(&face, glyph), glyphs, 100., true);
@@ -713,6 +818,7 @@ mod tests {
                 spacing: None,
                 alignment: None,
                 font: 0,
+                decoration: 0,
             })
             .collect();
         let layout = lines(&|glyph| width(&face, glyph), glyphs, 100., true);
