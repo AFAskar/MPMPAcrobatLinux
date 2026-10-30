@@ -469,6 +469,14 @@ mod tests {
         host("var f=getField('A');f.setItems([['nothing',' '],['Wis Mod','Wisdom']]);f.currentValueIndices=1;f.valueAsString==='Wis Mod'&&f.currentValueIndices===1");
     }
     #[test]
+    fn pages_keep_inactive_widget_indices_and_rectangles_reject_inactive_widgets() {
+        host("var f=getField('A');f._widgets=[{page:-1,rect:[1,2,20,30]},{page:2,rect:[1,2,20,30]}];var errors=0;try{f.rect}catch(e){if(String(e)==='InvalidGetError: Get not possible, invalid or unknown.')errors++}try{getField('A.0').rect}catch(e){if(e.name==='InvalidGetError')errors++}JSON.stringify(f.page)==='[-1,2]'&&errors===2&&getField('A.1').page===2&&JSON.stringify(getField('A.1').rect)==='[1,30,20,2]'");
+    }
+    #[test]
+    fn rectangle_getters_quantize_to_fixed_point_without_mutating_source_geometry() {
+        host("var f=getField('A');f._widgets=[{page:2,rect:[30.664100646972656,390.4129943847656,326.3550109863281,768.0960083007812]}];f.rect[0]===30.664108276367188&&f._widgets[0].rect[0]===30.664100646972656");
+    }
+    #[test]
     fn field_rect_uses_acrobat_top_bottom_order() {
         host("var f=getField('A');f._widgets=[{page:0,rect:[1,2,20,30]}];var correct=f.rect[1]===30;f.rect=[10,40,25,5];correct&&JSON.stringify(f._widgets[0].rect)==='[10,5,25,40]'");
     }

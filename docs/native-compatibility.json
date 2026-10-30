@@ -1585,5 +1585,20 @@
       "output/testing/native-table-1793197280950719017/table.json"
     ],
     "limits": "RavennaJW rich fallback, mixed-face/decorated runs, glyph widths, richer layout/indexed styles and full class/table persistence remain incomplete."
+  },
+  "widget_page_rect_api": {
+    "status": "bounded exact Reader API comparison passes; mixed formatting remains failed/incomplete",
+    "comparison": "output/testing/widget-api-comparison-1793200400000000000.json",
+    "counterexample": "output/testing/widget-api-old-counterexample-1793200400000000000.json",
+    "native": "output/testing/rich-format-1793200289182254500/formatting.json",
+    "reader": "output/testing/rich-format-1793199447335267809/formatting.json",
+    "scope": "Original2024 Extra.Notes formatting actions retained. Page arrays preserve inactive -1 entries and widget indices; inactive rectangle getters raise measured InvalidGetError; active rectangle getters use16-bit fixed point without changing source geometry. Full captured API state matches exactly, including rich values/styles, indexed widget metadata and inactive fields. No appearance claim.",
+    "unit_tests": 86,
+    "regressions": [
+      "output/testing/native-acceptance-1793201246778624999/acceptance.json",
+      "output/testing/native-generated-1793201318845422257/generated.json",
+      "output/testing/native-table-1793201486593913362/table.json"
+    ],
+    "limits": "Original notes workflow still fails appearance: one native face versus four Reader faces, missing underline/strike paths and heading layout differences. Indexed styles and fuller geometry behavior remain incomplete."
   }
 }
