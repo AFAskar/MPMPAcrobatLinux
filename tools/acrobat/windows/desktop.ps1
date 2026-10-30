@@ -17,6 +17,18 @@ public static class DesktopNative {
  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h,uint m,IntPtr w,IntPtr l);
  [DllImport("user32.dll",EntryPoint="SendMessageTimeoutW",CharSet=CharSet.Unicode)] static extern IntPtr MessageText(IntPtr h,uint m,UIntPtr w,string text,uint flags,uint timeout,out UIntPtr result);
  [DllImport("user32.dll",EntryPoint="SendMessageTimeoutW",CharSet=CharSet.Unicode)] static extern IntPtr MessageRead(IntPtr h,uint m,UIntPtr w,StringBuilder text,uint flags,uint timeout,out UIntPtr result);
+ [DllImport("user32.dll",EntryPoint="SendMessageTimeoutW")] static extern IntPtr MessageValue(IntPtr h,uint m,UIntPtr w,IntPtr l,uint flags,uint timeout,out UIntPtr result);
+ [DllImport("user32.dll")] public static extern bool IsChild(IntPtr parent,IntPtr child);
+ [DllImport("user32.dll")] public static extern bool IsWindowEnabled(IntPtr h);
+ [DllImport("user32.dll")] public static extern IntPtr GetParent(IntPtr h);
+ [DllImport("user32.dll")] static extern IntPtr SetFocus(IntPtr h);
+ [DllImport("user32.dll",EntryPoint="GetWindowLongPtrW")] static extern IntPtr WindowStyle(IntPtr h,int index);
+ static long NumberMessage(IntPtr h,uint message){UIntPtr result;if(MessageValue(h,message,UIntPtr.Zero,IntPtr.Zero,2,1000,out result)==IntPtr.Zero)throw new Exception("Control query timed out");return unchecked((long)result.ToUInt64());}
+ public static bool ReadOnlyEdit(IntPtr h){return (WindowStyle(h,-16).ToInt64()&0x800)!=0;}
+ public static string ControlText(IntPtr h){long length=NumberMessage(h,0xE);if(length<0||length>1048576)throw new Exception("Unsupported control text length");var text=new StringBuilder((int)length+1);UIntPtr result;if(MessageRead(h,0xD,(UIntPtr)(length+1),text,2,1000,out result)==IntPtr.Zero)throw new Exception("Control text read timed out");if(result.ToUInt64()!=(ulong)text.Length)throw new Exception("Control text read length differs");return text.ToString();}
+ public static int ComboIndex(IntPtr h){return checked((int)NumberMessage(h,0x147));}
+ public static int ComboCount(IntPtr h){long count=NumberMessage(h,0x146);if(count<0||count>4096)throw new Exception("Unsupported combo item count");return (int)count;}
+ public static void FocusControl(IntPtr h,IntPtr owner){uint pid;uint target=GetWindowThreadProcessId(h,out pid),own=GetCurrentThreadId();if(!AttachThreadInput(own,target,true))throw new Exception("Cannot attach control input focus");try{SetForegroundWindow(owner);SetFocus(h);}finally{AttachThreadInput(own,target,false);}if(GetForegroundWindow()!=owner||FocusedControl()!=h)throw new Exception("Input focus differs from requested editable control");}
  public static void SetTextVerified(IntPtr h,string text){
   if(text.Length>65535)throw new Exception("Request exceeds native transport limit");
   UIntPtr result;
@@ -176,10 +188,12 @@ function Native-Elements {
   $handles=@($h)
   if([DesktopNative]::Class($h) -ne 'AcrobatSDIWindow'){$handles+=@([DesktopNative]::Children($h))}
   foreach($handle in $handles){
-   $name=[DesktopNative]::Text($handle);$class=[DesktopNative]::Class($handle)
-   if(-not $name -and $class -notmatch 'Edit'){continue}
+   $name=[DesktopNative]::Text($handle);$class=[DesktopNative]::Class($handle);$textError=$null;$readOnly=$null
+   if($class -match '^(Edit|RICHEDIT[0-9]+W)$'){try{$name=[DesktopNative]::ControlText($handle)}catch{$textError=$_.Exception.Message};$readOnly=[DesktopNative]::ReadOnlyEdit($handle)}
+   if(-not $name -and $class -notmatch 'Edit|ComboBox'){continue}
    if($class -eq 'Button'){$name=$name.Replace('&','')}
-   @{name=$name;class=$class;owner=$h;handle=$handle;rect=[DesktopNative]::Bounds($handle)}
+   $parent=[DesktopNative]::GetParent($handle)
+   @{name=$name;class=$class;owner=$h;handle=$handle;rect=[DesktopNative]::Bounds($handle);parent=$parent;parent_class=[DesktopNative]::Class($parent);enabled=[DesktopNative]::IsWindowEnabled($handle);read_only=$readOnly;text_error=$textError}
   }
  }
 }
@@ -201,6 +215,22 @@ function Invoke-Native($element){
   [DesktopNative]::SetCursorPos($x,$y)|Out-Null;[DesktopNative]::mouse_event(2,0,0,0,[UIntPtr]::Zero);[DesktopNative]::mouse_event(4,0,0,0,[UIntPtr]::Zero)
  }
  Start-Sleep -Milliseconds 100
+}
+function Dialog-Control($q){
+ if(-not $q.owner -or -not $q.handle){throw 'Dialog control operations require observed owner and control handles'}
+ $owner=[IntPtr]([long]$q.owner);$handle=[IntPtr]([long]$q.handle)
+ if($owner -notin @(Reader-Windows) -or [DesktopNative]::Class($owner) -ne '#32770'){throw 'Control owner is not a visible Reader dialog'}
+ if(-not [DesktopNative]::IsChild($owner,$handle) -or -not [DesktopNative]::IsWindowVisible($handle)){throw 'Control is not a visible child of the requested dialog'}
+ $class=[DesktopNative]::Class($handle)
+ if($class -match '^(Edit|RICHEDIT[0-9]+W)$'){
+  if($q.action -eq 'focus_control'){
+   if(-not [DesktopNative]::IsWindowEnabled($handle) -or [DesktopNative]::ReadOnlyEdit($handle)){throw 'Editable control is disabled or read-only'}
+   Focus-Reader;Assert-Reader;[DesktopNative]::FocusControl($handle,$owner)
+  }
+  return @{owner=$q.owner;handle=$q.handle;class=$class;text=[DesktopNative]::ControlText($handle);focused=([DesktopNative]::FocusedControl() -eq $handle);read_only=[DesktopNative]::ReadOnlyEdit($handle)}
+ }
+ if($q.action -eq 'dialog_control' -and $class -eq 'ComboBox'){return @{owner=$q.owner;handle=$q.handle;class=$class;selected_index=[DesktopNative]::ComboIndex($handle);item_count=[DesktopNative]::ComboCount($handle);full_labels_qualified=$false}}
+ throw 'Unsupported dialog control type'
 }
 function Resolve-Known-Dialog($elements){
   $reading=@($elements | Where-Object {$_.name -eq 'Preparing document for reading'})
@@ -479,7 +509,7 @@ function Uia-Child($action,$value='') {
 }
 function Execute($q) {
  switch($q.action){
-  'health' {[uint32]$fp=0;$fh=[DesktopNative]::GetForegroundWindow();$ft=[DesktopNative]::GetWindowThreadProcessId($fh,[ref]$fp);@{version=3;foreground_handle=$fh.ToInt64();foreground_pid=$fp;foreground_thread=$ft;session=(Get-Process -Id $PID).SessionId;readers=@(Reader-Processes | Select-Object Id,SessionId);windows=@(Reader-Windows | ForEach-Object {$b=New-Object Text.StringBuilder(512);[DesktopNative]::GetWindowText($_,$b,512) | Out-Null;$b.ToString()})}}
+  'health' {[uint32]$fp=0;$fh=[DesktopNative]::GetForegroundWindow();$ft=[DesktopNative]::GetWindowThreadProcessId($fh,[ref]$fp);@{version=3;capabilities=@('dialog_control','focus_control');foreground_handle=$fh.ToInt64();foreground_pid=$fp;foreground_thread=$ft;session=(Get-Process -Id $PID).SessionId;readers=@(Reader-Processes | Select-Object Id,SessionId);windows=@(Reader-Windows | ForEach-Object {$b=New-Object Text.StringBuilder(512);[DesktopNative]::GetWindowText($_,$b,512) | Out-Null;$b.ToString()})}}
   'dismiss_pin' {
    [uint32]$fp=0;$fh=[DesktopNative]::GetForegroundWindow();[DesktopNative]::GetWindowThreadProcessId($fh,[ref]$fp)|Out-Null
    if((Get-Process -Id $fp).ProcessName -ne 'ShellExperienceHost'){throw 'Foreground is not Windows notification host'}
@@ -492,6 +522,8 @@ function Execute($q) {
    @{dismissed='No, thanks'}
   }
   'inspect' {,@(Native-Elements)}
+  'dialog_control' {Dialog-Control $q}
+  'focus_control' {Dialog-Control $q}
   'inspect_uia' {,@(Uia-Child 'inspect_uia')}
   'inspect_full' {,@(Uia-Child 'inspect_full')}
   'invoke' {$parent=[IntPtr]::Zero;if($q.owner){$parent=[IntPtr]([long]$q.owner)};$element=$null;try{$element=Find-Native $q.name 0.3 $parent}catch{};if($element){Invoke-Native $element}elseif($q.owner){throw 'Named control is absent from the requested dialog'}else{Uia-Child 'invoke' $q.name|Out-Null};@{invoked=$q.name}}

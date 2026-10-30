@@ -1383,7 +1383,13 @@
     "status": "bounded native original spell/menu/regeneration/save/reopen workflow passes; Reader parity pending",
     "native": "output/testing/native-warlock-spells-1793165446484448545/warlock-spells.json",
     "scope": "Original 2024 source controls, exact offered spell selections and cantrip-specific invocation menu. Select three cantrips and six known spells; generate, add Agonizing Blast, regenerate, remove/regenerate, readd/regenerate. Assert exact lists, choices, attack effects and generated Eldritch Blast description, saved fields/appearances/scripts and native reopen. Option discovery cancels the actual original dialog before using its validated offered labels; no direct CurrentSpells injection.",
-    "remaining": "Reader interaction/runtime parity, other spells/invocations/classes, spell slot use/rests, full generated appearance equivalence and comprehensive multiclass/table use remain unqualified."
+    "remaining": "Reader interaction/runtime parity, other spells/invocations/classes, spell slot use/rests, full generated appearance equivalence and comprehensive multiclass/table use remain unqualified.",
+    "native_current_92_tests": "output/testing/native-warlock-spells-1793378309651107868/warlock-spells.json",
+    "native_default_sources": "output/testing/native-warlock-spells-1793401115160975684/warlock-spells.json",
+    "source_profile_note": "New --default-sources case retains original startup defaults (51 exclusions at all four phases), verifies the same selected spell/invocation/regeneration/native persistence assertions, and captures exclusions for independent Reader comparison. Reader source equality and workflow parity remain pending.",
+    "native_default_sources_edited_reopen": "output/testing/native-warlock-spells-1793401659301222978/warlock-spells.json",
+    "native_all_sources_edited_reopen": "output/testing/native-warlock-spells-1793401732760222531/warlock-spells.json",
+    "edited_reopen_scope": "Separate initial-selection/final-invocation snapshots, fresh native opens, original Quarterstaff edit (derived 1d6+4), original Eldritch Blast restoration, exact selections/invocation/damage/generated-description assertions and independent saved fields/appearances/scripts. Reader parity still pending."
   },
   "rich_style_reference": {
     "status": "independent Reader diagnostic completed; native implementation remains incomplete",
@@ -1719,5 +1725,17 @@
       "equal": false
     },
     "limits": "Reader uses different decoration offsets/thicknesses. Original full formatting still fails;2024 crop differs427/54270 pixels. This is visible native behavior and bounded persistence, not exact Reader metrics or milestone completion. Other fixture/class/choice/render coverage remains partial."
+  },
+  "reader_dialog_text_transport": {
+    "status": "focused original class-dialog transport and fresh full reference readiness pass; broader spell/dialog coverage pending",
+    "preflight": "output/testing/continuation-dialog-input-preflight.json",
+    "focused": "output/testing/reader-dialog-input-1793400565051014102/input.json",
+    "failed_selector_probe": "output/testing/reader-dialog-input-1793400350712372382/input.json",
+    "failed_cleanup_recovery": "output/testing/reader-dialog-input-1793400350712372382/cleanup.json",
+    "scope": "Bounded cross-process WM_GETTEXT reads, exact owned editable-control focus, clipboard readback and Tab; original class callback changes numeric combo selection, wrong owner rejected, cancel preserves saved class and original scripts. Failed numeric-target run retained/closed. Native combo count/index are numeric diagnostics only; full owner-drawn option labels and dropdown pointer gestures are not qualified.",
+    "remaining": "Spell Unicode typing, selected original spell/invocation workflow parity and broad dialog coverage remain unqualified.",
+    "readiness": "output/testing/readiness-1793400684.json",
+    "readiness_cases": 24,
+    "preflight_checks": 28
   }
 }

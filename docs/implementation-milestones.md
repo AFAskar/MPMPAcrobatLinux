@@ -12,3 +12,5 @@ The active Codex goal is complete reachable MPMB behavior in all three authorize
 Concrete run reports remain under ignored output/testing. Current evidence and unresolved behavior are recorded in native-compatibility.json, mpmb-compatibility-audit.md and development-handoff.md. A failed suite remains failure evidence even when a later repaired run passes.
 
 The selected 2024 Warlock case (`native-warlock-spells-1793165446484448545/warlock-spells.json`) uses original offered spell/menu controls, checks three cantrips and six known spells, invocation removal/readdition, four regenerated spell states, attack and generated-description effects, independent saved fields/appearances/scripts and native reopen. Reader parity is pending; this is bounded Milestone 3 evidence, not completion.
+
+The same selected Warlock case passes again on the current 92-test build in `native-warlock-spells-1793378309651107868/warlock-spells.json`. This refresh covers the original spell/menu/regeneration and native persistence assertions only; Reader parity is still pending.

@@ -54,6 +54,7 @@ def main():
         checks['no-blocking-dialogs'] = not any(x.get('class') == '#32770' for x in dialogs)
         checks['interactive-session'] = health['session'] > 0
         checks['desktop-protocol'] = health.get('version') == lock['desktop_protocol']
+        checks['native-dialog-controls'] = {'dialog_control','focus_control'} <= set(health.get('capabilities',[]))
         checks['acrobat-reader'] = bridge['type'] == 'Reader'
         checks['adapter-protocol'] = bridge.get('protocol') == lock['adapter_protocol']
     result = dict(passed=all(checks.values()), checks=checks, guest=remote, desktop=health, bridge=bridge,

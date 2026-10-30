@@ -164,6 +164,8 @@ def main():
     sub=p.add_subparsers(dest='action',required=True)
     sub.add_parser('health');sub.add_parser('inspect');sub.add_parser('inspect_full');sub.add_parser('inspect_uia');sub.add_parser('ping')
     picker=sub.add_parser('select-file');picker.add_argument('request_id');picker.add_argument('path')
+    for action in ['dialog-control','focus-control']:
+        s=sub.add_parser(action);s.add_argument('owner',type=int);s.add_argument('handle',type=int)
     for action in ['open','ready','screenshot','invoke','keys','paste','result','fetch']:
         s=sub.add_parser(action);s.add_argument('value',nargs='?' if action=='screenshot' else None)
         if action=='invoke':s.add_argument('--owner',type=int)
@@ -174,6 +176,7 @@ def main():
         elif args.action in ['inspect','inspect_full','inspect_uia']:result=command(args.action)
         elif args.action=='ping':result=script('ping')
         elif args.action=='select-file':result=command('select_file',request_id=args.request_id,path=remote_path(args.path))
+        elif args.action in ['dialog-control','focus-control']:result=command(args.action.replace('-','_'),owner=args.owner,handle=args.handle)
         elif args.action=='ready':result=ensure_document(remote_path(args.value))
         elif args.action=='open':result=command('open',path=remote_path(args.value))
         elif args.action=='invoke':result=command('invoke',name=args.value,**({'owner':args.owner} if args.owner is not None else {}))
