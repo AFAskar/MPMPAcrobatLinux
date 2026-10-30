@@ -20,7 +20,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--default-sources',action='store_true',help='Retain original startup source selection for Reader-profile comparison');args=parser.parse_args()
     source_dialogs=[{'title':audit.SOURCE,'result':'ok'}] if args.default_sources else audit.source_dialogs('2024')
     folder=ROOT/'output/testing'/('native-warlock-spells-'+str(time.time_ns()));folder.mkdir();binary=folder/'mpmb-reader';shutil.copy2(ROOT/'target/debug/mpmb-reader',binary)
-    source=next((ROOT/'Testing').glob('*_2024_*.pdf'));original_hash=hashlib.sha256(source.read_bytes()).hexdigest();output=folder/'2024.pdf'
+    source=next((ROOT/'Testing').glob('*_2024_*.pdf'));original_hash=hashlib.sha256(source.read_bytes()).hexdigest();output=folder/'2024.pdf';selected_output=folder/'selected-2024.pdf'
     report={'passed':False,'scope':__doc__,'source_profile':'original startup defaults' if args.default_sources else 'all sources/classes enabled through original dialogs','binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest()};print(folder,flush=True)
     def run(label,steps,dialogs,pdf=source):
         spec,evidence=folder/(label+'-scenario.json'),folder/(label+'-report.json');spec.write_text(json.dumps({'steps':steps,'dialogs':dialogs,'alerts':[1]*100}))
@@ -49,13 +49,15 @@ def main():
         select={'title':'SPELL SELECTION DIALOG','result':'ok','select':selection,'values':{'SpR1':True,'SpR2':False,'SpR3':False,'SpR4':False}}
         generation={'title':'SPELL LIST GENERATION DIALOG','result':'ok'}
         keep={'title':'SPELL SELECTION DIALOG','result':'ok'}
-        steps=setup()+generate()+[capture('selected-spells',False)]+choose()+generate()+[capture('invocation',True)]+choose()+generate()+[capture('removed',False)]+choose()+generate()+[capture('readded',True),{'op':'save','path':str(output)}]
+        steps=setup()+generate()+[capture('selected-spells',False),{'op':'save','path':str(selected_output)}]+choose()+generate()+[capture('invocation',True)]+choose()+generate()+[capture('removed',False)]+choose()+generate()+[capture('readded',True),{'op':'save','path':str(output)}]
         dialogs=source_dialogs+[CHANGED,select,generation,menu(0),CHANGED,keep,generation,menu(1),CHANGED,keep,generation,menu(0),CHANGED,keep,generation]
         data,evidence=run('workflow',steps,dialogs);phases={s['result']['phase']:s['result'] for s in data['stages'] if isinstance(s.get('result'),dict) and 'phase' in s['result']};expected=phases['readded']['fields']
         assert inspect(output,expected)['passed'];assert script_hashes(output)==script_hashes(source)
+        selected_expected=phases['selected-spells']['fields'];assert inspect(selected_output,selected_expected)['passed'];assert script_hashes(selected_output)==script_hashes(source)
+        _,selected_reopen=run('selected-reopen',[{'op':'advance','ms':4100},{'op':'assert','values':selected_expected},capture('selected-reopened',False)],[{'result':'ok'}]*30,selected_output)
         _,reopen=run('reopen',[{'op':'advance','ms':4100},{'op':'assert','values':expected},capture('reopened',True)],[{'result':'ok'}]*30,output)
         assert hashlib.sha256(source.read_bytes()).hexdigest()==original_hash
-        report.update(passed=True,probe=evidence,reopen=reopen,output=str(output),phases=phases,expected=expected)
+        report.update(passed=True,probe=evidence,reopen=reopen,selected_output=str(selected_output),selected_reopen=selected_reopen,output=str(output),phases=phases,expected=expected)
     except Exception as error:report['error']=str(error);raise
     finally:(folder/'warlock-spells.json').write_text(json.dumps(report,indent=2)+'\n');print(folder/'warlock-spells.json',flush=True)
 
