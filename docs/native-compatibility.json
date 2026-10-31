@@ -2105,7 +2105,7 @@
     "native_ashnar_fixed": "output/testing/native-xfdf-events-1793477293623661963/events.json"
   },
   "field_event_value_write": {
-    "status": "primitive type conversion and rejection qualified; normalization reentry remains incomplete",
+    "status": "primitive conversion qualified; historical mirror-reentry failure resolved in calculated_mirror_reentry",
     "scope": "K/V/C/F event.value accepts primitive string/number writes; numbers immediately read back as strings, including NaN/infinities. Other sampled values throw exact InvalidSetError and retain previous event state; boxed objects and throwing toString objects are rejected without coercion. Field.value coercion remains separate.",
     "reader32": "output/testing/reader-script-observation-1793477106705121682/observation.json",
     "native32": "output/testing/script-observation-comparison-1793477272212433276/comparison.json",
@@ -2113,11 +2113,11 @@
     "reader68": "output/testing/reader-script-observation-1793477262802248462/observation.json",
     "native68_failed": "output/testing/script-observation-comparison-1793477347708324723/comparison.json",
     "difference_summary": "output/testing/script-observation-comparison-1793477347708324723/differences.json",
-    "edge_result": "Full comparison FAILS:66/68 exact rows; Keystroke and Validate ASCII-only NBSP writes cause a second normalized commit/action in Reader but not native. Immediate event.value preserves NBSP, including the rejected-write unchanged-state capture. This separate commit/reentry failure is not normalized away.",
+    "edge_result": "Full comparison FAILS:66/68 exact rows; Keystroke and Validate ASCII-only NBSP writes cause a second normalized commit/action in Reader but not native. Immediate event.value preserves NBSP, including the rejected-write unchanged-state capture. This separate commit/reentry failure is not normalized away. Historical failure; all68 exact rows now pass in calculated_mirror_reentry.native68.",
     "original_ashnar_import": "output/testing/native-xfdf-events-1793477293623661963/events.json",
     "original_result": "Full14-event/raw-getter Ashnar XFDF import now matches Reader, with two native reopens and independent fields/widgets/AP/scripts. All three fixtures have bounded import event/raw style evidence; full mixed-engine persistence remains 2024-only.",
     "checks": "126 Rust tests/build/strict all-targets Clippy; boxed-type and enabled-calculation targeted units pass. Original acceptance2/1793477294804670591, extended import/Ashnar2/1793477398379396146 and generated6/1793477461431301924 pass. Original fixture hashes/pinned submodule unchanged.",
-    "remaining": "Post-event text normalization/reentry; broader event kinds and combinations; all-class choices/resources/table workflows; complete imports, picker selection and full typography remain incomplete.",
+    "remaining": "Broader event kinds/combinations, rich/choice semantics, all-class choices/resources/table workflows, complete imports, picker selection and full typography remain incomplete. The measured mirror-reentry failure is resolved separately.",
     "extended": "output/testing/native-extended-1793477398379396146/extended.json",
     "reproduce": [
       "tools/native/reader-event-value.py --readiness <readiness.json>",
@@ -2128,7 +2128,7 @@
     "fixture_hashes": "output/testing/continuation-event-value-fixtures.json"
   },
   "plain_validation_commit": {
-    "status": "bounded plain-text validation precedence qualified with calculations disabled; calculation-enabled normalization remains incomplete",
+    "status": "bounded plain-text validation precedence qualified; enabled calculations covered separately in calculated_mirror_reentry",
     "scope": "Programmatic plain text commits across12 K/V/F handler combinations and five text classes. A present Validate action that does not write event.value commits the original requested text even after K changes the value observed by V. Explicit V self-write/replacement commits; rejection and absent V retain their separately qualified behavior. Rich and choice fields are intentionally outside this repair.",
     "reader_no_target_reads": "output/testing/reader-script-observation-1793478135739862195/observation.json",
     "reader_with_target_reads": "output/testing/reader-script-observation-1793478279547901634/observation.json",
@@ -2144,10 +2144,10 @@
       "output/testing/reader-script-observation-1793478671074935208/observation.json",
       "output/testing/reader-script-observation-1793478915511335269/observation.json"
     ],
-    "failure_scope": "All four result-acknowledgement suites remain FAILED. Every SAME document was recovered/retained/closed without replay; recovery.json verifies readiness, carrier checksum, scripts and observed data. Hiding or fixing carrier size did not resolve the failure. Full recovered60-case captures agree across default visible/hidden/fixed8pt carriers, but recovery equality is not a qualification pass. A smaller calculation-enabled batch without rejected field commits is now running to isolate the cause.",
+    "failure_scope": "All four result-acknowledgement suites remain FAILED. Every SAME document was recovered/retained/closed without replay; recovery.json verifies readiness, carrier checksum, scripts and observed data. Hiding or fixing carrier size did not resolve the failure. Full recovered60-case captures agree across default visible/hidden/fixed8pt carriers, but recovery equality is not a qualification pass. A smaller calculation-enabled batch without rejected field commits is now running to isolate the cause. Subsequent qualified deferred receipt transport and completed enabled batches are recorded separately; no original failed suite is relabeled.",
     "coverage_invalidated": "output/testing/reader-event-value-1793477531833169356/event-value.json",
     "coverage_scope": "The earlier24-case pilot has six empty Calculate traces; its wrapper qualification is invalidated and original summary retained.18 K/V/F measurements remain diagnostic data. New helper requires nonempty target traces and freezes source bytes before execution.",
-    "remaining": "Calculation-enabled post-event normalization/reentry and exact sequencing, rich/choice commits, real class/table coverage and per-fixture persistence remain incomplete. No broad milestone or overall goal complete.",
+    "remaining": "Rich/choice commits, broader event sequences, full real class/table coverage and per-fixture persistence remain incomplete. Enabled-calculation sampled cases now pass in calculated_mirror_reentry. No broad milestone or overall goal complete.",
     "native_current_text_scope": "output/testing/script-observation-comparison-1793478983561555001/comparison.json",
     "generated": "output/testing/native-generated-1793478895294978523/generated.json",
     "recovered_carrier_control": "output/testing/post-event-carrier-recovery-control.json",
@@ -2171,5 +2171,30 @@
     "previously_failing60": "output/testing/reader-script-observation-1793481967662227786/observation.json",
     "validation": "Rich-event/oversized receipt/keyboard focus plus saved field/script checks pass; all24 readiness cases including source dialogs, generation and no new crash/resource exhaustion pass. Previously failing calculation-enabled15/60 cases now complete with live code-unit checksums, scripts and process closure. No old suite is relabeled.",
     "limits": "This qualifies reference transport, not full native rendering or class/table compatibility. Prior visible/hidden/fixed-size carrier attempts remain failed; no autosize or rejected-field cause was established."
+  },
+  "calculated_mirror_reentry": {
+    "status": "bounded original mirror reentry repair qualified for 2024; other-fixture persistence running; broad milestone incomplete",
+    "scope": "Original AdvLog.Player Name Calculate converts the primary value; original ValidateAdvLogInfo can then write the primary while its setter is active. Allow nested cross-field K/V/F while calculating, retain the outer guard, and refresh nested Format. Same-field recursion remains guarded. This is not a generic post-calculation normalization sweep.",
+    "reader15": "output/testing/reader-script-observation-1793481788034461133/observation.json",
+    "native15": "output/testing/script-observation-comparison-1793482569502940480/comparison.json",
+    "reader60": "output/testing/reader-script-observation-1793481967662227786/observation.json",
+    "native60": "output/testing/script-observation-comparison-1793482845059873244/comparison.json",
+    "native68": "output/testing/script-observation-comparison-1793482984403559747/comparison.json",
+    "reader68": "output/testing/reader-script-observation-1793477262802248462/observation.json",
+    "persistence2024": "output/testing/mirror-reentry-persistence-1793482955511756937/persistence.json",
+    "persistence_scope": "Synthetic persisted primary K action with unchanged original mirror C/V and document scripts. Four changed phases across native save, fresh native edit/save, real Reader edit/save and fresh native edit/save/reopen. Canonical values, active appearances and action/script bytes checked. Inactive template AP remains stale after Phase4; full appearance fidelity is not claimed.",
+    "rejected_candidate": "Generic normalization sweep failed comparison1793482221717935687 and was removed. Old127 comparison1793481994202886899 also fails; keep both historical failures.",
+    "checks": "128 Rust tests/formatting and strict all-targets Clippy pass; acceptance2/1793483011036367240, extended2/1793483082825367794, generated6/1793483131966279084 and lifecycle2/1793483308656198828 pass. Ashnar persistence still running.",
+    "reproduce": [
+      "tools/native/verify-script-observation.py --reader <qualified-reader-observation.json>",
+      "tools/native/mirror-reentry-persistence.py --fixture 2024 --readiness output/testing/readiness-1793480531.json"
+    ],
+    "remaining": "2014/Ashnar mirror persistence, rich/choice reentry, inactive appearances, full class/table/dialog/import/resource workflows and exact typography remain incomplete. Goal and broad milestones stay active.",
+    "persistence2014": "output/testing/mirror-reentry-persistence-1793483155097424444/persistence.json",
+    "generated": "output/testing/native-generated-1793483131966279084/generated.json",
+    "appearance_counterexample": "output/testing/mirror-template-spawn-1793483263469455351/independent.json",
+    "appearance_failure": "Original DoTemplate ALlog Add exposes the stale inactive AP: canonical generated value Phase4 B, visible AP Phase3 B. This actual generated-page workflow FAILS; separate refresh repair/Reader qualification required.",
+    "lifecycle": "output/testing/native-lifecycle-1793483308656198828/lifecycle.json",
+    "fixture_hashes": "output/testing/continuation-mirror-reentry-fixtures.json"
   }
 }

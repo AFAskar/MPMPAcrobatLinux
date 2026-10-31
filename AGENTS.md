@@ -66,3 +66,5 @@ Read `docs/testing-environment.md` before changing or testing PDF behavior.
 
 - Counted diagnostic cases must execute their intended events; require nonempty target traces when claiming event execution. An intentionally suppressed/no-op event needs an enabled positive control. Preserve invalidated coverage reports instead of treating a matching case count as coverage.
 - For plain text commits, distinguish an absent Validate action from one that only observes event.value. Reader passes a Keystroke-written value into Validate, but a present Validate action must explicitly write event.value to commit that replacement. Qualify rich/choice behavior separately and control calculation flags and observer field reads.
+
+- When a calculated mirror validates back into its primary field, distinguish cross-field reentry from same-field recursion. Preserve the outer assignment guard and qualify the actual K/V/C/F sequence. A normalized final value alone does not establish a generic post-calculation normalization rule.

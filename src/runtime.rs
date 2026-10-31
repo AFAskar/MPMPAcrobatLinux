@@ -812,6 +812,19 @@ mod tests {
         );
     }
     #[test]
+    fn calculated_mirror_validation_reenters_primary_commit_and_formats_in_order() {
+        host(
+            r#"var f=getField('A'),trace=[],candidate='A\u00a0B';app.calculate=false;f.setAction('Validate','');f.value='seed';
+          f.setAction('Keystroke',"trace.push(['K',event.value]);event.value=candidate");
+          f.setAction('Format',"trace.push(['F',event.value])");
+          getField('B').setAction('Calculate',"trace.push(['C']);event.value=getField('A').valueAsString");getField('B').setAction('Validate',"if(event.value!==getField('A').valueAsString)getField('A').value=event.value");
+          app.calculate=true;f.value='requested';
+          var sequence=JSON.stringify(trace)===JSON.stringify([['K','requested'],['C'],['K','A B'],['F',candidate],['F',candidate]]);if(!sequence)throw Error(JSON.stringify(trace));
+          app.calculate=false;trace=[];f.value='suspended';
+          sequence&&JSON.stringify(trace)===JSON.stringify([['K','suspended'],['F',candidate]])&&f.valueAsString===candidate"#,
+        );
+    }
+    #[test]
     fn original_order_and_numeric_values() {
         host("__host.edit('A','18'); getField('A').value===18 && getField('B').value===19 && getField('C').value===20 && getField('A').valueAsString==='18'");
     }
