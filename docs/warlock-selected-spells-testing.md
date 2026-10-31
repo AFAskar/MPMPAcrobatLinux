@@ -48,3 +48,16 @@ python3 tools/native/warlock-selected-roundtrip.py \
 ```
 
 An earlier edit/restore-without-intermediate-save run FAILED its rebuild proof (`warlock-selected-roundtrip-1793403359805605908/roundtrip.json`): both readers retained valid old APs. Its Reader process closed. This is a qualification gap, not an application rendering failure. The old92 genuine generated AP remains a negative baseline counterexample in `warlock-single-line-old92-counterexample-1793404000000000000.json` (2.6520996 versus2.903). Full Reader/native saved comparison remains FAILED, including the explicitly documented platform preference and observer differences, tiny exact rectangle differences and appearance/pixel mismatches. The new EB crop still fails3311/18656 pixels; horizontal inset/advances and auto sizing remain gaps.
+
+## Original Reader invocation gestures
+
+The95-test native default-source case1793439627146471600 now matches actual Reader popup gestures in reader-warlock-invocations-1793440252388681168/invocations.json. This supersedes the earlier pending invocation statements for this bounded case. Reproduce after terminal fresh24-case readiness with matching harness fingerprint:
+
+```bash
+python3 tools/native/warlock-reader-invocations.py \
+  --reader output/testing/reader-warlock-discovery-1793401830310415656/discovery.json \
+  --native output/testing/native-warlock-spells-1793439627146471600/warlock-spells.json \
+  --readiness output/testing/readiness-1793439251.json
+```
+
+Starting from the genuinely Reader-selected spell output, exact observed menus select Warlock → Eldritch Invocation → upgrades Eldritch Blast → Agonizing Blast: Eldritch Blast. The suite repeats for removal/readdition and uses original spell-dialog buttons after each change. All28 comparisons pass across four independently saved phases: identity, invocation choices, spell/cantrip/source sets, exact attacks and generated description with declared CR/CRLF→LF normalization. Saved ASCII JSON/checksum/Unicode sentinel, canonical fields/AP, original script hashes and Reader shutdown are independently verified. Full state/appearance equality and other class/invocation/resource choices remain unqualified. Actual invocation-state edited reopen is being tested separately and is not implied by these saves.

@@ -1770,5 +1770,13 @@
     "failed_cleanup": "output/testing/popup-readiness-failure-1793407714/cleanup.json",
     "scope": "No-console isolated UIA preserves Reader focus. Exact labels come from focused Menu children, not empty owner-drawn native strings. Activation verifies owner, position, exact name, native enabled state, native/accessibility bounds and hit ownership. Wrong-name rejection, submenu expansion, cancellation, saved fields/scripts and Reader termination pass. Receipt closure is rechecked on foreground loss before reporting interference; no additional input is sent after closure. Fresh full readiness passes with unchanged harness fingerprint and no new Reader crash/resource exhaustion.",
     "remaining": "Invocation selection/effects, deeper popup paths and full native class/table compatibility remain unqualified by this transport test."
+  },
+  "warlock_reader_invocation_gestures": {
+    "status": "bounded original 2024 Fiend Warlock level5 comparisons pass; full table milestone incomplete",
+    "reader": "output/testing/reader-warlock-invocations-1793440252388681168/invocations.json",
+    "native": "output/testing/native-warlock-spells-1793439627146471600/warlock-spells.json",
+    "readiness": "output/testing/readiness-1793439251.json",
+    "scope": "Actual guarded pointer gestures through exact offered Warlock/category/cantrip-specific Agonizing Blast items, then original spell-generation dialog buttons. Four independently saved Reader phases: initial, added, removed, readded. All28 comparisons pass: identity, exact invocation list, cantrip/spell sets, excluded-source sets, exact attacks, generated description with explicit CR/CRLF-to-LF normalization. Damage2\u00d71d10 ->2\u00d71d10+4 ->2\u00d71d10 ->2\u00d71d10+4. Saved ASCII observers independently verify Reader code-unit/checksum and Unicode sentinel, canonical fields/appearances and unchanged original scripts. Reader termination checked. No expected derived values or selected arrays are injected into Reader.",
+    "remaining": "One invocation on one class/subclass at one level; rest/resource expenditure, other choices/classes/versions and complete field/style/render equivalence remain unqualified. Subsequent edited native/Reader reopen of the actual Reader invocation snapshot is still running and not counted as a pass."
   }
 }
