@@ -826,6 +826,55 @@ impl Pdf {
                             }
                         }
                     }
+                    // CSS families are not necessarily PostScript names (Arial
+                    // versus ArialMT). Validate family/style identity separately.
+                    let resolve_family =
+                        |alias: &str,
+                         style: &Value,
+                         resolver: &mut installed_fonts::Resolver,
+                         fonts: &mut BTreeMap<String, EmbeddedFont>| {
+                            if let Some(family) = style["fontFamily"]
+                                .as_array()
+                                .and_then(|names| names.first())
+                                .and_then(Value::as_str)
+                            {
+                                resolver.resolve_family(
+                                    alias,
+                                    family,
+                                    u16::try_from(style["fontWeight"].as_u64().unwrap_or(400))
+                                        .unwrap_or(400),
+                                    matches!(
+                                        style["fontStyle"].as_str(),
+                                        Some("italic" | "oblique")
+                                    ),
+                                    fonts,
+                                );
+                            }
+                        };
+                    if let Some(alias) = s["textFont"].as_str() {
+                        resolve_family(
+                            alias,
+                            &s["defaultStyle"],
+                            &mut installed_fonts,
+                            &mut embedded,
+                        );
+                    }
+                    if let Some(spans) = s["richValue"].as_array() {
+                        for span in spans {
+                            let span_state = json!({"richRenderActive":true,"richValue":[span],"defaultStyle":s["defaultStyle"]});
+                            let candidates = appearance::rich_font_candidates(&span_state);
+                            if !candidates.iter().any(|name| embedded.contains_key(name)) {
+                                if let Some(alias) = candidates.first() {
+                                    resolve_family(
+                                        alias,
+                                        span,
+                                        &mut installed_fonts,
+                                        &mut embedded,
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
                 let requested = rich_fonts
                     .iter()

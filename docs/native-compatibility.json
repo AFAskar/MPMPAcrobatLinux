@@ -2304,5 +2304,30 @@
       "tools/native/verify-rich-decoration-paths.py --require-vertical-geometry <fonts.json> <new-vertical-report.json>"
     ],
     "generated_regression": "output/testing/native-generated-1793488812930280822/generated.json"
+  },
+  "rich_css_family_lookup": {
+    "status": "bounded38-row face/vertical checks and edited mixed-engine font persistence qualified; broad rich milestone incomplete",
+    "scope": "Keep strict PostScript lookup; resolve CSS family/weight/italic separately by actual typographic or legacy family/subfamily metadata. Preserve embedded assets before system lookup and verify actual installed family/style to reject Fontconfig substitutes. New resources use verified PostScript identities.",
+    "native_initial": "output/testing/rich-family-initial-geometry.json",
+    "native_heldout": "output/testing/rich-family-heldout-geometry.json",
+    "checks": "134 Rust tests/build/formatting/strict all-targets Clippy; all38 actual AP face/size/vertical checks, two changed-save/fresh-reopen/Reader-edit/native-restore runs and all10 independent saved AP checks pass. Both old wrong-face negatives are rejected. All6 original generation regressions and all3 original note strict gates pass. Native/Reader mixed-font renders reviewed.",
+    "persistence": "output/testing/rich-family-persistence-1793489746674794442/persistence.json",
+    "independent": "output/testing/rich-family-persistence-1793489746674794442/independent-appearances.json",
+    "persistence_scope": "Nine explicitly listed font properties retained through saved changed snapshot/fresh restore, real Reader edit and native restore/final reopen. Native stages disable executable lookup. Independent all5 outputs verify actual AP face/size/text/vertical geometry and original scripts; old133 wrong-face negative is rejected. Complete rich API equality is not claimed.",
+    "failed_pilot": "output/testing/rich-family-persistence-1793489649795196776/persistence.json",
+    "pilot_scope": "FAILED test-only assertion required appearanceDirty even when valueChanged/richValueChanged already force a rebuild. Corrected runner records all three triggers and independently verifies saved appearances/carriers. Do not relabel pilot.",
+    "original_notes": [
+      "output/testing/rich-format-1793489853128706098/formatting.json",
+      "output/testing/rich-format-1793489872161416162/formatting.json",
+      "output/testing/rich-format-1793489888567257712/formatting.json"
+    ],
+    "remaining": "Full rich API captures still fail underline/false-property representation; double/word painting, additional stretch/weight/CFF/collection behavior, x advances and full pixels remain incomplete. No broad milestone or overall goal complete.",
+    "reproduce": [
+      "tools/native/rich-family-persistence.py --native-comparison <actual-native-matrix-comparison.json> --readiness output/testing/readiness-1793480531.json",
+      "tools/native/verify-family-persistence.py --persistence <persistence.json> --report <new-report.json> --negative-fonts-pdf <old-wrong-face-native.pdf>"
+    ],
+    "heldout_persistence": "output/testing/rich-family-persistence-1793490094672178998/persistence.json",
+    "heldout_independent": "output/testing/rich-family-persistence-1793490094672178998/independent-appearances.json",
+    "generated": "output/testing/native-generated-1793490095019837920/generated.json"
   }
 }
