@@ -57,3 +57,5 @@ Read `docs/testing-environment.md` before changing or testing PDF behavior.
 - Serialized state stored in PDF text fields must protect Unicode string values and property names from field normalization. Independently compare complete decoded imported payloads; a matching length or normalized NBSP/space comparison cannot establish preserved scripts.
 
 - An original MPMB import can catch an internal error, return true and show its final summary. Inspect original console/error output before qualifying it as successful. Keep expected-error observation/cleanup qualification separate from a clean workflow pass; retain and close the same request/document without replay.
+
+- Reader's JavaScript runtime does not define `globalThis`. Shared native/Reader diagnostics must use the target document context (for example `tDoc` properties) and Reader-supported syntax; a QuickJS-only probe passing does not establish a valid reference diagnostic.

@@ -17,8 +17,9 @@ def main():
     p.add_argument('--input',type=Path,required=True);p.add_argument('--observer',type=Path,required=True);p.add_argument('--readiness',type=Path,required=True);args=p.parse_args()
     ready=json.loads(args.readiness.read_text());assert ready['passed'] and len(ready['cases'])==24 and ready['harness_sha256']==c.harness_fingerprint()
     source=args.input.resolve();observer=args.observer.read_text();folder=ROOT/'output/testing'/('reader-script-observation-'+str(time.time_ns()));folder.mkdir();print(folder,flush=True)
+    frozen=folder/'observer.js';frozen.write_text(observer)
     remote=c.remote_path('runs/script-observation-'+str(time.time_ns())+'.pdf');opened=False;pending=None
-    report={'passed':False,'scope':__doc__,'input':str(source),'input_sha256':hashlib.sha256(source.read_bytes()).hexdigest(),'observer':str(args.observer.resolve()),'observer_sha256':hashlib.sha256(observer.encode()).hexdigest(),'readiness':str(args.readiness.resolve())}
+    report={'passed':False,'scope':__doc__,'input':str(source),'input_sha256':hashlib.sha256(source.read_bytes()).hexdigest(),'observer':str(frozen.resolve()),'observer_source':str(args.observer.resolve()),'observer_sha256':hashlib.sha256(observer.encode()).hexdigest(),'readiness':str(args.readiness.resolve())}
     try:
         with c.desktop_lock():
             assert not [e for e in c.command('inspect') if e.get('class')=='AcrobatSDIWindow' and '.pdf' in e.get('name','').lower()], 'Pre-existing Reader document'

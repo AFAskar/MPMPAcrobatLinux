@@ -1981,5 +1981,16 @@
     "checks": "110 Rust tests, build, strict all-targets Clippy and original current-sheet acceptance2/1793468460102530515 pass. Source hashes/submodule unchanged.",
     "reproduce": "tools/native/reader-script-observation.py --input PDF --observer tools/native/widget-rectangle-observer.js --readiness QUALIFIED_READINESS; tools/native/verify-script-observation.py --reader OBSERVATION; tools/native/verify-widget-rectangles.py OBSERVATION COMPARISON",
     "remaining": "Other rejected rectangle inputs, generic widget-property setters, full geometry/rendering and all-class persistence remain incomplete."
+  },
+  "observer_provenance": {
+    "status": "qualified archived observer/hash with two real Reader runs; no whitespace repair claimed",
+    "scope": "Each Reader script-observation run now saves immutable observer.js beside its result. observer_source retains original path; comparisons use archived bytes/hash. ASCII carrier, Unicode sentinel/checksum and original scripts remain mandatory.",
+    "evidence": [
+      "output/testing/reader-script-observation-1793469607698515342/observation.json",
+      "output/testing/reader-script-observation-1793469748764688762/observation.json"
+    ],
+    "dialect_failure": "output/testing/reader-script-observation-1793469305412303258/observation.json",
+    "same_request_recovery": "output/testing/reader-script-observation-1793469305412303258/recovery.json",
+    "note": "Reader globalThis is undefined; document-context callback properties work. Four mode/action trace and eight fresh-field cases match original native110 in comparisons1793469688599573252 and1793469932940468815. A plain-vs-rich normalization candidate FAILS comparison1793469687444926203 and was reverted. Mixed Greek/NBSP XFDF input differs; encoding-boundary investigation pending. No universal whitespace rule or broad milestone pass."
   }
 }
