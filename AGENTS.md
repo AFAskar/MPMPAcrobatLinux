@@ -68,3 +68,5 @@ Read `docs/testing-environment.md` before changing or testing PDF behavior.
 - For plain text commits, distinguish an absent Validate action from one that only observes event.value. Reader passes a Keystroke-written value into Validate, but a present Validate action must explicitly write event.value to commit that replacement. Qualify rich/choice behavior separately and control calculation flags and observer field reads.
 
 - When a calculated mirror validates back into its primary field, distinguish cross-field reentry from same-field recursion. Preserve the outer assignment guard and qualify the actual K/V/C/F sequence. A normalized final value alone does not establish a generic post-calculation normalization rule.
+
+- Generated widgets must not reuse template appearances that can predate current field values. Qualify original generation after edited save/reopen, checking canonical and visible AP text separately; preserve live formatted display when cloning without introducing extra field events.

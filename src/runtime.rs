@@ -927,6 +927,16 @@ mod tests {
         host("var f=getField('A');f._widgets=[{page:0,rect:[1,2,20,30]},{page:1,rect:[40,50,60,70]}];var second=getField('A.1'),before=JSON.stringify(second.rect);second.rect=[41,80,65,52];var firstUnchanged=JSON.stringify(f.rect)==='[1,30,20,2]';f.rect=[3,35,24,4];var copy=second.rect;copy[0]=999;var s=JSON.parse(__host.snapshot());before==='[40,70,60,50]'&&firstUnchanged&&JSON.stringify(s.A.widgets[0].rect)==='[3,4,24,35]'&&JSON.stringify(s.A.widgets[1].rect)==='[41,52,65,80]'");
     }
     #[test]
+    fn spawned_widgets_rebuild_from_live_values_and_preserve_formatted_display() {
+        host(
+            r#"var definition=JSON.parse(__initial).fields.A;definition.widgets=[{page:0,id:[90,0],rect:[1,1,10,10]}];__host.data.templates.Test={fields:{A:definition},order:[]};
+          var f=getField('A');f.setAction('Format',"event.value='Shown '+event.value");f.value='9';
+          getTemplate('Test').spawn(1,true,false);var s=JSON.parse(__host.snapshot()),renamed=s['P1.Test.A'];
+          var correct=renamed.value==='9'&&renamed.formatted==='Shown 9'&&renamed.appearanceDirty;
+          getTemplate('Test').spawn(2,false,false);s=JSON.parse(__host.snapshot());correct&&s.A.value==='9'&&s.A.formatted==='Shown 9'&&s.A.appearanceDirty&&s.A.widgets.length===1"#,
+        );
+    }
+    #[test]
     fn template_spawn_and_deletion_update_the_live_model() {
         host("var definition=JSON.parse(__initial).fields.A;definition.widgets=[{page:0,id:[90,0],rect:[1,1,10,10]}];__host.data.templates.Test={fields:{A:definition},order:[]};getTemplate('Test').spawn(1,true,false);var added=getField('P1.Test.A')!==null&&numPages===2;deletePages(1);added&&numPages===1&&getField('P1.Test.A')===null&&getField('A')!==null");
     }

@@ -155,7 +155,13 @@ var __host = (function () {
       const x=JSON.parse(JSON.stringify(t.fields[n])),base=fields[n];
       if(base){x.value=base.valueAsString;x.user_name=base.userName;x.submit_name=base.submitName;x.display=base.display;x.text_color=copyData(base.textColor);x.rich_value=copyData(base._richRaw);x.rich_metadata=Object.assign({},x.rich_metadata,{defaultStyle:copyData(base._defaultStyle),spans:copyData(base._richRaw)});}
       for(const w of x.widgets){if(base){const live=base._widgets.filter(source=>JSON.stringify(source.id)===JSON.stringify(w.id))[0];if(live&&live.flags!==undefined)w.flags=live.flags;}w.page=index;}
-      if(rename)addField(prefix+n,x);else{if(!fields[n])throw Error('Missing shared template field '+n);fields[n]._widgets.push(...x.widgets);}
+      if(rename){
+        addField(prefix+n,x);
+        if(base){fields[prefix+n]._formatted=base._formatted;fields[prefix+n]._formattedRichValue=copyData(base._formattedRichValue);}
+      }else{if(!fields[n])throw Error('Missing shared template field '+n);fields[n]._widgets.push(...x.widgets);}
+      // A template AP may predate its live value, including after reopening.
+      // New widgets need appearances from the authoritative current display.
+      fields[prefix+n]._appearanceDirty=true;
 
     }
     for(const n of t.order)if(!data.order.includes(prefix+n))data.order.push(prefix+n);

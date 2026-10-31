@@ -2173,7 +2173,7 @@
     "limits": "This qualifies reference transport, not full native rendering or class/table compatibility. Prior visible/hidden/fixed-size carrier attempts remain failed; no autosize or rejected-field cause was established."
   },
   "calculated_mirror_reentry": {
-    "status": "bounded original mirror reentry repair qualified for 2024; other-fixture persistence running; broad milestone incomplete",
+    "status": "bounded original mirror reentry and edited persistence qualified across all three fixtures; broad milestone incomplete",
     "scope": "Original AdvLog.Player Name Calculate converts the primary value; original ValidateAdvLogInfo can then write the primary while its setter is active. Allow nested cross-field K/V/F while calculating, retain the outer guard, and refresh nested Format. Same-field recursion remains guarded. This is not a generic post-calculation normalization sweep.",
     "reader15": "output/testing/reader-script-observation-1793481788034461133/observation.json",
     "native15": "output/testing/script-observation-comparison-1793482569502940480/comparison.json",
@@ -2184,17 +2184,38 @@
     "persistence2024": "output/testing/mirror-reentry-persistence-1793482955511756937/persistence.json",
     "persistence_scope": "Synthetic persisted primary K action with unchanged original mirror C/V and document scripts. Four changed phases across native save, fresh native edit/save, real Reader edit/save and fresh native edit/save/reopen. Canonical values, active appearances and action/script bytes checked. Inactive template AP remains stale after Phase4; full appearance fidelity is not claimed.",
     "rejected_candidate": "Generic normalization sweep failed comparison1793482221717935687 and was removed. Old127 comparison1793481994202886899 also fails; keep both historical failures.",
-    "checks": "128 Rust tests/formatting and strict all-targets Clippy pass; acceptance2/1793483011036367240, extended2/1793483082825367794, generated6/1793483131966279084 and lifecycle2/1793483308656198828 pass. Ashnar persistence still running.",
+    "checks": "128 Rust tests/formatting and strict all-targets Clippy pass; acceptance2/1793483011036367240, extended2/1793483082825367794, generated6/1793483131966279084 and lifecycle2/1793483308656198828 pass. Ashnar edited persistence also passes.",
     "reproduce": [
       "tools/native/verify-script-observation.py --reader <qualified-reader-observation.json>",
       "tools/native/mirror-reentry-persistence.py --fixture 2024 --readiness output/testing/readiness-1793480531.json"
     ],
-    "remaining": "2014/Ashnar mirror persistence, rich/choice reentry, inactive appearances, full class/table/dialog/import/resource workflows and exact typography remain incomplete. Goal and broad milestones stay active.",
+    "remaining": "Rich/choice reentry, inactive appearances, full class/table/dialog/import/resource workflows and exact typography remain incomplete. The exposed generated appearance failure is under separate repair. Goal and broad milestones stay active.",
     "persistence2014": "output/testing/mirror-reentry-persistence-1793483155097424444/persistence.json",
     "generated": "output/testing/native-generated-1793483131966279084/generated.json",
     "appearance_counterexample": "output/testing/mirror-template-spawn-1793483263469455351/independent.json",
     "appearance_failure": "Original DoTemplate ALlog Add exposes the stale inactive AP: canonical generated value Phase4 B, visible AP Phase3 B. This actual generated-page workflow FAILS; separate refresh repair/Reader qualification required.",
     "lifecycle": "output/testing/native-lifecycle-1793483308656198828/lifecycle.json",
-    "fixture_hashes": "output/testing/continuation-mirror-reentry-fixtures.json"
+    "fixture_hashes": "output/testing/continuation-mirror-reentry-fixtures.json",
+    "persistenceAshnar": "output/testing/mirror-reentry-persistence-1793483331817549916/persistence.json"
+  },
+  "generated_template_appearance_refresh": {
+    "status": "bounded original generated adventure-log AP repair and edited mixed-engine persistence qualified; broad milestone incomplete",
+    "scope": "Original DoTemplate ALlog Add after changed native-Reader-native mirror edits. New renamed/shared widgets rebuild appearances from the authoritative current values; renamed fields retain the live formatted/plain-rich display without replaying Format solely to copy it. No original scripts changed.",
+    "original_failure": "output/testing/mirror-template-spawn-1793483263469455351/independent.json",
+    "old128_reader_counterexample": "output/testing/script-observation-comparison-1793483587924473635/comparison.json",
+    "fixed_native": "output/testing/mirror-template-spawn-fixed-1793483460302394723/independent.json",
+    "reader": "output/testing/reader-script-observation-1793483491699423868/observation.json",
+    "comparison": "output/testing/script-observation-comparison-1793483564713710389/comparison.json",
+    "comparison_scope": "Exact captured original before/after generation state and canonical/decoded visible Player Name AP agree with real Reader. Initial native/Reader page7 Poppler renders reviewed; full pixels/layout are not equal and are not claimed.",
+    "edited_persistence": "output/testing/mirror-reentry-persistence-1793483565872630337/persistence.json",
+    "checks": "129 Rust tests/build/formatting and strict all-targets Clippy pass. Six original companion/wild-shape/spell-generation cases and two lifecycle cases pass. Generated-page changed edits across native \u2192 Reader \u2192 native and final fresh reopen pass, with visible AP text and original generated C/V actions preserved.",
+    "remaining": "Other templates and full rich/display/typography controls remain incompletely qualified. Inactive APs can still be retained; generated widgets now rebuild current values. Full rendered pixels are not equal. No broad milestone or overall goal complete.",
+    "reproduce": [
+      "tools/native/reader-script-observation.py --input <saved-changed-mirror.pdf> --observer tools/native/generated-mirror-observer.js --readiness output/testing/readiness-1793480531.json",
+      "tools/native/verify-script-observation.py --reader <observation.json> --field \"P6.ALlog.AdvLog.Player Name\" --canonical-value \"Phase 4 B\" --display-value \"Phase 4 B\"",
+      "tools/native/mirror-reentry-persistence.py --input <native-generated.pdf> --generated-field \"P6.ALlog.AdvLog.Player Name\" --readiness output/testing/readiness-1793480531.json"
+    ],
+    "generated_regression": "output/testing/native-generated-1793483492926450924/generated.json",
+    "lifecycle_regression": "output/testing/native-lifecycle-1793483670608819995/lifecycle.json"
   }
 }
