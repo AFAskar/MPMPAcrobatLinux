@@ -116,6 +116,20 @@ def main():
             expected_y,actual_y=painted_y(ref['appearances']),painted_y(report['appearances'])
             report['decoration_y']={'native':actual_y,'reader':expected_y}
             report['decoration_positions_equal']=len(actual_y)==len(expected_y) and all(abs(a-b)<.01 for a,b in zip(actual_y,expected_y))
+            def stroke_geometry(rows):
+                found=[]
+                for row in rows:
+                    width=1.;y=None
+                    for op in row['drawing']:
+                        if op['operator']=='w':width=float(op['operands'][0])
+                        elif op['operator']=='m':y=float(op['operands'][1])
+                        elif op['operator'] in ['S','s'] and y is not None:
+                            if not any(abs(y-a)<.001 and abs(width-b)<.001 for a,b in found):found.append((y,width))
+                return sorted(found)
+            expected_strokes,actual_strokes=stroke_geometry(ref['appearances']),stroke_geometry(report['appearances'])
+            report['decoration_strokes']={'native':actual_strokes,'reader':expected_strokes}
+            report['vertical_decoration_geometry_equal']=len(actual_strokes)==len(expected_strokes) and bool(actual_strokes) and all(abs(a-c)<=.002 and abs(b-d)<=.002 for (a,b),(c,d) in zip(actual_strokes,expected_strokes))
+            report['comparison_scope']='Captured APIs, face set, first baseline and vertical stroke position/width. X advances/path topology/full pixels are not compared; full appearance compatibility is not established.'
             def first_baseline(rows):
                 for row in rows:
                     x,y=0.,0.
@@ -125,7 +139,7 @@ def main():
                 raise AssertionError('No first baseline')
             report['first_baselines']={'native':first_baseline(report['appearances']),'reader':first_baseline(ref['appearances'])}
             report['first_baseline_equal']=abs(report['first_baselines']['native']-report['first_baselines']['reader'])<.002
-            report['passed']=report['api_equal'] and report['font_faces_equal'] and report['decoration_positions_equal'] and report['first_baseline_equal']
+            report['passed']=report['api_equal'] and report['font_faces_equal'] and report['vertical_decoration_geometry_equal'] and report['first_baseline_equal']
         report['execution_completed']=True
     except Exception as error:report['error']=str(error);raise
     finally:

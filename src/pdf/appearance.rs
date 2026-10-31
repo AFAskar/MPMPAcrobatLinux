@@ -460,22 +460,24 @@ pub(super) fn content_with_fonts(
             ));
             let advance = run.iter().map(&measure).sum::<f32>();
             let face = &layout.fonts[first.font].face;
-            for (flag, metrics) in [(1, face.underline_metrics()), (2, face.strikeout_metrics())] {
+            // Rich decorations use the normalized typographic line box. Reader
+            // does not use the face's post/OS2 suggested stroke metrics here.
+            // The proportions are qualified across multiple faces and sizes.
+            let ascent = RichFontMetrics::from_face(face, None).ascent;
+            for flag in [1, 2] {
                 if first.decoration & flag == 0 {
                     continue;
                 }
-                let metrics = metrics
-                    .filter(|metrics| metrics.thickness > 0)
-                    .with_context(|| {
-                        format!("Appearance font lacks decoration metrics in {}", field.name)
-                    })?;
-                let scale = first.size / f32::from(face.units_per_em());
-                // OpenType positions specify the top edge; PDF strokes use
-                // their center line. Reader's own decoration geometry remains
-                // a separate qualification from these native font metrics.
-                let line_y =
-                    y + (f32::from(metrics.position) - f32::from(metrics.thickness) / 2.) * scale;
-                let thickness = f32::from(metrics.thickness) * scale;
+                if !(0. ..1.).contains(&ascent) {
+                    bail!("Unsupported decoration ascent in {}", field.name)
+                }
+                let (offset, thickness) = if flag == 1 {
+                    (-(1. - ascent) * 0.44, (1. - ascent) * 0.16)
+                } else {
+                    (ascent * 0.39, ascent * 0.04)
+                };
+                let line_y = y + offset * first.size;
+                let thickness = thickness * first.size;
                 let end_x = x + advance;
                 decorations.push_str(&format!(
                     "{} {} {} RG {thickness} w {x} {line_y} m {end_x} {line_y} l S ",
@@ -638,6 +640,37 @@ mod tests {
             .is_none());
     }
 
+    #[test]
+    fn decoration_geometry_does_not_follow_suggested_font_stroke_metrics() {
+        let original = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
+        let face = ttf_parser::Face::parse(&original, 0).unwrap();
+        let offset = |tag| {
+            let table = face
+                .raw_face()
+                .table(ttf_parser::Tag::from_bytes(tag))
+                .unwrap();
+            table.as_ptr() as usize - original.as_ptr() as usize
+        };
+        let post = offset(b"post");
+        let os2 = offset(b"OS/2");
+        let mut changed = original.clone();
+        for (offset, value) in [
+            (post + 8, -700_i16),
+            (post + 10, 10),
+            (os2 + 26, 300),
+            (os2 + 28, 900),
+        ] {
+            changed[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
+        }
+        let altered = ttf_parser::Face::parse(&changed, 0).unwrap();
+        assert_ne!(face.underline_metrics(), altered.underline_metrics());
+        assert_ne!(face.strikeout_metrics(), altered.strikeout_metrics());
+        let state = json!({"textSize":7,"richRenderActive":true,"richValue":[{"text":"decorated","underline":true,"strikethrough":true}]});
+        assert_eq!(
+            content(&face, 400., 50., &field(), &state, "decorated", None).unwrap(),
+            content(&altered, 400., 50., &field(), &state, "decorated", None).unwrap(),
+        );
+    }
     #[test]
     fn decorations_keep_run_colors_and_paint_outside_text_objects() {
         let bytes = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();

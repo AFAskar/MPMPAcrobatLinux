@@ -2270,5 +2270,39 @@
     "native_reader_save": "output/testing/script-observation-comparison-1793485425034365361/comparison.json",
     "persistence_scope": "Actual native saved capture retains all135 observations in real Reader. Reader-saved input is measured afresh: only ModDate/moddate/MODDATE epochs change. Fresh native matches all135 observations of that exact saved input; no date difference is dropped or overwritten.",
     "readonly_projection_control": "output/testing/document-info-readonly-projection-control.json"
+  },
+  "rich_decoration_linebox": {
+    "status": "bounded original notes vertical geometry and mixed-engine persistence qualified across all three fixtures; full rich rendering remains incomplete",
+    "scope": "Use each correctly resolved face normalized typographic ascent with existing16-bit/1000-unit conversion. Underline offset/width=-(1-a)*0.44/(1-a)*0.16; strike offset/width=a*0.39/a*0.04, scaled by actual rounded run size. No font-specific coordinate table.",
+    "reader_initial_matrix": "output/testing/rich-decoration-matrix-1793486147658507600/matrix.json",
+    "reader_heldout_matrix": "output/testing/rich-decoration-matrix-1793487039472637412/matrix.json",
+    "frozen_rule_control": "output/testing/decoration-ascent-heldout-control.json",
+    "measurement_scope": "Initial26 and12 additional Reader rows validate the frozen font-independent hypothesis within0.002pt. Raw fractional requests are retained; geometry is measured using actual getter/AP sizes (12.25\u219212.2 and17.75\u219217.8). The original heldout requested-size meter1793486765757797180 remains failed; same completed Reader output was remeasured read-only.",
+    "original_native": {
+      "2014": "output/testing/rich-format-1793488545903865295/formatting.json",
+      "2024": "output/testing/rich-format-1793488566264775200/formatting.json",
+      "ashnar": "output/testing/rich-format-1793488583805946358/formatting.json"
+    },
+    "roundtrips": {
+      "2014": "output/testing/rich-font-roundtrip-1793488383936199842/vertical-geometry.json",
+      "2024": "output/testing/rich-font-roundtrip-1793487767618778576/vertical-geometry.json",
+      "ashnar": "output/testing/rich-font-roundtrip-1793488457182988807/vertical-geometry.json"
+    },
+    "roundtrip_scope": "All4 stages per fixture preserve original scripts/actions/canonical notes, four faces, first baseline and actual Reader vertical offsets/stroke widths within0.002pt. Native reopen makes/restores edits through original actions with system-font executable lookup disabled.2024 native/Reader crops reviewed. This is not complete glyph advance/path topology/pixel equality.",
+    "checks": "133 Rust tests/build/strict all-targets Clippy pass. A font mutation regression changes only post/OS2 suggested decoration metrics and proves line-box geometry stays unchanged. Original strict workflow gates now include actual stroke width and comparison scope. All six original generation regressions1793488812930280822 pass.",
+    "unresolved_native_matrices": [
+      "output/testing/script-observation-comparison-1793487506313384972/comparison.json",
+      "output/testing/script-observation-comparison-1793487869419614892/comparison.json",
+      "output/testing/decoration-linebox-initial-geometry.json"
+    ],
+    "remaining": "All full native matrix comparisons remain FAILED: canonical underline/false-flag APIs differ and several CSS font-family requests fall back to Segoe UI. Do not ignore these mismatches. Full x advances, path topology, double/word decoration modes and pixels remain incomplete; broad milestone/goal active.",
+    "next_font_repair": "Resolve CSS family+weight+italic separately from PostScript names, validating actual font identity/style and preserving embedded priority. Current resolver queries PostScript only; Arial/Times New Roman/Courier New/Trebuchet MS are observed wrong-face cases.",
+    "decoration_api_reference": "output/testing/reader-script-observation-1793487188042068742/observation.json",
+    "reproduce": [
+      "tools/native/rich-format-workflow.py --native-only --fixture <fixture> --reference <qualified-original-reader-formatting.json>",
+      "tools/native/rich-font-roundtrip.py --native <native-formatting.json> --readiness output/testing/readiness-1793480531.json --first-baseline --edit-on-reopen --without-system-fonts-on-reopen",
+      "tools/native/verify-rich-decoration-paths.py --require-vertical-geometry <fonts.json> <new-vertical-report.json>"
+    ],
+    "generated_regression": "output/testing/native-generated-1793488812930280822/generated.json"
   }
 }
