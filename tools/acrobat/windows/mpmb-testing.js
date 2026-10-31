@@ -78,7 +78,23 @@ MPMBTesting.doc=app.trustedFunction(function(path){
   return opened;
  }finally{app.endPriv();}
 });
+MPMBTesting.deliverResult=app.trustedFunction(function() {
+    var pending=MPMBTesting.pendingResult;
+    if(!pending)return;
+    MPMBTesting.pendingResult=null;
+    MPMBTesting.resultTimer=null;
+    try {
+        app.alert({cTitle:"MPMB Automation Result",cMsg:"MPMB_RESULT\n"+pending.encoded,nIcon:3,nType:0});
+        // The alert restores the previous control when dismissed. Focus only
+        // after it returns, using the document named by the original request.
+        if(pending.response.ok && pending.request.op==='focus'){
+            app.beginPriv();try{MPMBTesting.doc(pending.request.path).getField(pending.request.field).setFocus();}finally{app.endPriv();}
+        }
+    } finally {MPMBTesting.busy=false;}
+});
+
 MPMBTesting.run=app.trustedFunction(function(q) {
+    if(MPMBTesting.busy)throw Error("Previous command is awaiting its result");
     app.beginPriv();
     var response={id:q.id,session:MPMBTesting.session,ok:false};
     try {
@@ -93,12 +109,12 @@ MPMBTesting.run=app.trustedFunction(function(q) {
         response={id:q.id,session:MPMBTesting.session,ok:false,operation_completed:response.ok,error:'Response exceeds the dialog transport limit. Do not repeat mutations; use field_summary or inspect a saved PDF.'};
         encoded=JSON.stringify(response);
     }
-    app.alert({cTitle:"MPMB Automation Result",cMsg:"MPMB_RESULT\n"+encoded,nIcon:3,nType:0});
-    // A result alert restores the previous control's focus when dismissed.
-    // Focus the requested PDF field only after that modal alert has returned.
-    if(response.ok && q.op==='focus'){
-        app.beginPriv();try{MPMBTesting.doc(q.path).getField(q.field).setFocus();}finally{app.endPriv();}
-    }
+    MPMBTesting.pendingResult={encoded:encoded,response:response,request:q};
+    MPMBTesting.busy=true;
+    // Let the originating document-menu frame return before presenting its
+    // receipt. Keep the timer alive; it inherits that menu's document context.
+    try {MPMBTesting.resultTimer=app.setTimeOut("MPMBTesting.deliverResult();",0);}
+    catch(timerError){MPMBTesting.deliverResult();}
 });
 
 MPMBTesting.consume=app.trustedFunction(function(target){

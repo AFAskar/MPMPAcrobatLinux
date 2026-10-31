@@ -347,3 +347,10 @@ Reference failures1793477769177088369,1793478372378222385 and1793478671074935208
 
 
 The fixed8pt hidden-carrier attempt1793478915511335269 also FAILED acknowledgement. It is retained/closed with checksum/scripts-qualified recovery.json; do not attribute the failure to autosizing. post-event-carrier-recovery-control.json records complete recovered60-case equality across visible/hidden/fixed8pt carriers without relabeling any suite. A smaller enabled-calculation batch excluding rejected commits is now running (continuation-reader-post-event-calc-order-valid.log); finish/close it before another Reader suite. Field Validate precedence repair has all required bounded evidence and is ready for atomic commit; normalization/event timing and rejection/acknowledgement remain open.
+
+
+## Reference result delivery qualified after document-menu return
+
+Queued receipt delivery now passes29-check preflight (continuation-deferred-receipt-preflight.json), rich-event/oversized receipt/focus regression1793480396712155931, and full readiness1793480531:24/24 with unchanged harness fingerprint and no new crash/resource exhaustion. Previously failing enabled-calculation15-case1793481788034461133 and60-case1793481967662227786 probes now pass actual execution, live carrier checksum/scripts and clean process closure.
+
+Only receipt presentation is deferred on a retained0ms timer; original commands execute synchronously in the target document-menu context. Exact receipt/owner/foreground/closure checks remain; field focus occurs after alert dismissal. Node protocol test validates scheduling, single pending result, no duplicate delivery, actual error/overflow results and focus sequencing. BM_CLICK-first was not restored. The original acknowledgement failures and failed carrier experiments remain failures. This is transport qualification, not completion of any broad native milestone. Use readiness1793480531 for the new fingerprint.

@@ -2156,5 +2156,20 @@
       "tools/native/verify-script-observation.py --reader <observation.json>",
       "tools/native/recover-script-observation.py --failed <failed-observation.json>"
     ]
+  },
+  "deferred_reference_result_delivery": {
+    "status": "qualified transport repair; native compatibility goal remains incomplete",
+    "scope": "Original commands still execute synchronously through the target document application menu. A retained0ms timer defers only the actual result alert until the menu frame returns. Exact receipt/foreground/closure and post-alert field focus checks remain unchanged; no BM_CLICK-first fallback. One pending result, duplicate-delivery guard and synchronous timer-error fallback preserve actual execution results.",
+    "unit": "node tools/acrobat/tests/result-delivery.js",
+    "preflight": "output/testing/continuation-deferred-receipt-preflight.json",
+    "preflight_checks": 29,
+    "stress": "output/testing/reference-receipt-1793480396712155931/receipt-control.json",
+    "readiness": "output/testing/readiness-1793480531.json",
+    "readiness_cases": 24,
+    "readiness_fingerprint_unchanged": true,
+    "previously_failing15": "output/testing/reader-script-observation-1793481788034461133/observation.json",
+    "previously_failing60": "output/testing/reader-script-observation-1793481967662227786/observation.json",
+    "validation": "Rich-event/oversized receipt/keyboard focus plus saved field/script checks pass; all24 readiness cases including source dialogs, generation and no new crash/resource exhaustion pass. Previously failing calculation-enabled15/60 cases now complete with live code-unit checksums, scripts and process closure. No old suite is relabeled.",
+    "limits": "This qualifies reference transport, not full native rendering or class/table compatibility. Prior visible/hidden/fixed-size carrier attempts remain failed; no autosize or rejected-field cause was established."
   }
 }
