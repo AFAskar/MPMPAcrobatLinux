@@ -15,7 +15,9 @@ var __host = (function () {
   const data=JSON.parse(__initial), fields={}, names=[], journal=[];
   const timers=new Map(), menus={}, gaps=[], errors=[], repairs=[], printJobs=[], attachmentExports=[], assigning=new Set(), formatDirty=new Set(), formatting=new Set();
   let clock=0, timerId=0, calculating=false, pending=false, revision=0;
-  function unsupported(name) { gaps.push(name); throw Error('Unsupported Acrobat API: '+name); }
+  const unsupportedErrors=globalThis.__nativeApplicationState?(globalThis.__nativeApplicationState.unsupportedErrors||(globalThis.__nativeApplicationState.unsupportedErrors=new WeakSet())):new WeakSet();
+  function unsupported(name) { gaps.push(name);const error=Error('Unsupported Acrobat API: '+name);unsupportedErrors.add(error);throw error; }
+  function safeExceptionText(value){try{return String(value)}catch(_){return '[unprintable thrown value]'}}
   function gap(name) { if(gaps.indexOf(name)<0)gaps.push(name); }
   function source(v, seen) {
     if(v===undefined)return 'undefined'; if(v===null)return 'null';
@@ -83,6 +85,7 @@ var __host = (function () {
       checkThisBox(i,on){this.value=on?(this.exportValues[i]||'Yes'):'Off'},isBoxChecked(i){return String(this.value)===(this.exportValues[i]||'Yes')?1:0},
       setAction(type,code){const key=({Calculate:'C',Validate:'V',Keystroke:'K',Format:'F',MouseUp:'U',MouseDown:'D',OnFocus:'Fo',OnBlur:'Bl'})[type];if(!key)return unsupported('Field.setAction '+type);code=String(code);if(this._actions[key]!==code){this._actions[key]=code;this._modifiedActions=this._modifiedActions||{};this._modifiedActions[key]=code;revision++;}},
       setFocus(){data.focus=n;const page=Array.isArray(this.page)?this.page.filter(p=>p>=0)[0]:this.page;if(page>=0)globalThis.pageNum=page;},getArray(){return [this]},
+      browseForFileToSubmit(){if(this.type!=='text'||!(x.flags&1048576))throw Error('File selection requires a file-select text field');if(typeof __browsePdf!=='function')return unsupported('Field.browseForFileToSubmit');const path=__browsePdf();if(path!==null)this.value=path;},
       buttonGetIcon(face=0){if(face!==0)return unsupported('Field.buttonGetIcon non-normal face');return this._icon||{field:n,face:0}},
       buttonSetIcon(icon,face=0){if(face!==0)return unsupported('Field.buttonSetIcon non-normal face');if(!icon||typeof icon.field!=='string')return unsupported('Field.buttonSetIcon external icon');this._icon=Object.assign({},icon);revision++},
       buttonSetCaption(c,face=0){if(![0,1,2].includes(face))throw Error('Invalid button face');this._captions=this._captions||{};this._captions[face]=String(c);if(face===0)this._caption=String(c);revision++},buttonGetCaption(face=0){return this._captions&&this._captions[face]!==undefined?this._captions[face]:this._caption===undefined?(x.caption||''):this._caption},
@@ -164,7 +167,7 @@ var __host = (function () {
     Object.defineProperties(e,{_valueWritten:{get(){return valueWritten}},_richWritten:{get(){return richWritten}},_richData:{get(){return copyData(richData)}}});
     globalThis.event=e;
     try {if(f._actions[key]) (0,eval)(f._actions[key]);return e;}
-    catch(err){errors.push({stage:'field',field:f.name,event:key,error:String(err),stack:err.stack});throw err}
+    catch(err){let stack;try{stack=err==null?undefined:err.stack}catch(error){stack={getter_error:safeExceptionText(error)}}errors.push({stage:'field',field:f.name,event:key,error:safeExceptionText(err),stack:stack});if(['K','V','F'].includes(key)&&!unsupportedErrors.has(err))return e;throw err}
     finally {globalThis.event=previous;}
   }
   function calculateNow() {
@@ -259,7 +262,8 @@ var position={textOnly:0,iconOnly:1,iconTextV:2,textIconV:3,iconTextH:4,textIcon
 var scaleWhen={always:0,never:1,tooBig:2,tooSmall:3},scaleHow={proportional:0,anamorphic:1};
 var event={target:globalThis,name:'Open',type:'Doc',value:'',rc:true};
 var console={println(s){__log(String(s))},show(){__host.gap('console.show UI')},clear(){__host.gap('console.clear UI')}};
-var global={};
+var global=globalThis.__nativeApplicationGlobal||{};
+var __appState=globalThis.__nativeApplicationState||{};
 var app={viewerType:'Reader',viewerVersion:26,formsVersion:26,platform:'UNIX',language:'ENU',calculate:true,runtimeHighlight:false,
   execDialog:__host.execDialog,
   setTimeOut(code,ms){return __host.timer(code,ms)},clearTimeOut(id){__host.clear(id)},
@@ -272,18 +276,61 @@ var app={viewerType:'Reader',viewerVersion:26,formsVersion:26,platform:'UNIX',la
   removeMenuItem(n){delete __host.menus[n]},removeSubMenu(n){delete __host.menus[n]},
   execMenuItem(n){return __host.unsupported('app.execMenuItem '+n)},
   thermometer:{duration:100,value:0,text:undefined,begin(){this.text=''},end(){this.text=undefined}},
-  get activeDocs(){return [globalThis]},
+  openDoc(request){
+    if(typeof __openDocument!=='function')return __host.unsupported('app.openDoc');
+    const o=typeof request==='string'?{cPath:request}:request;
+    if(!o||typeof o.cPath!=='string'||!o.cPath)throw Error('openDoc requires a PDF path');
+    for(const key of Object.keys(o))if(!['cPath','oDoc','bHidden'].includes(key))return __host.unsupported('app.openDoc '+key);
+    const opened=__openDocument(o.cPath,o.oDoc||null);
+    if(!o.bHidden)__host.gap('Additional PDF documents currently open in the background; separate document windows are unsupported');
+    return opened;
+  },
+  browseForDoc(o={}){if(o.bSave)return __host.unsupported('app.browseForDoc save picker');if(typeof __browsePdf!=='function')return __host.unsupported('app.browseForDoc');const path=__browsePdf();return path===null?null:{cPath:path}},
+  get activeDocs(){return typeof __activeDocuments==='function'?__activeDocuments():[globalThis]},
 };
+for(const name of ['calculate','runtimeHighlight','runtimeHighlightColor']){
+  if(!(name in __appState))__appState[name]=app[name];
+  Object.defineProperty(app,name,{enumerable:true,get(){return __appState[name]},set(value){__appState[name]=name==='runtimeHighlightColor'?value:!!value}});
+}
+if(!__appState.thermometer)__appState.thermometer=app.thermometer;
+app.thermometer=__appState.thermometer;
+var MPMBImportFunctions_isInstalled=typeof __openDocument==='function';
+function MPMBOpenFile(doc,path,relative){
+  if(!MPMBImportFunctions_isInstalled)return __host.unsupported('MPMBOpenFile');
+  global.docTo=doc;global.docFrom=app.openDoc(relative?{cPath:path,oDoc:doc}:path);doc.bringToFront();
+}
+function MPMBImportPage(){return __host.unsupported('MPMBImportPage');}
 var util={
   printf(fmt,...args){let i=0;return fmt.replace(/%([+0 ,]*)(\d*)(?:\.(\d+))?([dfsxX])/g,(m,flags,width,prec,type)=>{let v=args[i++];let s=type==='s'?String(v):type==='d'?String(Math.trunc(Number(v))):type==='f'?Number(v).toFixed(prec===undefined?6:Number(prec)):Number(v).toString(16);if(flags.includes('+')&&Number(v)>=0)s='+'+s;return s.padStart(Number(width)||0,flags.includes('0')?'0':' ')})},
   printd(fmt,date){let d=date||new Date();return String(fmt).replace(/yyyy|yy|mmmm|mmm|mm|dd|HH|MM|ss/g,t=>({yyyy:d.getFullYear(),yy:String(d.getFullYear()).slice(-2),mmmm:d.toLocaleString('en',{month:'long'}),mmm:['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()],mm:String(d.getMonth()+1).padStart(2,'0'),dd:String(d.getDate()).padStart(2,'0'),HH:d.getHours(),MM:d.getMinutes(),ss:d.getSeconds()})[t])},
   scand(fmt,s){let d=new Date(s);return isNaN(d)?null:d},
   readFileIntoStream(path){return JSON.parse(__file(path||''))},stringFromStream(stream){if(!stream||typeof stream.data!=='string')throw Error('Invalid text stream');return stream.data},
 };
+function __pdfInfoDate(value){
+  const m=/^(?:D:)?(\d{4})(\d{2})?(\d{2})?(\d{2})?(\d{2})?(\d{2})?(?:([Z+-])(\d{2})?'?(\d{2})?'?)?$/.exec(String(value));
+  if(!m)return new Date(NaN);
+  const year=Number(m[1]),month=Number(m[2]||1)-1,day=Number(m[3]||1),hour=Number(m[4]||0),minute=Number(m[5]||0),second=Number(m[6]||0),zh=Number(m[8]||0),zm=Number(m[9]||0);
+  if(month<0||month>11||day<1||day>31||hour>23||minute>59||second>59||zh>23||zm>59||(m[7]==='Z'&&(zh||zm)))return new Date(NaN);
+  const date=new Date(0);
+  if(m[7]){date.setUTCFullYear(year,month,day);date.setUTCHours(hour,minute,second,0);if(date.getUTCFullYear()!==year||date.getUTCMonth()!==month||date.getUTCDate()!==day)return new Date(NaN);return new Date(date.getTime()-(m[7]==='-'?-1:1)*(zh*60+zm)*60000)}
+  date.setFullYear(year,month,day);date.setHours(hour,minute,second,0);return date;
+}
+function __docInfo(data){
+  const standard=['Title','Author','Subject','Keywords','Creator','Producer','CreationDate','ModDate','Trapped'];
+  return new Proxy(data,{get(target,key,receiver){
+    if(typeof key!=='string')return Reflect.get(target,key,receiver);
+    const normalized=key.toLowerCase();
+    for(const candidate of standard)if(candidate.toLowerCase()===normalized){const value=Object.prototype.hasOwnProperty.call(target,candidate)?target[candidate]:'';return value!==''&&(candidate==='CreationDate'||candidate==='ModDate')?__pdfInfoDate(value):value}
+    return Reflect.has(target,key)?Reflect.get(target,key,receiver):'';
+  },set(){return __host.unsupported('Doc.info metadata mutation/persistence')},deleteProperty(){return __host.unsupported('Doc.info metadata mutation/persistence')},defineProperty(){return __host.unsupported('Doc.info metadata mutation/persistence')}});
+}
 Object.assign(globalThis,{
-  info:JSON.parse(__initial).info,documentFileName:JSON.parse(__initial).file,path:JSON.parse(__initial).path,
+  toString(){return '[object Doc]'},
+  closeDoc(discard=false){if(typeof __closeDocument!=='function')return __host.unsupported('Doc.closeDoc');return __closeDocument(!!discard)},
+  bringToFront(){if(typeof __frontDocument!=='function')return __host.unsupported('Doc.bringToFront');return __frontDocument()},
+  info:__docInfo(JSON.parse(__initial).info),documentFileName:JSON.parse(__initial).file,path:JSON.parse(__initial).path,
   numPages:JSON.parse(__initial).pages,numFields:__host.names.length,calculate:true,delay:false,dirty:false,pageNum:0,
-  getField(n){n=String(n).replace(/\.{2,}/g,'.');if(__host.fields[n])return __host.fields[n];const selected=/^(.*)\.(\d+)$/.exec(n);if(selected&&__host.fields[selected[1]]){const base=__host.fields[selected[1]],index=Number(selected[2]);if(!base._widgets[index])return null;return new Proxy(base,{get(target,key){if(key==='page')return target._widgets[index].page;if(key==='display')return __host.widgetDisplay(target,index);if(key==='rect')return __host.widgetRect(target,index);if(key==='setFocus')return function(){__host.data.focus=target.name;__host.data.focusWidget=index;const page=target._widgets[index].page;if(page>=0)globalThis.pageNum=page;};return target[key]},set(target,key,value){if(key==='display')__host.setWidgetDisplay(target,index,value);else if(key==='rect')__host.setWidgetRect(target,index,value);else target[key]=value;return true}})}const prefix=String(n)+'.';let children=__host.names.filter(x=>x.startsWith(prefix));return children.length?new Proxy({name:n,getArray(){return children.map(x=>__host.fields[x])}},{get(o,k){return k in o?o[k]:__host.fields[children[0]][k]},set(o,k,v){for(const child of children)__host.fields[child][k]=v;return true}}):null},
+  getField(n){if(globalThis.__nativeDocumentClosed)throw Error('Document is closed');n=String(n).replace(/\.{2,}/g,'.');if(__host.fields[n])return __host.fields[n];const selected=/^(.*)\.(\d+)$/.exec(n);if(selected&&__host.fields[selected[1]]){const base=__host.fields[selected[1]],index=Number(selected[2]);if(!base._widgets[index])return null;return new Proxy(base,{get(target,key){if(key==='page')return target._widgets[index].page;if(key==='display')return __host.widgetDisplay(target,index);if(key==='rect')return __host.widgetRect(target,index);if(key==='setFocus')return function(){__host.data.focus=target.name;__host.data.focusWidget=index;const page=target._widgets[index].page;if(page>=0)globalThis.pageNum=page;};return target[key]},set(target,key,value){if(key==='display')__host.setWidgetDisplay(target,index,value);else if(key==='rect')__host.setWidgetRect(target,index,value);else target[key]=value;return true}})}const prefix=String(n)+'.';let children=__host.names.filter(x=>x.startsWith(prefix));return children.length?new Proxy({name:n,getArray(){return children.map(x=>__host.fields[x])}},{get(o,k){return k in o?o[k]:__host.fields[children[0]][k]},set(o,k,v){for(const child of children)__host.fields[child][k]=v;return true}}):null},
   getDataObject(name){const found=__host.dataObjects().filter(d=>d.name===name);if(!found.length)throw Error('Unknown data object '+name);return found[0]},
   exportDataObject:__host.exportDataObject,
   importDataObject(){return __host.unsupported('Doc.importDataObject')},

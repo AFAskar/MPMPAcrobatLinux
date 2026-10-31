@@ -527,7 +527,16 @@ impl Pdf {
             .and_then(|v| doc.get_dictionary(v.as_reference()?))
         {
             for (k, v) in i {
-                info.insert(String::from_utf8_lossy(k).into(), json!(text(&doc, v)));
+                // Preserve PDF scalar types instead of forcing every Info
+                // entry to text. Reader's additional metadata overlay and
+                // numeric-string coercion still require qualification.
+                let value = match resolved(&doc, v)? {
+                    Object::Integer(value) => json!(value),
+                    Object::Real(value) => json!(value),
+                    Object::Boolean(value) => json!(value),
+                    _ => json!(text(&doc, v)),
+                };
+                info.insert(String::from_utf8_lossy(k).into(), value);
             }
         }
         let bkm = cat

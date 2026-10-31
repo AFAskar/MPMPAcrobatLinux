@@ -5,15 +5,27 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     collections::VecDeque,
+    path::PathBuf,
+    rc::Rc,
     sync::{Arc, Mutex},
 };
-// Qualify context ownership before exposing multi-document host operations.
-#[cfg(test)]
 mod document_context;
+mod documents;
+struct DocumentServices {
+    dialogs: Arc<Mutex<VecDeque<Value>>>,
+    alerts: Arc<Mutex<VecDeque<Value>>>,
+    interactive: bool,
+    print_output_dir: Option<PathBuf>,
+    attachment_output_dir: Option<PathBuf>,
+    trace_dir: Option<PathBuf>,
+    dialog_count: Arc<Mutex<usize>>,
+    alert_count: Arc<Mutex<usize>>,
+}
 pub struct Runtime {
     pub js: Context,
     _engine: Engine,
     pub loaded: usize,
+    documents: Rc<documents::Documents>,
 }
 // Reader's span metrics use one decimal with ties-to-even, applied to the
 // actual binary value (8.05 rounds up; 7.25 rounds down). Multiplication by ten
@@ -198,35 +210,38 @@ impl Runtime {
         engine.set_memory_limit(512 * 1024 * 1024);
         engine.set_max_stack_size(2 * 1024 * 1024);
         let js = Context::full(&engine)?;
-        let loaded = js.with(|ctx| {
-            Self::initialize_document(
-                ctx,
-                pdf,
-                dialogs,
-                alerts,
-                interactive,
-                print_output_dir,
-                attachment_output_dir,
-            )
-        })?;
+        let services = DocumentServices {
+            dialogs: Arc::new(Mutex::new(VecDeque::from(dialogs))),
+            alerts: Arc::new(Mutex::new(VecDeque::from(alerts))),
+            interactive,
+            print_output_dir,
+            attachment_output_dir,
+            trace_dir: std::env::var_os("MPMB_DIALOG_TRACE_DIR").map(PathBuf::from),
+            dialog_count: Arc::new(Mutex::new(0)),
+            alert_count: Arc::new(Mutex::new(0)),
+        };
+        let documents = documents::Documents::new(js.clone(), Arc::clone(pdf), services)?;
+        let loaded = js.with(|ctx| Self::initialize_document(ctx, pdf, &documents))?;
         Ok(Self {
             js,
             _engine: engine,
             loaded,
+            documents,
         })
     }
     // Initialization can run inside an already-held QuickJS runtime guard.
     // Source documents must get their own context and original host/scripts;
     // reentering Context::with while a document callback holds that guard fails.
-    fn initialize_document(
-        ctx: Ctx<'_>,
+    fn initialize_document<'js>(
+        ctx: Ctx<'js>,
         pdf: &Arc<Pdf>,
-        dialogs: Vec<Value>,
-        alerts: Vec<Value>,
-        interactive: bool,
-        print_output_dir: Option<std::path::PathBuf>,
-        attachment_output_dir: Option<std::path::PathBuf>,
+        documents: &Rc<documents::Documents>,
     ) -> Result<usize> {
+        documents.install(ctx.clone(), pdf)?;
+        let services = &documents.services;
+        let interactive = services.interactive;
+        let print_output_dir = services.print_output_dir.clone();
+        let attachment_output_dir = services.attachment_output_dir.clone();
         let repair_allowed = std::env::var_os("MPMB_STRICT_ORIGINAL_SCRIPTS").is_none()
             && pdf.scripts.iter().any(|(name, source)| {
                 name == "Functions2"
@@ -281,9 +296,9 @@ impl Runtime {
                 true
             })?,
         )?;
-        let queue = Arc::new(Mutex::new(VecDeque::from(dialogs)));
-        let trace_dir = std::env::var_os("MPMB_DIALOG_TRACE_DIR").map(std::path::PathBuf::from);
-        let trace_count = Arc::new(Mutex::new(0usize));
+        let queue = Arc::clone(&services.dialogs);
+        let trace_dir = services.trace_dir.clone();
+        let trace_count = Arc::clone(&services.dialog_count);
         ctx.globals().set(
             "__dialog",
             Function::new(
@@ -344,10 +359,9 @@ impl Runtime {
                 },
             )?,
         )?;
-        let aq = Arc::new(Mutex::new(VecDeque::from(alerts)));
-        let alert_trace_dir =
-            std::env::var_os("MPMB_DIALOG_TRACE_DIR").map(std::path::PathBuf::from);
-        let alert_count = Arc::new(Mutex::new(0usize));
+        let aq = Arc::clone(&services.alerts);
+        let alert_trace_dir = services.trace_dir.clone();
+        let alert_count = Arc::clone(&services.alert_count);
         ctx.globals().set(
             "__alert",
             Function::new(
@@ -481,7 +495,31 @@ impl Runtime {
     }
     pub fn diagnostics(&self) -> Result<Value> {
         let s: String = self.raw("__host.diagnostics()")?;
-        Ok(serde_json::from_str(&s)?)
+        let mut diagnostics: Value = serde_json::from_str(&s)?;
+        let documents = self.documents.report();
+        // A source can activate a qualified repair or encounter an original
+        // error even when the target has neither. Retain UI disclosure and
+        // probe failure evidence after the source is discarded.
+        for group in ["open", "events"] {
+            if let Some(records) = documents[group].as_array() {
+                for record in records {
+                    for key in ["repairs", "errors"] {
+                        if let Some(items) = record["diagnostics"][key].as_array() {
+                            for item in items {
+                                let mut item = item.clone();
+                                item["source_document"] = record["path"].clone();
+                                diagnostics[key]
+                                    .as_array_mut()
+                                    .context("Invalid diagnostic array")?
+                                    .push(item);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        diagnostics["documents"] = documents;
+        Ok(diagnostics)
     }
     pub fn edit(&self, n: &str, v: &Value) -> Result<()> {
         self.eval(&format!("__host.edit({},{})", serde_json::to_string(n)?, v))?;
@@ -496,6 +534,37 @@ impl Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn metadata_standard_aliases_preserve_custom_case_and_pdf_date_types() {
+        host(
+            r#"var metadata=__docInfo({Title:'MPMB sheet',SheetVersion:'24.2.0',CreationDate:"D:20160527130739+02'00'"});
+          var date=metadata.creationdate;date.setUTCFullYear(1999);
+          metadata.title==='MPMB sheet' && metadata.TITLE===metadata.Title &&
+          metadata.SheetVersion==='24.2.0' && metadata.sheetversion==='' && metadata.SHEETVERSION==='' &&
+          metadata.MissingMetadata==='' && metadata.author==='' &&
+          Object.keys(metadata).sort().join(',')==='CreationDate,SheetVersion,Title' &&
+          metadata.CREATIONDATE instanceof Date &&
+          metadata.CreationDate.getTime()===Date.UTC(2016,4,27,11,7,39) &&
+          __pdfInfoDate("D:20240102030405-04'30'").getTime()===Date.UTC(2024,0,2,7,34,5) &&
+          isNaN(__pdfInfoDate('D:20230230Z').getTime())"#,
+        );
+    }
+    #[test]
+    fn metadata_mutations_fail_instead_of_pretending_to_persist() {
+        host("var metadata=__docInfo({Title:'original'}),rejected=false;try{metadata.title='changed'}catch(e){rejected=/metadata mutation/.test(String(e))}rejected&&metadata.Title==='original'");
+    }
+    #[test]
+    fn commit_action_exceptions_are_recorded_without_aborting_setters_or_resets() {
+        host("var f=getField('A'),ok=true;for(var kind of ['Keystroke','Validate','Format']){for(var type of ['Keystroke','Validate','Format'])f.setAction(type,'');f.value='baseline';f.defaultValue='default';f.setAction(kind,\"throw Error('field exception sentinel')\");try{f.value='changed';ok=ok&&f.valueAsString==='changed';resetForm(['A']);ok=ok&&f.valueAsString==='default'}catch(e){ok=false}}ok&&JSON.parse(__host.diagnostics()).errors.length===6");
+    }
+    #[test]
+    fn unimplemented_host_calls_remain_explicit_failures_inside_field_actions() {
+        host("var f=getField('A'),rejected=false;f.setAction('Format',\"__host.unsupported('test missing host method')\");try{f.value='changed'}catch(e){rejected=/Unsupported Acrobat API/.test(String(e))}rejected&&JSON.parse(__host.diagnostics()).errors.length===1");
+    }
+    #[test]
+    fn exception_diagnostics_do_not_throw_on_null_or_unavailable_stack_getters() {
+        host("var f=getField('A'),ok=true;f.setAction('Format','throw null');try{f.value='first'}catch(e){ok=false}f.setAction('Format',\"var problem=Error('source exception');Object.defineProperty(problem,'stack',{get(){throw Error('stack unavailable')}});throw problem\");try{f.value='second'}catch(e){ok=false}var records=JSON.parse(__host.diagnostics()).errors;ok&&f.valueAsString==='second'&&records.length===2&&records[0].error==='null'&&records[1].stack.getter_error==='Error: stack unavailable'");
+    }
     #[test]
     fn scripted_selections_reject_absent_ambiguous_and_disabled_options() {
         let request = json!({"values":{"list":{"group":{"A":-4,"B":2}}}});
