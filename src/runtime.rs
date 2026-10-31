@@ -686,6 +686,12 @@ mod tests {
         host("var a=eval(({regex:/wolf/i,fn:function(x){return x+1},arr:[undefined,null,2]}).toSource());a.regex.test('WOLF')&&a.fn(2)===3&&a.arr[0]===undefined");
     }
     #[test]
+    fn serialized_string_values_and_keys_survive_pdf_text_field_normalization() {
+        host(
+            r#"var original={'key\u00a0name':'A\u00a0B\u2028C\ud83d\ude00'},f=getField('A');f.setAction('Validate','');var serialized=original.toSource();f.value=serialized;var restored=eval(f.valueAsString);!/[^\x00-\x7f]/.test(serialized)&&Object.keys(restored)[0]===Object.keys(original)[0]&&restored[Object.keys(original)[0]]===original[Object.keys(original)[0]]&&f.valueAsString===serialized"#,
+        );
+    }
+    #[test]
     fn unsupported_api_is_observable() {
         host("var failed=false;try{getTemplate('blank').spawn(0,true,true)}catch(e){failed=String(e).includes('Unsupported Acrobat API')}failed&&JSON.parse(__host.diagnostics()).gaps.includes('Template.spawn overlay')");
     }

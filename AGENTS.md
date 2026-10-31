@@ -51,3 +51,7 @@ Read `docs/testing-environment.md` before changing or testing PDF behavior.
 - Plain text edited and restored in one runtime can still reuse its original appearance. For a rebuild qualification, save the changed value, reopen that changed snapshot, then restore/resave; independently verify that the native appearance was rebuilt. Retaining a valid old AP is not a rendering failure, but it cannot prove the new renderer works after reopen.
 
 - Launch isolated UI Automation workers without creating a console (`UseShellExecute=false`, `CreateNoWindow=true`). Hiding PowerShell after launch can steal foreground and dismiss the popup being observed. For Reader owner-drawn menus, native strings may be empty; exact labels must come from the focused Menu provider. Activate only an observed owned menu item after checking its exact accessible name, native enabled state, matching bounds and Reader hit ownership.
+
+- Match diagnostic entry points in native and Reader. Original RunUserScript executes every installed CurrentScriptFiles add-on before the manual observer; calling only the observer body natively can miss duplicate subclass registrations and produce misleading parser/identity differences. Record this side effect and compare the same original invocation in both engines.
+
+- Serialized state stored in PDF text fields must protect Unicode string values and property names from field normalization. Independently compare complete decoded imported payloads; a matching length or normalized NBSP/space comparison cannot establish preserved scripts.

@@ -19,14 +19,19 @@ var __host = (function () {
   function unsupported(name) { gaps.push(name);const error=Error('Unsupported Acrobat API: '+name);unsupportedErrors.add(error);throw error; }
   function safeExceptionText(value){try{return String(value)}catch(_){return '[unprintable thrown value]'}}
   function gap(name) { if(gaps.indexOf(name)<0)gaps.push(name); }
+  // Serialized state is stored in PDF text fields, which normalize literal
+  // NBSP and line separators. Quote UTF-16 units so evaluating saved state
+  // restores string values and property names without transport damage.
+  function sourceString(value){return JSON.stringify(value).replace(/[\u007f-\uffff]/g,ch=>'\\u'+ch.charCodeAt(0).toString(16).padStart(4,'0'));}
   function source(v, seen) {
     if(v===undefined)return 'undefined'; if(v===null)return 'null';
+    if(typeof v==='string')return sourceString(v);
     if(typeof v==='function')return v.toString();
     if(v instanceof RegExp)return v.toString();
-    if(v instanceof Error){errors.push({stage:'original-caught-exception',error:String(v),stack:v.stack});return '(new '+v.name+'('+JSON.stringify(v.message)+'))'}
+    if(v instanceof Error){errors.push({stage:'original-caught-exception',error:String(v),stack:v.stack});return '(new '+v.name+'('+sourceString(v.message)+'))'}
     if(typeof v!=='object')return JSON.stringify(v);
     seen=seen||[];if(seen.indexOf(v)>=0)throw Error('cyclic toSource');
-    seen.push(v);let s=Array.isArray(v)?'['+v.map(x=>source(x,seen)).join(',')+']':'({'+Object.keys(v).map(k=>JSON.stringify(k)+':'+source(v[k],seen)).join(',')+'})';seen.pop();return s;
+    seen.push(v);let s=Array.isArray(v)?'['+v.map(x=>source(x,seen)).join(',')+']':'({'+Object.keys(v).map(k=>sourceString(k)+':'+source(v[k],seen)).join(',')+'})';seen.pop();return s;
   }
   Object.defineProperty(Object.prototype,'toSource',{value:function(){return source(this)},configurable:true});
   function displayFlags(value,old){value=Number(value);if(![0,1,2,3].includes(value))throw Error('Invalid field display');return (old&~(2|4|32))|({0:4,1:6,2:0,3:36})[value];}

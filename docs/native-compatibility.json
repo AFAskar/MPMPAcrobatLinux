@@ -1855,5 +1855,43 @@
     "original_workflow_after": "output/testing/native-direct-import-1793460390619193480/report.json",
     "scope": "Original FeatClear passes one field-name string to resetForm; prior host called list.some on it, suppressing a Background Feature Validate TypeError during legacy import. Normalize strings to one-element field lists. Native exact trace matches Reader: changed string reset K/V/F, unchanged Format only, unknown string no actions. Old105 binary fails the same captured test. Fresh original Ashnar->2024 import removes the extra Background Feature error; its raw strict report retains two original carrying-capacity Format errors. Hierarchical names/array behavior retained; named-object overload and full invalid input/partial-event semantics remain unqualified.",
     "validation": "106 Rust tests, build and strict all-targets clippy pass; native-acceptance-1793460437004027142 passes both current-sheet slices."
+  },
+  "state_string_source_quoting": {
+    "status": "qualified bounded string/key transport and full retained add-on payload; broader serialization/rendering incomplete",
+    "scope": "Quote non-ASCII UTF-16 units in string values, object property names and Error message strings emitted by the host toSource serializer. This prevents PDF text-field normalization from turning NBSP into spaces or passing non-BMP state text to the appearance encoder. Function/regexp source quoting and arbitrary toSource API representation remain unqualified. Original document/add-on script bytes are not patched.",
+    "reader": "output/testing/reader-script-observation-1793461117069018351/observation.json",
+    "native": "output/testing/source-string-comparison-1793461216061001691/comparison.json",
+    "old_counterexample": "output/testing/source-string-comparison-1793461255185665895/comparison.json",
+    "counterexample_scope": "Old106 binary fails saving literal surrogate-pair source text because non-BMP appearance encoding is unsupported. Separate old original-import comparisons1793460959706146662 and1793461054951720767 fail complete add-on payload equality: eleven code units changed NBSP160 to space32. The latter already matches the original RunUserScript entry point and class identity.",
+    "legacy_2014_reader": "output/testing/reader-direct-import-1793460778411273239/direct-import.json",
+    "legacy_2014_native": "output/testing/native-direct-import-1793461191966464798/report.json",
+    "legacy_2014_comparison": "output/testing/direct-import-comparison-1793461252540360243/comparison.json",
+    "legacy_scope": "Original legacy Ashnar into current2014: level12 Shadow Monk,105 checked fields including ability/attack/resource rows, spellcasting selections/choices/source exclusions,56 remembered spell rows,6 pages, source unchanged/closed. Complete retained target add-on payload3829998 code units compares exactly after parsing the serialized object, including the eleven formerly lost NBSPs. Original upgrade logic chooses retained current add-ons; this is not a claim every legacy bundle is copied verbatim. Strict native result retains two matched original Reader carrying-capacity Format errors.",
+    "entry_point": "Both engines now call original RunUserScript(false), which executes installed libraries before the observer. Older direct-observer native runs skipped this step and differ in duplicate subclass registration suffixes. That is a harness setup difference, not evidence of a native parser bug. The same-entry107 Warlock comparison also passes in direct-import-comparison-1793461588929658059.",
+    "regressions": [
+      "107 Rust tests/build/strict all-targets clippy",
+      "output/testing/native-acceptance-1793461263097330375/acceptance.json",
+      "output/testing/native-extended-1793461378816419175/extended.json",
+      "output/testing/native-generated-1793461492372080277/generated.json"
+    ],
+    "full_legacy_2014_comparison": {
+      "report": "output/testing/legacy-2014-full-comparison-1793461800000000000.json",
+      "semantic": "output/testing/legacy-2014-state-comparison-1793461800000000000.json",
+      "passed": false,
+      "field_counts": [
+        4249,
+        4249
+      ],
+      "raw_value_differences": 13,
+      "widget_counts": [
+        2093,
+        2093
+      ],
+      "widget_equality": false,
+      "different_appearance_entries": 551,
+      "front_page_changed_pixel_fraction": 0.037259747623924144,
+      "semantic_remaining": "CurrentVars.fixRichTextFormatting; seven other serialized objects equal after parsing. Diagnostic name mirrors and Weight Carrying Capacity.Button remain nonserialized differences. Armor contribution displays blank/incorrectly in native while Reader shows15 for canonical10+Wis; under investigation."
+    },
+    "legacy_2024_failure": "reader-direct-import-1793460544635610835 FAILED on observed JavaScript Debugger. Original Reader caught TypeError spBonusiFrom undefined; native log also catches selection of undefined in FunctionsImport. No original script repair authorized/applied. Same completed request recovered, retained and process terminated in recovery.json, source hash unchanged. Final summary/returned=true does not prove a successful original import. Legacy2024 conversion remains incomplete."
   }
 }

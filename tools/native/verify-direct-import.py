@@ -5,7 +5,7 @@ The raw strict native suite stays failed for its two original format2 errors.
 This comparison requires those same observed Reader errors and exact checked
 fields. It does not qualify complete styles, metadata, rendering or other imports.
 """
-import argparse,hashlib,importlib.util,json,sys,time
+import argparse,hashlib,importlib.util,json,subprocess,sys,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'tools/acrobat'))
@@ -24,21 +24,32 @@ def main():
         a,b=1,0
         for ch in text:a=(a+ord(ch))%65521;b=(b+a)%65521
         assert summary_stages[0]=={'code_units':len(text),'adler32_utf16':str((b*65536+a)&0xffffffff)}
-    expected=reader['captured'];source=next((ROOT/'Testing').glob('*_2024_*.pdf'))
+    expected=reader['captured'];profile=reader.get('profile','warlock');source=Path(reader['target_fixture']) if reader.get('target_fixture') else next((ROOT/'Testing').glob('*_2024_*.pdf'));execution=json.loads((args.native/'execution.json').read_text());assert execution.get('profile','warlock')==profile;assert Path(execution.get('target_fixture',source)).resolve()==source.resolve()
     folder=ROOT/'output/testing'/('direct-import-comparison-'+str(time.time_ns()));folder.mkdir();report={'passed':False,'scope':__doc__,'native':str(args.native.resolve()),'reader':str(args.reader.resolve()),'strict_native_probe_passed':native['passed']};print(folder,flush=True)
     try:
         assert all(stage['passed'] for stage in native['stages'])
+        assert not execution.get('original_import_error_logged',False) and 'JS: An error occurred during importing:' not in (args.native/'probe.log').read_text(errors='replace'), 'Original native import logged an internal failure; checked values alone do not qualify completion'
         errors=native['diagnostics']['errors'];assert not native['passed'] and len(errors)==2
         assert all(error.get('field')=='Carrying Capacity Multiplier' and error.get('event')=='F' and error.get('error','').startswith('TypeError:') and 'format2' in error.get('stack','') for error in errors)
         normalize_errors=lambda records:[{key:value for key,value in record.items() if key!='error'} for record in records]
-        checks={key:captured[key]==expected[key] for key in ['returned','openDocuments','leftImportGlobals','cleanupPerformed','identity','choice','fields','pages']}
-        checks.update({key:sorted(set(captured[key]))==sorted(set(expected[key])) for key in ['cantrips','spells','excludedSources']})
+        exact_keys=['returned','openDocuments','leftImportGlobals','cleanupPerformed','identity','fields','pages']
+        exact_keys += ['spellcasting','choices','rememberedSpells','importedScripts'] if profile=='legacy' else ['choice']
+        checks={key:captured[key]==expected[key] for key in exact_keys}
+        set_keys=['excludedSources'] if profile=='legacy' else ['cantrips','spells','excludedSources']
+        checks.update({key:sorted(set(captured[key]))==sorted(set(expected[key])) for key in set_keys})
+        if profile=='legacy':
+            module=importlib.util.spec_from_file_location('serialized_state',ROOT/'tools/native/compare-state.py');state=importlib.util.module_from_spec(module);module.loader.exec_module(state)
+            left=canonical_fields(PdfReader(pdf));right=canonical_fields(PdfReader(args.reader.parent/'reader-imported.pdf'))
+            name='User_Imported_Files.Stringified'
+            parsed=subprocess.run(['node','-e',state.COMPARE],input=json.dumps({name:[left[name]['/V'],right[name]['/V']]}),text=True,capture_output=True,check=True,timeout=30)
+            report['imported_payload_comparison']=json.loads(parsed.stdout)
+            checks['complete_imported_payloads']=report['imported_payload_comparison'][name]['equal']
         checks['observed_original_errors']=normalize_errors(captured['originalActionErrors'])==normalize_errors(expected['originalActionErrors']) and len(expected['originalActionErrors'])==2
         checks['native_saved_fields']=inspect(pdf,captured['fields'])['passed']
         checks['scripts']=script_hashes(pdf)==script_hashes(source)
         scenario=json.loads((args.native/'scenario.json').read_text());from_path=Path(next(reply['values']['fLoc'] for reply in scenario['dialogs'] if reply.get('title')=='IMPORT FROM PDF DIALOG'))
         checks['source_unchanged']=hashlib.sha256(from_path.read_bytes()).hexdigest()==reader['source_sha256']
-        report.update(checks=checks,captured=captured,runtime_gaps=native['diagnostics']['gaps'],normalization='Spell/cantrip/source lists compare as sets; other checked data is exact. Original error messages are engine-specific: compare field/event/error type/input type/input text and counts, retain both raw messages. Not full API/appearance equality.',reader_original_errors=expected['originalActionErrors'])
+        report.update(checks=checks,captured=captured,runtime_gaps=native['diagnostics']['gaps'],normalization=('Legacy profile: source exclusions compare as sets; identity, choices, spell selections, resource/ability/attack fields and remembered spell rows are exact. Complete imported-script object values compare as parsed source expressions. ' if profile=='legacy' else 'Spell/cantrip/source lists compare as sets; other checked data is exact. ')+'Original error messages are engine-specific: compare field/event/error type/input type/input text and counts, retain both raw messages. Not full API/appearance equality.',reader_original_errors=expected['originalActionErrors'])
         assert all(checks.values()),checks
         report['passed']=True
     except Exception as error:report['error']=str(error);raise
