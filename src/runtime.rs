@@ -7,6 +7,9 @@ use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
 };
+// Qualify context ownership before exposing multi-document host operations.
+#[cfg(test)]
+mod document_context;
 pub struct Runtime {
     pub js: Context,
     _engine: Engine,
@@ -195,6 +198,35 @@ impl Runtime {
         engine.set_memory_limit(512 * 1024 * 1024);
         engine.set_max_stack_size(2 * 1024 * 1024);
         let js = Context::full(&engine)?;
+        let loaded = js.with(|ctx| {
+            Self::initialize_document(
+                ctx,
+                pdf,
+                dialogs,
+                alerts,
+                interactive,
+                print_output_dir,
+                attachment_output_dir,
+            )
+        })?;
+        Ok(Self {
+            js,
+            _engine: engine,
+            loaded,
+        })
+    }
+    // Initialization can run inside an already-held QuickJS runtime guard.
+    // Source documents must get their own context and original host/scripts;
+    // reentering Context::with while a document callback holds that guard fails.
+    fn initialize_document(
+        ctx: Ctx<'_>,
+        pdf: &Arc<Pdf>,
+        dialogs: Vec<Value>,
+        alerts: Vec<Value>,
+        interactive: bool,
+        print_output_dir: Option<std::path::PathBuf>,
+        attachment_output_dir: Option<std::path::PathBuf>,
+    ) -> Result<usize> {
         let repair_allowed = std::env::var_os("MPMB_STRICT_ORIGINAL_SCRIPTS").is_none()
             && pdf.scripts.iter().any(|(name, source)| {
                 name == "Functions2"
@@ -207,78 +239,202 @@ impl Runtime {
         let attachments = crate::attachments::read(&pdf.doc)?;
         let attachment_metadata: Vec<_> = attachments.values().cloned().collect();
         let exporter = std::cell::RefCell::new(crate::attachments::Exporter::default());
-        js.with(|ctx|->Result<()>{
-        ctx.globals().set("__attachment",Function::new(ctx.clone(),move|ctx:Ctx,request:String|->rquickjs::Result<String>{
-            exporter.borrow_mut().export(&attachments,&request,interactive,attachment_output_dir.as_deref())
-                .map(|v|v.to_string()).map_err(|e|Exception::throw_message(&ctx,&format!("{e:#}")))
-        })?)?;
-        let print_pdf=Arc::clone(pdf);
-        ctx.globals().set("__print",Function::new(ctx.clone(),move|ctx:Ctx,request:String|->rquickjs::Result<String>{
-            crate::printing::execute(&print_pdf,&request,interactive,print_output_dir.as_deref())
-                .map(|v|v.to_string()).map_err(|e|Exception::throw_message(&ctx,&format!("{e:#}")))
-        })?)?;
-        ctx.globals().set("__log",Function::new(ctx.clone(),|s:String|{eprintln!("JS: {s}");true})?)?;
-        let queue=Arc::new(Mutex::new(VecDeque::from(dialogs)));
-        let trace_dir=std::env::var_os("MPMB_DIALOG_TRACE_DIR").map(std::path::PathBuf::from);let trace_count=Arc::new(Mutex::new(0usize));
-        ctx.globals().set("__dialog",Function::new(ctx.clone(),move|ctx:Ctx,s:String|->rquickjs::Result<String>{
-          (||->std::result::Result<String,String>{
-            let request:Value=serde_json::from_str(&s).map_err(|e|e.to_string())?;
-            if let Some(dir)=&trace_dir{std::fs::create_dir_all(dir).map_err(|e|e.to_string())?;let mut count=trace_count.lock().unwrap();*count+=1;std::fs::write(dir.join(format!("dialog-{:03}.json",*count)),&s).map_err(|e|e.to_string())?;}
-            if let Some(mut reply)=queue.lock().unwrap().pop_front(){
-                if let Some(title)=reply["title"].as_str(){if request["description"]["name"].as_str()!=Some(title){return Err(format!("Expected dialog {title}, received {}",request["description"]["name"]))}}
-                if let Some(header)=reply["header"].as_str(){
-                    fn find_header(node:&Value)->Option<&str>{if node["item_id"]=="head"{return node["name"].as_str()}node["elements"].as_array().and_then(|v|v.iter().find_map(find_header))}
-                    if find_header(&request["description"])!=Some(header){return Err(format!("Expected dialog header {header}"))}
-                }
-                select_dialog_options(&request,&mut reply).map_err(|e|e.to_string())?;
-                select_dialog_button(&request,&mut reply).map_err(|e|e.to_string())?;
-                eprintln!("Dialog: {} [scripted response]",request["description"]["name"]);
-                return Ok(reply.to_string())
-            }
-            if !interactive{return Err(format!("Unanswered dialog: {}",request["description"]["name"]))}
-            crate::ui::modal(&request).map(|v|v.to_string()).map_err(|e|e.to_string())
-          })().map_err(|e|Exception::throw_message(&ctx,&e))
-        })?)?;
-        let aq=Arc::new(Mutex::new(VecDeque::from(alerts)));
-        let alert_trace_dir=std::env::var_os("MPMB_DIALOG_TRACE_DIR").map(std::path::PathBuf::from);let alert_count=Arc::new(Mutex::new(0usize));
-        ctx.globals().set("__alert",Function::new(ctx.clone(),move|ctx:Ctx,s:String|->rquickjs::Result<String>{
-          (||->std::result::Result<String,String>{
-            let v:Value=serde_json::from_str(&s).map_err(|e|e.to_string())?;
-            if let Some(dir)=&alert_trace_dir{std::fs::create_dir_all(dir).map_err(|e|e.to_string())?;let mut count=alert_count.lock().unwrap();*count+=1;std::fs::write(dir.join(format!("alert-{:03}.json",*count)),&s).map_err(|e|e.to_string())?;}
-            if let Some(reply)=aq.lock().unwrap().pop_front(){eprintln!("Alert [scripted response]: {}",v["cTitle"]);return scripted_alert_response(&v,&reply).map(|v|v.to_string()).map_err(|e|e.to_string())}
-            if !interactive{return Err(format!("Unanswered alert: {}",v["cTitle"]))}
-            crate::ui::alert(&v).map(|v|v.to_string()).map_err(|e|e.to_string())
-          })().map_err(|e|Exception::throw_message(&ctx,&e))
-        })?)?;
-        ctx.globals().set("__file",Function::new(ctx.clone(),move|ctx:Ctx,path:String|->rquickjs::Result<String>{
-            (||->Result<String>{
-                let selected=if path.is_empty(){
-                    if !interactive{bail!("file picker requires interactive mode or explicit local path")}
-                    let out=std::process::Command::new("zenity").args(["--file-selection","--title=Import MPMB JavaScript","--file-filter=JavaScript | *.js"]).output()?;
-                    if !out.status.success(){return Ok("null".into())}String::from_utf8(out.stdout)?.trim_end_matches('\n').to_owned()
-                }else{path};
-                if selected.starts_with("http:")||selected.starts_with("https:"){bail!("URL imports are unsupported")}
-                let bytes=std::fs::read(selected)?;if bytes.len()>16*1024*1024{bail!("import exceeds 16 MiB")}
-                Ok(json!({"data":String::from_utf8(bytes)?}).to_string())
-            })().map_err(|e|Exception::throw_message(&ctx,&format!("{e:#}")))
-        })?)?;
-        let initial=json!({"attachments":attachment_metadata,"repair_allowed":repair_allowed,"templates":pdf.templates,"trace":std::env::var("MPMB_TRACE_FIELDS").unwrap_or_default().split(',').collect::<Vec<_>>(),"bookmarks":pdf.bookmarks,"fields":pdf.fields,"order":pdf.order,"info":pdf.info,"file":pdf.path.file_name().unwrap().to_string_lossy(),"path":pdf.path,"pages":pdf.doc.get_pages().len()});
-        ctx.globals().set("__roundRichMetric",Function::new(ctx.clone(),round_rich_metric)?)?;
-        ctx.globals().set("__initial",initial.to_string())?;
-        ctx.eval::<(),_>(concat!(include_str!("acrobat.js"),"\nvoid 0;")).map_err(|e|anyhow!("Acrobat host: {e}: {:?}",ctx.catch()))?;
-        Ok(())})?;
-        let mut rt = Self {
-            js,
-            _engine: engine,
-            loaded: 0,
-        };
+        ctx.globals().set(
+            "__attachment",
+            Function::new(
+                ctx.clone(),
+                move |ctx: Ctx, request: String| -> rquickjs::Result<String> {
+                    exporter
+                        .borrow_mut()
+                        .export(
+                            &attachments,
+                            &request,
+                            interactive,
+                            attachment_output_dir.as_deref(),
+                        )
+                        .map(|v| v.to_string())
+                        .map_err(|e| Exception::throw_message(&ctx, &format!("{e:#}")))
+                },
+            )?,
+        )?;
+        let print_pdf = Arc::clone(pdf);
+        ctx.globals().set(
+            "__print",
+            Function::new(
+                ctx.clone(),
+                move |ctx: Ctx, request: String| -> rquickjs::Result<String> {
+                    crate::printing::execute(
+                        &print_pdf,
+                        &request,
+                        interactive,
+                        print_output_dir.as_deref(),
+                    )
+                    .map(|v| v.to_string())
+                    .map_err(|e| Exception::throw_message(&ctx, &format!("{e:#}")))
+                },
+            )?,
+        )?;
+        ctx.globals().set(
+            "__log",
+            Function::new(ctx.clone(), |s: String| {
+                eprintln!("JS: {s}");
+                true
+            })?,
+        )?;
+        let queue = Arc::new(Mutex::new(VecDeque::from(dialogs)));
+        let trace_dir = std::env::var_os("MPMB_DIALOG_TRACE_DIR").map(std::path::PathBuf::from);
+        let trace_count = Arc::new(Mutex::new(0usize));
+        ctx.globals().set(
+            "__dialog",
+            Function::new(
+                ctx.clone(),
+                move |ctx: Ctx, s: String| -> rquickjs::Result<String> {
+                    (|| -> std::result::Result<String, String> {
+                        let request: Value = serde_json::from_str(&s).map_err(|e| e.to_string())?;
+                        if let Some(dir) = &trace_dir {
+                            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+                            let mut count = trace_count.lock().unwrap();
+                            *count += 1;
+                            std::fs::write(dir.join(format!("dialog-{:03}.json", *count)), &s)
+                                .map_err(|e| e.to_string())?;
+                        }
+                        if let Some(mut reply) = queue.lock().unwrap().pop_front() {
+                            if let Some(title) = reply["title"].as_str() {
+                                if request["description"]["name"].as_str() != Some(title) {
+                                    return Err(format!(
+                                        "Expected dialog {title}, received {}",
+                                        request["description"]["name"]
+                                    ));
+                                }
+                            }
+                            if let Some(header) = reply["header"].as_str() {
+                                fn find_header(node: &Value) -> Option<&str> {
+                                    if node["item_id"] == "head" {
+                                        return node["name"].as_str();
+                                    }
+                                    node["elements"]
+                                        .as_array()
+                                        .and_then(|v| v.iter().find_map(find_header))
+                                }
+                                if find_header(&request["description"]) != Some(header) {
+                                    return Err(format!("Expected dialog header {header}"));
+                                }
+                            }
+                            select_dialog_options(&request, &mut reply)
+                                .map_err(|e| e.to_string())?;
+                            select_dialog_button(&request, &mut reply)
+                                .map_err(|e| e.to_string())?;
+                            eprintln!(
+                                "Dialog: {} [scripted response]",
+                                request["description"]["name"]
+                            );
+                            return Ok(reply.to_string());
+                        }
+                        if !interactive {
+                            return Err(format!(
+                                "Unanswered dialog: {}",
+                                request["description"]["name"]
+                            ));
+                        }
+                        crate::ui::modal(&request)
+                            .map(|v| v.to_string())
+                            .map_err(|e| e.to_string())
+                    })()
+                    .map_err(|e| Exception::throw_message(&ctx, &e))
+                },
+            )?,
+        )?;
+        let aq = Arc::new(Mutex::new(VecDeque::from(alerts)));
+        let alert_trace_dir =
+            std::env::var_os("MPMB_DIALOG_TRACE_DIR").map(std::path::PathBuf::from);
+        let alert_count = Arc::new(Mutex::new(0usize));
+        ctx.globals().set(
+            "__alert",
+            Function::new(
+                ctx.clone(),
+                move |ctx: Ctx, s: String| -> rquickjs::Result<String> {
+                    (|| -> std::result::Result<String, String> {
+                        let v: Value = serde_json::from_str(&s).map_err(|e| e.to_string())?;
+                        if let Some(dir) = &alert_trace_dir {
+                            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+                            let mut count = alert_count.lock().unwrap();
+                            *count += 1;
+                            std::fs::write(dir.join(format!("alert-{:03}.json", *count)), &s)
+                                .map_err(|e| e.to_string())?;
+                        }
+                        if let Some(reply) = aq.lock().unwrap().pop_front() {
+                            eprintln!("Alert [scripted response]: {}", v["cTitle"]);
+                            return scripted_alert_response(&v, &reply)
+                                .map(|v| v.to_string())
+                                .map_err(|e| e.to_string());
+                        }
+                        if !interactive {
+                            return Err(format!("Unanswered alert: {}", v["cTitle"]));
+                        }
+                        crate::ui::alert(&v)
+                            .map(|v| v.to_string())
+                            .map_err(|e| e.to_string())
+                    })()
+                    .map_err(|e| Exception::throw_message(&ctx, &e))
+                },
+            )?,
+        )?;
+        ctx.globals().set(
+            "__file",
+            Function::new(
+                ctx.clone(),
+                move |ctx: Ctx, path: String| -> rquickjs::Result<String> {
+                    (|| -> Result<String> {
+                        let selected = if path.is_empty() {
+                            if !interactive {
+                                bail!(
+                                    "file picker requires interactive mode or explicit local path"
+                                )
+                            }
+                            let out = std::process::Command::new("zenity")
+                                .args([
+                                    "--file-selection",
+                                    "--title=Import MPMB JavaScript",
+                                    "--file-filter=JavaScript | *.js",
+                                ])
+                                .output()?;
+                            if !out.status.success() {
+                                return Ok("null".into());
+                            }
+                            String::from_utf8(out.stdout)?
+                                .trim_end_matches('\n')
+                                .to_owned()
+                        } else {
+                            path
+                        };
+                        if selected.starts_with("http:") || selected.starts_with("https:") {
+                            bail!("URL imports are unsupported")
+                        }
+                        let bytes = std::fs::read(selected)?;
+                        if bytes.len() > 16 * 1024 * 1024 {
+                            bail!("import exceeds 16 MiB")
+                        }
+                        Ok(json!({"data":String::from_utf8(bytes)?}).to_string())
+                    })()
+                    .map_err(|e| Exception::throw_message(&ctx, &format!("{e:#}")))
+                },
+            )?,
+        )?;
+        let initial = json!({"attachments":attachment_metadata,"repair_allowed":repair_allowed,"templates":pdf.templates,"trace":std::env::var("MPMB_TRACE_FIELDS").unwrap_or_default().split(',').collect::<Vec<_>>(),"bookmarks":pdf.bookmarks,"fields":pdf.fields,"order":pdf.order,"info":pdf.info,"file":pdf.path.file_name().unwrap().to_string_lossy(),"path":pdf.path,"pages":pdf.doc.get_pages().len()});
+        ctx.globals().set(
+            "__roundRichMetric",
+            Function::new(ctx.clone(), round_rich_metric)?,
+        )?;
+        ctx.globals().set("__initial", initial.to_string())?;
+        ctx.eval::<(), _>(concat!(include_str!("acrobat.js"), "\nvoid 0;"))
+            .map_err(|e| anyhow!("Acrobat host: {e}: {:?}", ctx.catch()))?;
         for (name, code) in &pdf.scripts {
-            rt.eval(code)
+            Self::eval_in(&ctx, code)
                 .with_context(|| format!("original document script {name}"))?;
-            rt.loaded += 1;
         }
-        rt.eval("__host.applyQualifiedRepairs()")?;
-        let diagnostics = rt.diagnostics()?;
+        Self::eval_in(&ctx, "__host.applyQualifiedRepairs()")?;
+        let diagnostics: Value =
+            serde_json::from_str(&Self::raw_in(&ctx, "__host.diagnostics()")?)?;
         if diagnostics["errors"]
             .as_array()
             .is_some_and(|e| !e.is_empty())
@@ -288,13 +444,16 @@ impl Runtime {
                 diagnostics["errors"]
             )
         }
-        Ok(rt)
+        Ok(pdf.scripts.len())
     }
     pub fn eval(&self, s: &str) -> Result<Value> {
+        self.js.with(|ctx| Self::eval_in(&ctx, s))
+    }
+    fn eval_in(ctx: &Ctx<'_>, s: &str) -> Result<Value> {
         // Preserve stack traces, including exceptions caught by original sheet code in diagnostics.
         let quoted = serde_json::to_string(s)?;
         let wrapped=format!("(function(){{try{{let v=(0,eval)({quoted});return JSON.stringify({{ok:true,value:v===undefined?null:v}})}}catch(e){{return JSON.stringify({{ok:false,error:String(e),stack:e.stack}})}}}})()");
-        let reply: String = self.raw(&wrapped)?;
+        let reply: String = Self::raw_in(ctx, &wrapped)?;
         let v: Value = serde_json::from_str(&reply)?;
         if v["ok"] != true {
             return Err(anyhow!("{}\n{}", v["error"], v["stack"]));
@@ -302,10 +461,11 @@ impl Runtime {
         Ok(v["value"].clone())
     }
     fn raw(&self, code: &str) -> Result<String> {
-        self.js.with(|ctx| {
-            ctx.eval::<String, _>(code)
-                .map_err(|e| anyhow!("JavaScript engine: {e}: {:?}", ctx.catch()))
-        })
+        self.js.with(|ctx| Self::raw_in(&ctx, code))
+    }
+    fn raw_in(ctx: &Ctx<'_>, code: &str) -> Result<String> {
+        ctx.eval::<String, _>(code)
+            .map_err(|e| anyhow!("JavaScript engine: {e}: {:?}", ctx.catch()))
     }
     pub fn command(&self, code: &str) -> Result<()> {
         self.eval(&format!("__host.command({})", serde_json::to_string(code)?))?;

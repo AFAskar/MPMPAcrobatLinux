@@ -1795,5 +1795,16 @@
     "render": "output/testing/field-render-1793439703699188529/render.json",
     "scope": "Explicit zero-width widget /BS (before legacy /Border) removes the unconditional one-point plain-text inset and uses the recovered width for alignment/wrapping. Other borders retain prior behavior pending separate qualification; rich layout remains unchanged. Source widget metadata is read per widget, not inferred from host default lineWidth. Unit coverage includes border precedence/default distinction, left/center/right placement and actual near-boundary wrapping. Read-only verifier checks native rebuilt-font resources, equal canonical text, rectangle, first origin/baseline and original scripts against actual Reader. Old93 fails only horizontal origin. Actual Reader readded-invocation snapshot survives native changed-save/fresh-reopen/restore, original Reader weapon/description edits and marker save, then another native changed-save/reopen/restore. Seven AP origins all0; baselines native2.9024901/Reader2.903 within0.001pt. ASCII checksum/sentinel, selected spell/invocation/source state, fields/scripts and Reader termination pass.",
     "remaining": "Exact crop still FAILED2620/18656 pixels. Glyph advances, automatic font sizing, other borders, Field.lineWidth/style getter/setter fidelity, complete presentation and broader class/table persistence remain incomplete."
+  },
+  "live_pdf_import_foundation": {
+    "status": "mechanism qualified; original DirectImport still unsupported/unqualified",
+    "tests": 98,
+    "unit": "output/testing/continuation-context-initialization-unit.log",
+    "build": "output/testing/continuation-context-initialization-build.log",
+    "clippy_all_targets": "output/testing/continuation-context-initialization-clippy.log",
+    "acceptance": "output/testing/native-acceptance-1793441364087145258/acceptance.json",
+    "extended": "output/testing/native-extended-1793441468220150845/extended.json",
+    "scope": "Document host/script initialization is separated from engine ownership without changing original scripts, repairs or diagnostic serialization. All three authorized fixture initialization/import/save/reopen slices retain their passing assertions. Test-only context helpers use the pinned QuickJS context API under an existing checked same-runtime guard; tests prove native callback creation/return of a live realm, cross-document mutable object/array/function behavior, lexical/prototype isolation, later authoritative state retention and foreign-engine rejection.",
+    "remaining": "Helpers are test-only until document lifecycle/host wiring is implemented. app.openDoc, shared application/global state, original DirectImport and real Reader import/persistence comparisons are not provided by this refactor. Cross-realm prototype/instanceof behavior must be compared with Reader; isolated context tests alone do not prove Acrobat-equivalent realms."
   }
 }
