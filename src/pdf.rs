@@ -1,6 +1,7 @@
 mod appearance;
 mod bookmark_tree;
 mod buttons;
+mod document_info;
 mod embedded_fonts;
 mod field_style;
 mod installed_fonts;
@@ -529,8 +530,8 @@ impl Pdf {
         {
             for (k, v) in i {
                 // Preserve PDF scalar types instead of forcing every Info
-                // entry to text. Reader's additional metadata overlay and
-                // numeric-string coercion still require qualification.
+                // entry to text. XMP supplements these values; custom scalar
+                // coercion is applied by the JavaScript info getters.
                 let value = match resolved(&doc, v)? {
                     Object::Integer(value) => json!(value),
                     Object::Real(value) => json!(value),
@@ -540,6 +541,7 @@ impl Pdf {
                 info.insert(String::from_utf8_lossy(k).into(), value);
             }
         }
+        document_info::overlay(&doc, cat, &mut info)?;
         let bkm = cat
             .get(b"Outlines")
             .ok()

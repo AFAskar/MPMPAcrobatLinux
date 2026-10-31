@@ -629,6 +629,14 @@ mod tests {
         );
     }
     #[test]
+    fn metadata_custom_scalars_and_standard_author_array_match_reader() {
+        host(
+            r#"var m=__docInfo({Authors:['Alex','Beta'],ContactEmail:'test@example.test',Build:'0012',TrueValue:'true',FalseValue:'false',Fraction:'-.5',Trailing:'12.',Exponent:'1e3',Space:' 42 ',Newline:'1\n'});
+          var authors=m.authors;authors[0]='changed';
+          m.AUTHORS.join(',')==='Alex,Beta'&&m.contactemail==='test@example.test'&&m.Build===12&&m.build===''&&m.TrueValue===true&&m.FalseValue===false&&m.Fraction===-0.5&&m.Trailing===12&&m.Exponent==='1e3'&&m.Space===' 42 '&&m.Newline==='1\n'"#,
+        );
+    }
+    #[test]
     fn metadata_mutations_fail_instead_of_pretending_to_persist() {
         host("var metadata=__docInfo({Title:'original'}),rejected=false;try{metadata.title='changed'}catch(e){rejected=/metadata mutation/.test(String(e))}rejected&&metadata.Title==='original'");
     }

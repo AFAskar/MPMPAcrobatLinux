@@ -1843,10 +1843,11 @@
     "scope": "Original Reader suppresses thrown Keystroke/Validate/Format exceptions in setter/reset callers while committing canonical values. Native retains diagnostics; missing native APIs remain fatal through a shared private WeakSet. Logging tolerates null and throwing stack getters. Underlying strict synthetic native probe stays failed with six errors; comparator requires those six and full captured trace. Earlier1793443812503647284 observer is INVALID (inaccessible local callback), not behavior evidence."
   },
   "document_info_getters": {
-    "status": "partial; sampled comparison FAIL38/39 and enumeration differs",
+    "status": "bounded typed getter and XMP repair qualified; full metadata API remains incomplete",
     "reader": "output/testing/reader-info-case-1793443145909944804/info-case.json",
     "scope": "Standard aliases case-insensitive, custom names exact, missing custom empty, PDF date objects/epochs; actual PDF scalar types retained. Native locale Date string deliberately not compared.",
-    "remaining": "Reader coerces text SheetVersionBuild to number; Authors/ContactEmail enumeration overlay missing. Mutation/delete/defineProperty explicitly unsupported."
+    "remaining": "Raw enumeration order, locale-dependent Date display, additional XMP schemas and metadata mutation/delete/defineProperty remain incomplete. New comparisons explicitly sort key sets and compare date epochs.",
+    "historical_failure": "Original38/39 getter failure and enumeration mismatch are historical, resolved for measured cases in document_info_type_overlay; old129 full comparison remains failed."
   },
   "reset_form_string_overload": {
     "status": "qualified bounded Reader trace and original legacy feat-path repair; complete reset semantics unqualified",
@@ -2243,5 +2244,31 @@
       "tools/native/reader-script-observation.py --input <picker-native.pdf> --observer tools/native/xfdf-picker-state-observer.js --readiness output/testing/readiness-1793480531.json",
       "tools/native/verify-script-observation.py --reader <observation.json> --reader-saved --field \"Player Name\" --canonical-value \"Picked \u03a9\" --display-value \"Picked \u03a9\""
     ]
+  },
+  "document_info_type_overlay": {
+    "status": "bounded typed getters/XMP and edited file persistence qualified across all three fixtures; full metadata milestone incomplete",
+    "scope": "Actual Reader custom decimal strings and lowercase boolean literals convert; exponent/hex/whitespace/other text stays text. Standard Authors and ContactEmail are case-insensitive; Authors is a fresh array. Read dc:creator/RDF authors and AcrobatCollab ContactEmail from existing XMP without modifying metadata bytes. Metadata writes remain unsupported.",
+    "reader_initial90": "output/testing/reader-script-observation-1793484525659471659/observation.json",
+    "reader_extended135": "output/testing/reader-script-observation-1793484690177157405/observation.json",
+    "native_extended135": "output/testing/script-observation-comparison-1793484980195746794/comparison.json",
+    "old129_counterexample": "output/testing/script-observation-comparison-1793485024838074866/comparison.json",
+    "reader2014": "output/testing/reader-script-observation-1793484981562742957/observation.json",
+    "normalization": "Sorted enumeration key sets and typed getter kind/string/array data, with date epochs replacing locale text. Authors mutation control compares the local changed array and fresh original getter. This does not qualify raw enumeration order, locale Date strings or all numeric edge semantics.",
+    "checks": "132 Rust tests/build/formatting/strict all-targets Clippy; acceptance2/1793485110070961329 and extended import/Ashnar2/1793485182535133951 pass. All five measured native outputs preserve raw Info scalar classes/text and decoded XMP bytes. Original fixture hashes and pinned submodule unchanged.",
+    "remaining": "No broad milestone complete. Wider XMP schemas, metadata mutation, exact enumeration/locale representations and full class/table workflows remain incomplete.",
+    "reproduce": [
+      "tools/native/reader-info-types.py --controlled-strings --readiness output/testing/readiness-1793480531.json",
+      "tools/native/reader-info-types.py --fixture 2014 --readiness output/testing/readiness-1793480531.json",
+      "tools/native/verify-script-observation.py --reader <qualified-observation.json>"
+    ],
+    "native2014": "output/testing/script-observation-comparison-1793485175211139161/comparison.json",
+    "readerAshnar": "output/testing/reader-script-observation-1793485109087356953/observation.json",
+    "nativeAshnar": "output/testing/script-observation-comparison-1793485248584544223/comparison.json",
+    "reader_native_save": "output/testing/reader-script-observation-1793485243251427636/observation.json",
+    "native_native_save": "output/testing/script-observation-comparison-1793485326559440494/comparison.json",
+    "reader_reader_save": "output/testing/reader-script-observation-1793485325403113914/observation.json",
+    "native_reader_save": "output/testing/script-observation-comparison-1793485425034365361/comparison.json",
+    "persistence_scope": "Actual native saved capture retains all135 observations in real Reader. Reader-saved input is measured afresh: only ModDate/moddate/MODDATE epochs change. Fresh native matches all135 observations of that exact saved input; no date difference is dropped or overwritten.",
+    "readonly_projection_control": "output/testing/document-info-readonly-projection-control.json"
   }
 }

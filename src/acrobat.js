@@ -367,12 +367,16 @@ function __pdfInfoDate(value){
   date.setFullYear(year,month,day);date.setHours(hour,minute,second,0);return date;
 }
 function __docInfo(data){
-  const standard=['Title','Author','Subject','Keywords','Creator','Producer','CreationDate','ModDate','Trapped'];
+  const standard=['Title','Author','Authors','ContactEmail','Subject','Keywords','Creator','Producer','CreationDate','ModDate','Trapped'];
   return new Proxy(data,{get(target,key,receiver){
     if(typeof key!=='string')return Reflect.get(target,key,receiver);
     const normalized=key.toLowerCase();
-    for(const candidate of standard)if(candidate.toLowerCase()===normalized){const value=Object.prototype.hasOwnProperty.call(target,candidate)?target[candidate]:'';return value!==''&&(candidate==='CreationDate'||candidate==='ModDate')?__pdfInfoDate(value):value}
-    return Reflect.has(target,key)?Reflect.get(target,key,receiver):'';
+    for(const candidate of standard)if(candidate.toLowerCase()===normalized){const value=Object.prototype.hasOwnProperty.call(target,candidate)?target[candidate]:'';return value!==''&&(candidate==='CreationDate'||candidate==='ModDate')?__pdfInfoDate(value):Array.isArray(value)?value.slice():value}
+    const value=Reflect.has(target,key)?Reflect.get(target,key,receiver):'';
+    if(value==='true'||value==='false')return value==='true';
+    // Reader accepts plain decimal metadata, but keeps exponents/whitespace text.
+    // The final guard also rejects the trailing line terminators accepted by $.
+    return typeof value==='string'&&/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$(?![\s\S])/.test(value)?Number(value):value;
   },set(){return __host.unsupported('Doc.info metadata mutation/persistence')},deleteProperty(){return __host.unsupported('Doc.info metadata mutation/persistence')},defineProperty(){return __host.unsupported('Doc.info metadata mutation/persistence')}});
 }
 Object.assign(globalThis,{
