@@ -117,3 +117,6 @@ Original PDF imports can now open live background source contexts with original 
 
 
 The Console toolbar button opens a modeless read-only selectable JavaScript output view. Original console.show/println/clear calls update the same application-scoped log across participating documents; source output remains after discard. Clear empties the view without closing it or clearing compatibility errors. The console has no interactive JavaScript input yet. A displayed original import error still means the import workflow failed even if MPMB later shows a final summary. The native console desktop test explicitly distinguishes this expected-error UI case from a clean import pass.
+
+
+`Doc.exportAsXFDFStr` supports the original XML fallback export view for the qualified subset. `tools/native/verify-xfdf.py`, `reader-xfdf-import.py` and `verify-xfdf-persistence.py` separate semantic XML comparison, actual Reader consumption/control and fresh native persistence. `xfdf-desktop.py` renders the original native export window; scenarios may explicitly set `interactive: true` to permit real native dialogs, while the default stays headless. Use controlled disposable copies and destinations. Direct `exportAsXFDF`/native `importAnXFDF`, full-state export corpus and wider options remain incomplete; see the compatibility matrix.

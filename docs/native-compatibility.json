@@ -334,7 +334,8 @@
         "2024": 1,
         "ashnar": 1
       },
-      "status": "unsupported-or-unverified"
+      "status": "unsupported",
+      "note": "Direct native file export API absent. Original MPMB uses its genuine string/XML fallback dialog."
     },
     {
       "api": "tDoc.exportAsXFDFStr",
@@ -343,7 +344,8 @@
         "2024": 1,
         "ashnar": 1
       },
-      "status": "unsupported-or-unverified"
+      "status": "partial",
+      "note": "Genuine read-only XML serializer; nine bounded Reader semantic cases, original native fallback view, Reader consumption/control and native persistence qualified. Full corpus/options incomplete."
     },
     {
       "api": "tDoc.exportDataObject",
@@ -2022,5 +2024,31 @@
     "remaining": "Other control characters, complex paragraph/run merging, all rich event combinations, visible rich layout, complete Unicode glyph support and all-class table/persistence behavior remain incomplete. Original scripts are not patched.",
     "legacy_reader": "output/testing/reader-script-observation-1793471150540067018/observation.json",
     "legacy_native": "output/testing/script-observation-comparison-1793471237651481191/comparison.json"
+  },
+  "xfdf_string_export": {
+    "status": "bounded API, original native fallback display and Reader interoperability qualified; full export/import milestone incomplete",
+    "scope": "Read-only authoritative live form state, hierarchical field names, string/array/subtree selection, empty selection, omitted empty text versus valueless combo, checkbox Off, canonical numeric spelling, UTF-8/XML escaping, raw rich XHTML with supported styles. Plain line endings emit literal CRLF like Reader; rich CR stays a character reference. Password/no-export flags and malformed XML fail/filter behavior have unit tests; broader flags/options lack fixture qualification.",
+    "reference_seven": "output/testing/reader-script-observation-1793468977608803935/observation.json",
+    "native_seven": "output/testing/native-xfdf-1793472881463013913/xfdf.json",
+    "reference_plain_multiline": "output/testing/reader-script-observation-1793472620828459652/observation.json",
+    "native_plain_multiline": "output/testing/native-xfdf-1793472880289537946/xfdf.json",
+    "comparison_normalization": "Field/href/value and computed rich style content comparison; XML formatting, numeric CSS spelling, equivalent adjacent equal-style runs and optional producer APIVersion are normalized. Unknown schema attributes are not a full equality claim. All nine XML byte strings differ from Reader; exact API/XML bytes are not claimed.",
+    "old110_missing_api": "output/testing/native-xfdf-1793469202194023683/xfdf.json",
+    "native_original_dialog": "output/testing/native-xfdf-desktop-1793472122651489489/desktop.json",
+    "dialog_scope": "Actual original MakeXFDFExport(description), original field edits/actions, generated populated XML loaded in the real native window, screenshot reviewed and window closed. Uses opt-in interactive probe; startup Source OK is explicitly offered. Physical copy/keyboard interaction is not qualified; unmodified original instructions show the Mac branch on Linux.",
+    "reader_own_import_control": "output/testing/reader-xfdf-import-1793471837216823453/import.json",
+    "native_reader_import": "output/testing/reader-xfdf-import-1793472226078388326/import.json",
+    "reader_import_process": "output/testing/continuation-native-xfdf-reader-controlled-final-process.json",
+    "import_scope": "Real owned filename dialogs with verified paths, native-generated files only, source/upload hashes, original menu bridge, canonical values, complete raw-rich getters and Reader semantic re-export equal Reader-produced import control. Reader adds explicit line-height11 even to its own rich export; self_roundtrip_semantic_equal=false is retained. No style property is dropped to pass. This is Doc.importAnXFDF consumption, not original deprecated MPMB Import wrapper qualification.",
+    "native_after_reader_persistence": "output/testing/xfdf-persistence-1793472502857367254/persistence.json",
+    "persistence_scope": "Fresh native load/save/reopen after Reader consumption matches full raw getter and semantic re-export including line spacing, with independent fields/widgets/AP/scripts checks. Notes.Left inactive; visible rich layout not established.",
+    "failed_history": [
+      "output/testing/reader-xfdf-import-1793471658327001779/import.json",
+      "output/testing/reader-xfdf-import-1793472001594875955/process-result.json",
+      "output/testing/native-xfdf-desktop-1793471937143517714/desktop.json"
+    ],
+    "failure_scope": "First strict rich import comparison fails Reader-added line spacing; retained/closed. A matched import report with tool exit143 remains CLI-unqualified; fresh controlled rerun exits0. Initial native UI test fails because alert traces were misclassified as dialog requests; corrected and stronger original-edit rerun passes. Earlier wrong whitespace candidate was rejected separately.",
+    "checks": "118 Rust tests/build/strict all-targets Clippy and original acceptance2/1793473201738834927 pass. All original PDF hashes and pinned submodule unchanged.",
+    "remaining": "Direct file-export and native XFDF import APIs, full-field corpus/state exports, default href details, broader choices/flags/styles and original deprecated import workflow remain incomplete. Goal and broad milestones stay active."
   }
 }

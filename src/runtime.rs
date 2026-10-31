@@ -260,6 +260,18 @@ impl Runtime {
         documents: &Rc<documents::Documents>,
     ) -> Result<usize> {
         documents.install(ctx.clone(), pdf)?;
+        ctx.globals().set(
+            "__xfdfExport",
+            Function::new(
+                ctx.clone(),
+                |ctx: Ctx, input: String| -> rquickjs::Result<String> {
+                    serde_json::from_str(&input)
+                        .map_err(anyhow::Error::from)
+                        .and_then(|request| crate::pdf::xfdf::export(&request))
+                        .map_err(|e| Exception::throw_message(&ctx, &format!("{e:#}")))
+                },
+            )?,
+        )?;
         let services = &documents.services;
         let interactive = services.interactive;
         let print_output_dir = services.print_output_dir.clone();

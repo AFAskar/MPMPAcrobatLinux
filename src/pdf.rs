@@ -6,6 +6,7 @@ mod field_style;
 mod installed_fonts;
 mod rich_text;
 mod structure;
+pub(crate) mod xfdf;
 use anyhow::{bail, Context, Result};
 use lopdf::{dictionary, Dictionary, Document, Object, ObjectId, Stream, StringFormat};
 use serde::{Deserialize, Serialize};

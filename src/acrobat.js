@@ -76,7 +76,7 @@ var __host = (function () {
   }
   function reformat(f,duringCalculation=false){if(!f._actions.F||(calculating&&!duringCalculation)||formatting.has(f.name))return;formatting.add(f.name);try{formatResult(f,eventRun(f,'F',f.value));}finally{formatting.delete(f.name);}}
   function addField(n,x) {
-    const f={name:n,value:x.value,defaultValue:x.default_value,userName:x.user_name,submitName:x.submit_name,
+    const f={name:n,value:x.value,defaultValue:x.default_value,userName:x.user_name,submitName:x.submit_name,_exportFlags:x.flags,
       type:({Tx:'text',Ch:x.flags&131072?'combobox':'listbox',Btn:x.flags&65536?'button':x.flags&32768?'radiobutton':'checkbox'})[x.kind],
       readonly:!!(x.flags&1),display:x.display,textSize:x.text_size,textFont:x.text_font||'Helvetica',multiline:!!(x.flags&4096),
       richText:x.kind==='Tx'&&!!(x.flags&33554432),richValue:x.rich_value||[],textColor:copyData(x.text_color)||['G',0],fillColor:['T'],strokeColor:['G',0],
@@ -347,6 +347,7 @@ Object.assign(globalThis,{
   getField(n){if(globalThis.__nativeDocumentClosed)throw Error('Document is closed');n=String(n).replace(/\.{2,}/g,'.');if(__host.fields[n])return __host.fields[n];const selected=/^(.*)\.(\d+)$/.exec(n);if(selected&&__host.fields[selected[1]]){const base=__host.fields[selected[1]],index=Number(selected[2]);if(!base._widgets[index])return null;return new Proxy(base,{get(target,key){if(key==='page')return target._widgets[index].page;if(key==='display')return __host.widgetDisplay(target,index);if(key==='rect')return __host.widgetRect(target,index);if(key==='setFocus')return function(){__host.data.focus=target.name;__host.data.focusWidget=index;const page=target._widgets[index].page;if(page>=0)globalThis.pageNum=page;};return target[key]},set(target,key,value){if(key==='display')__host.setWidgetDisplay(target,index,value);else if(key==='rect')__host.setWidgetRect(target,index,value);else target[key]=value;return true}})}const prefix=String(n)+'.';let children=__host.names.filter(x=>x.startsWith(prefix));return children.length?new Proxy({name:n,getArray(){return children.map(x=>__host.fields[x])}},{get(o,k){return k in o?o[k]:__host.fields[children[0]][k]},set(o,k,v){for(const child of children)__host.fields[child][k]=v;return true}}):null},
   getDataObject(name){const found=__host.dataObjects().filter(d=>d.name===name);if(!found.length)throw Error('Unknown data object '+name);return found[0]},
   exportDataObject:__host.exportDataObject,
+  exportAsXFDFStr(options={}){if(globalThis.__nativeDocumentClosed)throw Error('Document is closed');if(!options||typeof options!=='object'||Array.isArray(options))return __host.unsupported('Doc.exportAsXFDFStr positional options');return __xfdfExport(JSON.stringify({options,href:String(path||documentFileName||''),fields:__host.names.map(name=>{const f=__host.fields[name];return {name,type:f.type,flags:f._exportFlags,value:Array.isArray(f.value)?f.value:f.valueAsString,rich:f.richText?f._richRaw:null,defaultStyle:f._defaultStyle}})}))},
   importDataObject(){return __host.unsupported('Doc.importDataObject')},
   getNthFieldName(i){return __host.names[i]},calculateNow:__host.calculateNow,
   resetForm(list){if(typeof list==='string')list=[list];for(const n of __host.names){if(!list||list.some(x=>n===x||n.startsWith(x+'.')))__host.fields[n].value=__host.fields[n].defaultValue;}},

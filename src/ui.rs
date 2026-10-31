@@ -36,7 +36,7 @@ pub fn main() -> Result<()> {
                 &pdf,
                 scenario["dialogs"].as_array().cloned().unwrap_or_default(),
                 scenario["alerts"].as_array().cloned().unwrap_or_default(),
-                false,
+                scenario["interactive"].as_bool().unwrap_or(false),
                 scenario["print_output_dir"].as_str().map(PathBuf::from),
                 scenario["attachment_output_dir"]
                     .as_str()
