@@ -911,7 +911,9 @@ impl Pdf {
                     span_fonts,
                     metrics,
                 };
-                let content = appearance::content_with_fonts(&layout, width, height, f, s, &value)?;
+                let inset = field_style::plain_text_inset(&doc, w.id)?;
+                let content =
+                    appearance::content_with_fonts(&layout, width, height, f, s, &value, inset)?;
                 let ap=doc.add_object(Stream::new(dictionary!{"Type"=>"XObject","Subtype"=>"Form","BBox"=>vec![0.into(),0.into(),width.into(),height.into()],"Resources"=>dictionary!{"Font"=>font_resources}},content));
                 doc.get_dictionary_mut(w.id)?
                     .set("AP", dictionary! {"N"=>ap});

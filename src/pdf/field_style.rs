@@ -4,6 +4,28 @@ use anyhow::{bail, Context, Result};
 use lopdf::{Document, ObjectId};
 use serde_json::{json, Value};
 
+/// Explicitly borderless widgets use the whole width for plain text in Reader.
+/// Other border layouts retain the existing inset until separately qualified.
+pub fn plain_text_inset(doc: &Document, widget: ObjectId) -> Result<f32> {
+    let widget = doc.get_dictionary(widget)?;
+    let width = if let Ok(bs) = widget.get(b"BS") {
+        resolved(doc, bs)?
+            .as_dict()?
+            .get(b"W")
+            .ok()
+            .and_then(|width| width.as_float().ok())
+    } else {
+        widget
+            .get(b"Border")
+            .ok()
+            .and_then(|border| resolved(doc, border).ok())
+            .and_then(|border| border.as_array().ok())
+            .and_then(|border| border.get(2))
+            .and_then(|width| width.as_float().ok())
+    };
+    Ok(if width == Some(0.) { 0. } else { 1. })
+}
+
 pub fn color(appearance: &str) -> Result<Value> {
     let tokens: Vec<_> = appearance.split_whitespace().collect();
     let mut result = json!(["G", 0]);
@@ -134,6 +156,22 @@ pub fn widget_font(doc: &Document, widget: ObjectId) -> Result<Option<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn border_style_precedes_legacy_border_and_defaults_remain_distinct() {
+        let mut doc = Document::with_version("1.7");
+        let legacy =
+            doc.add_object(lopdf::dictionary! {"Border" => vec![0.into(), 0.into(), 0.into()]});
+        assert_eq!(plain_text_inset(&doc, legacy).unwrap(), 0.);
+        let bs = doc.add_object(lopdf::dictionary! {"W" => 1});
+        doc.get_dictionary_mut(legacy).unwrap().set("BS", bs);
+        assert_eq!(plain_text_inset(&doc, legacy).unwrap(), 1.);
+        doc.get_dictionary_mut(bs).unwrap().set("W", 0);
+        assert_eq!(plain_text_inset(&doc, legacy).unwrap(), 0.);
+        doc.get_dictionary_mut(bs).unwrap().remove(b"W");
+        assert_eq!(plain_text_inset(&doc, legacy).unwrap(), 1.);
+        let absent = doc.add_object(lopdf::Dictionary::new());
+        assert_eq!(plain_text_inset(&doc, absent).unwrap(), 1.);
+    }
     #[test]
     fn style_numeric_representation_does_not_rewrite_unchanged_metadata() {
         assert!(same(

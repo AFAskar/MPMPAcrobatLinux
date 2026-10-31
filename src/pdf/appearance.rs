@@ -254,7 +254,7 @@ pub(super) fn content(
         span_fonts: vec![],
         metrics: font_metrics.unwrap_or_else(|| RichFontMetrics::from_face(face, None)),
     };
-    content_with_fonts(&layout, width_box, height, field, state, value)
+    content_with_fonts(&layout, width_box, height, field, state, value, 1.)
 }
 pub(super) fn content_with_fonts(
     layout: &FontLayout<'_>,
@@ -263,6 +263,7 @@ pub(super) fn content_with_fonts(
     field: &Field,
     state: &Value,
     value: &str,
+    plain_inset: f32,
 ) -> Result<Vec<u8>> {
     let face = &layout.fonts[0].face;
     let measure = |glyph: &Glyph| layout.width(glyph);
@@ -294,7 +295,8 @@ pub(super) fn content_with_fonts(
     };
     let formatted = display_text(field, state, value);
     let color = rgb(&state["textColor"]);
-    let available = (width_box - if spans.is_some() { 0. } else { 2. }).max(1.);
+    let inset = if spans.is_some() { 0. } else { plain_inset };
+    let available = (width_box - 2. * inset).max(1.);
     let make = |size: f32| -> Vec<Glyph> {
         if let Some(spans) = spans {
             spans
@@ -415,14 +417,8 @@ pub(super) fn content_with_fonts(
         let total = line.iter().map(&measure).sum::<f32>();
         let mut x = match alignment {
             1 => (width_box - total) / 2.,
-            2 => width_box - 1. - total,
-            _ => {
-                if spans.is_some() {
-                    0.
-                } else {
-                    1.
-                }
-            }
+            2 => width_box - if spans.is_some() { 1. } else { inset } - total,
+            _ => inset,
         };
         let mut start = 0;
         while start < line.len() {
@@ -527,6 +523,72 @@ mod tests {
             items: vec![],
             export_values: vec![],
             caption: String::new(),
+        }
+    }
+    #[test]
+    fn borderless_plain_text_uses_available_width_and_alignment() {
+        let bytes = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
+        let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
+        let layout = FontLayout {
+            fonts: vec![RenderFont {
+                face: face.clone(),
+                resource: "Helv".into(),
+            }],
+            span_fonts: vec![],
+            metrics: RichFontMetrics::from_face(&face, None),
+        };
+        let text_width = face
+            .glyph_hor_advance(face.glyph_index('W').unwrap())
+            .unwrap() as f32
+            * 7.
+            / face.units_per_em() as f32;
+        for (alignment, expected_x) in [("left", 0.), ("center", 0.25), ("right", 0.5)] {
+            let output = content_with_fonts(
+                &layout,
+                text_width + 0.5,
+                20.,
+                &field(),
+                &json!({"textSize":7,"alignment":alignment}),
+                "W",
+                0.,
+            )
+            .unwrap();
+            let content = lopdf::content::Content::decode(&output).unwrap();
+            let matrix = content
+                .operations
+                .iter()
+                .find(|op| op.operator == "Tm")
+                .unwrap();
+            assert!((matrix.operands[4].as_float().unwrap() - expected_x).abs() < 0.001);
+            let font = content
+                .operations
+                .iter()
+                .find(|op| op.operator == "Tf")
+                .unwrap();
+            assert_eq!(font.operands[1].as_float().unwrap(), 7.);
+        }
+        // Two glyphs fit in a borderless widget but wrap when its inset
+        // consumes the remaining width. Test actual line placement as well.
+        for (inset, expected_lines) in [(0., 1), (1., 2)] {
+            let output = content_with_fonts(
+                &layout,
+                text_width * 2. + 0.5,
+                30.,
+                &field(),
+                &json!({"textSize":7,"multiline":true}),
+                "WW",
+                inset,
+            )
+            .unwrap();
+            let content = lopdf::content::Content::decode(&output).unwrap();
+            assert_eq!(
+                content
+                    .operations
+                    .iter()
+                    .filter(|op| op.operator == "Tm")
+                    .count(),
+                expected_lines
+            );
         }
     }
     #[test]
@@ -706,7 +768,7 @@ mod tests {
         assert!(layout.width(&bold_glyph) > layout.width(&normal_glyph));
         let state = json!({"richRenderActive":true,"richValue":[{"text":"normal ","textSize":7},{"text":"bold","textSize":7}]});
         let output = String::from_utf8(
-            content_with_fonts(&layout, 400., 50., &field(), &state, "normal bold").unwrap(),
+            content_with_fonts(&layout, 400., 50., &field(), &state, "normal bold", 1.).unwrap(),
         )
         .unwrap();
         assert!(output.contains("/Normal 7 Tf"));

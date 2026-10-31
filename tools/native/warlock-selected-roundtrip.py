@@ -3,8 +3,9 @@
 
 Each fresh runtime changes the actual weapon and restores Eldritch Blast through
 original field actions, and edits/restores the editable generated description
-before resaving. This is bounded selected-spell state and
-single-line baseline persistence, not full rendering or invocation coverage.
+before resaving. An optional captured invocation phase checks that exact state.
+This is bounded selected-spell/invocation state and single-line positioning
+persistence, not full rendering or complete invocation coverage.
 """
 import argparse
 import hashlib
@@ -35,21 +36,29 @@ def baseline(path,field):
     operations=ContentStream(ap,reader).operations
     first=next(i for i,(_,op) in enumerate(operations) if op in [b'Tm',b'Td'])
     assert not any(op==b'cm' for _,op in operations[:first]), 'Transformed appearance needs separate qualification'
-    operands,operator=operations[first];y=float(operands[5] if operator==b'Tm' else operands[1])
+    operands,operator=operations[first];y=float(operands[5] if operator==b'Tm' else operands[1]);x=float(operands[4] if operator==b'Tm' else operands[0])
+    if operator==b'Tm':assert list(operands[:4])==[1,0,0,1], 'Scaled text needs separate qualification'
     fonts=[str(font.get_object().get('/BaseFont')) for font in ap['/Resources'].get('/Font',{}).values()]
-    return {'baseline':y,'font_names':fonts,'normal_appearance_sha256':hashlib.sha256(ap.get_data()).hexdigest()}
+    return {'baseline':y,'horizontal_origin':x,'font_names':fonts,'normal_appearance_sha256':hashlib.sha256(ap.get_data()).hexdigest()}
 
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--reader',type=Path,required=True);p.add_argument('--native',type=Path,required=True);p.add_argument('--readiness',type=Path,required=True);args=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--reader',type=Path,required=True);p.add_argument('--native',type=Path,required=True);p.add_argument('--readiness',type=Path,required=True);p.add_argument('--check-origin',action='store_true',help='Also require rebuilt horizontal text origins to match Reader');p.add_argument('--invocation-phase',choices=['selected-spells','invocation','removed','readded'],help='Use this saved phase from a passing original Reader invocation report');args=p.parse_args()
     reference=json.loads(args.reader.read_text());native=json.loads(args.native.read_text());ready=json.loads(args.readiness.read_text())
     assert reference['passed'] and native['passed'] and ready['passed'] and len(ready['cases'])==24
     assert ready['harness_sha256']==c.harness_fingerprint()
+    if args.invocation_phase:
+        phase=reference['phases'][args.invocation_phase];captured=phase['captured']
+        assert all(phase['checks'].values()), 'Invocation phase comparisons did not pass'
+        reference={'passed':reference['passed'],'selected_pdf':phase['pdf'],'selected':{
+            'identity':captured['identity'],'fields':captured['fields'],
+            'selectedCantrips':captured['cantrips'],'selectedSpells':captured['spells'],
+            'invocations':captured['choice'],'excludedSources':captured['excludedSources']}}
     expected=reference['selected'];fields=expected['fields'];descriptions=[name for name in fields if 'spells.description.' in name];assert len(descriptions)==1;description=descriptions[0];marker='MPMB editable description check';source=next((ROOT/'Testing').glob('*_2024_*.pdf'))
     binary=args.native.parent/'mpmb-reader';assert hashlib.sha256(binary.read_bytes()).hexdigest()==native['binary_sha256']
     folder=ROOT/'output/testing'/('warlock-selected-roundtrip-'+str(time.time_ns()));folder.mkdir();print(folder,flush=True)
     frozen=folder/'mpmb-reader';shutil.copy2(binary,frozen)
-    report={'passed':False,'scope':__doc__,'native_report':str(args.native.resolve()),'reader_report':str(args.reader.resolve()),'readiness':str(args.readiness.resolve()),'binary_sha256':native['binary_sha256'],'description_edited':True};opened=False;remote=None;pending=None
+    report={'passed':False,'scope':__doc__,'invocation_phase':args.invocation_phase,'native_report':str(args.native.resolve()),'reader_report':str(args.reader.resolve()),'readiness':str(args.readiness.resolve()),'binary_sha256':native['binary_sha256'],'description_edited':True};opened=False;remote=None;pending=None
     state_assert="""(function(){var w=CurrentSpells.warlock,k=classes.known.warlock;
       if(k.level!==5||k.subclass!=='warlock-fiend')throw Error('Warlock identity changed');
       var state={cantrips:w.selectCa,spells:w.selectSp,invocations:GetFeatureChoice('classes','warlock','eldritch invocations',true),excludedSources:CurrentSources.globalExcl};
@@ -120,6 +129,9 @@ def main():
         measures={name:baseline(path,description) for name,path in [('reference',Path(reference['selected_pdf'])),('native-from-reader',first),('reader-edited',local),('native-after-reader',last),('reader-marker',local_marker),('native-from-reader-marker',Path(report['native-from-reader']['marker_pdf'])),('native-after-reader-marker',Path(report['native-after-reader']['marker_pdf']))]}
         report['description_baselines']={'field':description,'tolerance_points':0.001,'measurements':measures,'scope':'First untransformed text baseline only, after actual editable description changes/restoration. Pixel, horizontal advance and full appearance equality remain unqualified.'}
         assert all(abs(value['baseline']-measures['reference']['baseline'])<0.001 for value in measures.values()), 'Description baseline did not survive edit/reopen'
+        if args.check_origin:
+            report['horizontal_origins_checked']=True
+            assert all(abs(value['horizontal_origin']-measures['reference']['horizontal_origin'])<0.001 for value in measures.values()), 'Horizontal origin did not survive edit/reopen'
         for name in ['native-from-reader','native-after-reader','native-from-reader-marker','native-after-reader-marker']:
             assert any(font.startswith('/MPMB') for font in measures[name]['font_names']), 'Expected a newly projected native appearance, not retained Reader AP'
         report['passed']=True

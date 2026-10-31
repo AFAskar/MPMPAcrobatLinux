@@ -61,3 +61,17 @@ python3 tools/native/warlock-reader-invocations.py \
 ```
 
 Starting from the genuinely Reader-selected spell output, exact observed menus select Warlock → Eldritch Invocation → upgrades Eldritch Blast → Agonizing Blast: Eldritch Blast. The suite repeats for removal/readdition and uses original spell-dialog buttons after each change. All28 comparisons pass across four independently saved phases: identity, invocation choices, spell/cantrip/source sets, exact attacks and generated description with declared CR/CRLF→LF normalization. Saved ASCII JSON/checksum/Unicode sentinel, canonical fields/AP, original script hashes and Reader shutdown are independently verified. Full state/appearance equality and other class/invocation/resource choices remain unqualified. Actual invocation-state edited reopen is being tested separately and is not implied by these saves.
+
+## Edited invocation-state reopen and borderless origin
+
+The actual Reader readded phase passes the stronger cycle in warlock-selected-roundtrip-1793440596465637860/roundtrip.json. Reproduce:
+
+```bash
+python3 tools/native/warlock-selected-roundtrip.py \
+  --reader output/testing/reader-warlock-invocations-1793440252388681168/invocations.json \
+  --invocation-phase readded --check-origin \
+  --native output/testing/native-warlock-spells-1793439627146471600/warlock-spells.json \
+  --readiness output/testing/readiness-1793439251.json
+```
+
+Native saves changed description values, freshly reopens before restoring, Reader edits weapons/descriptions and saves the marker, then native repeats the changed-save/reopen/restore. Invocation and spell/source state, exact checked fields, scripts and Reader checksum/sentinel survive; Reader terminates. All seven measured AP origins are0 and baselines agree within0.001pt. The95-test build reads explicit zero-width widget borders to remove the one-point plain-text inset; rich layout and other border behavior stay unchanged. Read-only verify-plain-inset.py compares rebuilt origins against Reader and rejects old93. Full crop remains FAILED2620/18656 pixels; this does not qualify other border/style APIs, automatic text size, glyph advances or complete character coverage.
