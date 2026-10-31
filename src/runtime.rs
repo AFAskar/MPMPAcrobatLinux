@@ -765,6 +765,12 @@ mod tests {
         host("var f=getField('A');f.richText=true;f.setAction('Format',\"event.richValue=[{text:'display',fontWeight:700}];\");f.value='stored';var s=JSON.parse(__host.snapshot()).A;var rich=f.valueAsString==='stored'&&f.richValue[0].text==='stored'&&s.rawRichValue[0].text==='stored'&&s.richValue[0].text==='display'&&s.richRenderActive;f.setAction('Format',\"event.value='plain display';event.richValue=[{text:'ignored'}];\");f.value='next';s=JSON.parse(__host.snapshot()).A;rich&&f.valueAsString==='next'&&s.formatted==='plain display'&&!s.richRenderActive");
     }
     #[test]
+    fn calculate_cross_field_unchanged_assignment_formats_synchronously() {
+        host(
+            r#"app.calculate=false;var a=getField('A'),trace=[],operand=15;a.valueCalculated=10;a.setAction('Format',"trace.push('F'+event.target.valueCalculated);event.value=event.target.valueCalculated;");a.value='formula';getField('B').setAction('Calculate',"trace.push('C-start');var other=getField('A');other.valueCalculated=operand;other.value=other.value;trace.push('C-end');event.value=0;");app.calculate=true;calculateNow();var state=JSON.parse(__host.snapshot()).A;state.value==='formula'&&state.formatted===15&&trace.join(',')==='F10,C-start,F15,C-end'&&JSON.parse(__host.diagnostics()).errors.length===0"#,
+        );
+    }
+    #[test]
     fn formatted_display_invalidates_appearance_without_changing_canonical_value() {
         host("var f=getField('A');var offset=10;f.setAction('Format','event.value=Number(event.value)+offset');f.value=2;f._appearanceDirty=false;offset=20;f.value=2;var s=JSON.parse(__host.snapshot()).A;s.value==='2'&&s.formatted===22&&s.appearanceDirty");
     }

@@ -4,6 +4,8 @@
 Only actual Ki usage is entered. Original resetLimFeaUsed calculates short/long
 rest effects. Check imported payloads, remembered spells, selected serialized
 state, canonical fields/AP/scripts and input hashes; no full rendering claim.
+Optional armor checks force changed-save/fresh-reopen/restore of the original
+formula field in native before and after actual Reader formula edits.
 """
 import argparse,hashlib,importlib.util,json,shutil,subprocess,sys,time
 from pathlib import Path
@@ -29,19 +31,33 @@ def retained_state(before,after):
 
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--native',type=Path,required=True);p.add_argument('--reader',type=Path,required=True);p.add_argument('--readiness',type=Path,required=True);args=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--native',type=Path,required=True);p.add_argument('--reader',type=Path,required=True);p.add_argument('--readiness',type=Path,required=True);p.add_argument('--check-armor-format',action='store_true');args=p.parse_args()
     reference=json.loads(args.reader.read_text());execution=json.loads((args.native/'execution.json').read_text());ready=json.loads(args.readiness.read_text())
     assert reference['passed'] and reference['profile']=='legacy' and execution['profile']=='legacy'
     assert '_2014_' in reference['target_fixture'] and ready['passed'] and len(ready['cases'])==24 and ready['harness_sha256']==c.harness_fingerprint()
     baseline=reference['captured']['fields'];assert baseline['Limited Feature 1']=='Ki Points' and baseline['Limited Feature Max Usages 1']=='12' and baseline['Limited Feature Recovery 1']=='short rest'
     folder=ROOT/'output/testing'/('legacy-import-resource-roundtrip-'+str(time.time_ns()));folder.mkdir();print(folder,flush=True);binary=folder/'mpmb-reader';shutil.copy2(args.native/'mpmb-reader',binary)
-    report={'passed':False,'scope':__doc__,'native':str(args.native.resolve()),'reader':str(args.reader.resolve()),'readiness':str(args.readiness.resolve()),'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'cases':[]};opened=False;remote=None
+    report={'passed':False,'scope':__doc__,'native':str(args.native.resolve()),'reader':str(args.reader.resolve()),'readiness':str(args.readiness.resolve()),'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'check_armor_format':args.check_armor_format,'cases':[]};opened=False;remote=None
     def publish():(folder/'roundtrip.json').write_text(json.dumps(report,indent=2)+'\n')
     def probe(source,label,steps):
         scenario=folder/(label+'-scenario.json');evidence=folder/(label+'-probe.json');scenario.write_text(json.dumps({'steps':steps,'dialogs':[{'result':'ok'}]*10,'alerts':[1]*20}))
         with (folder/(label+'.log')).open('w') as log:run=subprocess.run([str(binary),str(source),'--probe',str(scenario),str(evidence)],stdout=log,stderr=log,timeout=300)
         result=json.loads(evidence.read_text());assert run.returncode==0 and result['passed'],result.get('error')
         return result
+    def armor_display(path,value,display):
+        result=inspect(path,{'AC Armor Bonus':value});widgets=[w for w in result['widgets'] if w['visible']]
+        assert result['actual']['AC Armor Bonus']==value and widgets
+        assert all(w['matches'] and w['appearance'] and w['appearance_text']==display for w in widgets),widgets
+        return {'canonical':value,'decoded_display':[w['appearance_text'] for w in widgets]}
+    def rebuild_armor(source,label,resource_expected):
+        changed=folder/(label+'-armor-changed.pdf');restored=folder/(label+'-armor-restored.pdf')
+        probe(source,label+'-armor-change',[{'op':'advance','ms':4100},{'op':'edit','field':'AC Armor Bonus','value':'11+Wis'},{'op':'advance','ms':1000},{'op':'assert','values':resource_expected|{'AC':'25'}},{'op':'save','path':str(changed)}])
+        changed_display=armor_display(changed,'11+Wis','16')
+        # Freshly reopen the changed AP: restoring cannot reuse the old15 AP.
+        probe(changed,label+'-armor-restore',[{'op':'advance','ms':4100},{'op':'assert','values':{'AC Armor Bonus':'11+Wis','AC':'25'}},{'op':'edit','field':'AC Armor Bonus','value':'10+Wis'},{'op':'advance','ms':1000},{'op':'assert','values':resource_expected},{'op':'save','path':str(restored)}])
+        restored_display=armor_display(restored,'10+Wis','15')
+        assert script_hashes(restored)==script_hashes(source)
+        return restored,{'changed':changed_display,'fresh_reopen_restored':restored_display}
     def capture(phase):return {'op':'eval','code':'({phase:'+json.dumps(phase)+',fields:(function(){var out={};'+json.dumps(list(baseline))+'.forEach(function(n){out[n]=getField(n).valueAsString});return out})()})'}
     try:
         for label,input_pdf in [('native-import',args.native/'native.pdf'),('reader-import',args.reader.parent/'reader-imported.pdf')]:
@@ -55,7 +71,11 @@ def main():
             assert phases['used-two'][used]=='2' and phases['used-three'][used]=='3' and phases['saved-four'][used]=='4'
             assert phases['short rest'][used]==phases['long rest'][used]==''
             expected=phases['saved-four'];assert inspect(edited,expected)['passed'] and script_hashes(edited)==script_hashes(input_pdf);case['native_retained_state']=retained_state(input_pdf,edited)
-            probe(edited,label+'-native-reopen',[{'op':'advance','ms':4100},{'op':'assert','values':expected}]);publish()
+            probe(edited,label+'-native-reopen',[{'op':'advance','ms':4100},{'op':'assert','values':expected}])
+            if args.check_armor_format:
+                case['native_initial_armor']=armor_display(edited,'10+Wis','15')
+                edited,case['native_armor_rebuild']=rebuild_armor(edited,label+'-before-reader',expected)
+            publish()
             with c.desktop_lock():
                 assert not [e for e in c.command('inspect') if e.get('class')=='AcrobatSDIWindow' and '.pdf' in e.get('name','').lower()], 'Pre-existing Reader document'
                 remote=c.remote_path('runs/legacy-resource-'+str(time.time_ns())+'.pdf');subprocess.run(c.SCP+[str(edited),'mpmb-test@127.0.0.1:MPMB-Testing/runs/'+remote.replace('\\','/').split('/')[-1]],check=True,capture_output=True)
@@ -67,10 +87,22 @@ def main():
                     if rest:
                         c.script('call',path=remote,name='resetLimFeaUsed',args=[rest]);actual=c.script('read',path=remote,fields=list(expected))['fields'];case['reader_phases'][rest]=actual;assert actual==phases[rest]
                     publish()
+                if args.check_armor_format:
+                    field='AC Armor Bonus';c.script('focus',path=remote,field=field);assert c.command('paste',value='11+Wis')['verified']
+                    case['reader_changed_armor']=c.script('read',path=remote,fields=[field,'AC'])['fields'];assert case['reader_changed_armor']=={field:'11+Wis','AC':'25'}
+                    changed_remote=remote[:-4]+'-armor-changed.pdf';c.script('save',path=remote,output=changed_remote);remote=changed_remote
+                    changed_local=c.fetch(remote,folder/(label+'-reader-armor-changed.pdf'));case['reader_changed_armor_display']=armor_display(changed_local,'11+Wis','16')
+                    c.script('focus',path=remote,field=field);assert c.command('paste',value='10+Wis')['verified']
+                    case['reader_restored_armor']=c.script('read',path=remote,fields=[field,'AC'])['fields'];assert case['reader_restored_armor']=={field:'10+Wis','AC':'24'}
                 saved=remote[:-4]+'-saved.pdf';c.script('save',path=remote,output=saved);remote=saved;case['close']=c.script('close',path=remote);opened=False;local=c.fetch(remote,folder/(label+'-reader.pdf'))
             assert inspect(local,expected)['passed'] and script_hashes(local)==script_hashes(input_pdf);case['reader_retained_state']=retained_state(input_pdf,local)
             final=folder/(label+'-native-after-reader.pdf');probe(local,label+'-native-after-reader',[{'op':'advance','ms':4100},{'op':'assert','values':expected},{'op':'edit','field':used,'value':'5'},{'op':'advance','ms':1000},{'op':'assert','values':{used:'5'}},{'op':'save','path':str(final)}])
-            assert inspect(final,expected|{used:'5'})['passed'] and script_hashes(final)==script_hashes(input_pdf);case['final_retained_state']=retained_state(input_pdf,final);assert hashlib.sha256(input_pdf.read_bytes()).hexdigest()==case['input_sha256'];case['passed']=True;publish()
+            assert inspect(final,expected|{used:'5'})['passed'] and script_hashes(final)==script_hashes(input_pdf)
+            if args.check_armor_format:
+                case['reader_restored_armor_display']=armor_display(local,'10+Wis','15')
+                case['native_after_reader_armor']=armor_display(final,'10+Wis','15')
+                final,case['after_reader_armor_rebuild']=rebuild_armor(final,label+'-after-reader',expected|{used:'5'})
+            case['final_output']=str(final);case['final_retained_state']=retained_state(input_pdf,final);assert hashlib.sha256(input_pdf.read_bytes()).hexdigest()==case['input_sha256'];case['passed']=True;publish()
         report['passed']=True
     except Exception as error:report['error']=str(error);raise
     finally:

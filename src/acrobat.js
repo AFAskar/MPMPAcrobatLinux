@@ -72,7 +72,7 @@ var __host = (function () {
     if(JSON.stringify(f._formatted)!==JSON.stringify(e.value)||JSON.stringify(f._formattedRichValue)!==JSON.stringify(rich))revision++;
     f._formatSignature=signature;f._formatted=e.value;f._formattedRichValue=rich;
   }
-  function reformat(f){if(!f._actions.F||calculating||formatting.has(f.name))return;formatting.add(f.name);try{formatResult(f,eventRun(f,'F',f.value));}finally{formatting.delete(f.name);}}
+  function reformat(f,duringCalculation=false){if(!f._actions.F||(calculating&&!duringCalculation)||formatting.has(f.name))return;formatting.add(f.name);try{formatResult(f,eventRun(f,'F',f.value));}finally{formatting.delete(f.name);}}
   function addField(n,x) {
     const f={name:n,value:x.value,defaultValue:x.default_value,userName:x.user_name,submitName:x.submit_name,
       type:({Tx:'text',Ch:x.flags&131072?'combobox':'listbox',Btn:x.flags&65536?'button':x.flags&32768?'radiobutton':'checkbox'})[x.kind],
@@ -118,7 +118,10 @@ var __host = (function () {
       if(v===undefined||v===null||(typeof v==='object'&&!(x.kind==='Ch'&&x.flags&2097152&&Array.isArray(v))))v=String(v);
       if(x.kind==='Btn'&&!(x.flags&65536)&&v==='')v='Off';
       if(typeof v==='string'&&x.kind==='Tx')v=textValue(f,v);
-      if(!f.richText&&String(raw)===String(v)){reformat(f);return;}
+      // Explicit unchanged assignments to another field inside Calculate still
+      // run its Format action synchronously in Reader (e.g. CalcAC display).
+      // Internal calculation commits retain the existing end-of-pass refresh.
+      if(!f.richText&&String(raw)===String(v)){reformat(f,calculating&&globalThis.event&&event.name==='Calculate'&&event.target!==f);return;}
       if(data.trace&&data.trace.includes(n))__log(n+': '+String(raw)+' -> '+String(v)+'\n'+new Error().stack);
       if(assigning.has(n)){raw=v;if(f.richText)f._richRaw=normalizeRich(f,[{text:String(v)}]);return}
       assigning.add(n);

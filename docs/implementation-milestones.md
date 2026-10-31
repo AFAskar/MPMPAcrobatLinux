@@ -33,3 +33,6 @@ Milestone3a progress: original legacy Ashnar→2014 now has same-entry Reader/na
 
 
 Milestone3a/4 progress: imported Monk resource persistence1793461343107863401 now PASSES both native-origin and Reader-origin imported2014 characters through Ki spending, short/long rests, save/reopen/edits in native→Reader→native.105 fields,56 remembered spell rows, complete retained payload/choices/spells and final scripts verified; source hashes and Reader termination pass. Used4 is visible in reviewed renders. This supersedes its running status above. One resource/class only; native armor contribution still incorrectly10 vs Reader15, so full presentation and broad milestone completion remain open.
+
+
+Milestone4 progress: the synchronous cross-field Format repair now passes exact Reader event order and the original armor formula display. Edited two-input native→Reader→native qualification1793462661642312005 forces changed-save/fresh-reopen/restore (16→15), with actual Reader formula edits and AC25→24. Ki/resource/spells/payload/scripts persist;108 tests/build/clippy, acceptance2, extended2 and generated6 pass. Both Reader processes closed. Exact presentation still fails198/3520 crop pixels; font programs match but automatic sizes8/8.258 differ. Full updated2014 comparison remains unequal. No broad milestone is complete.

@@ -1902,5 +1902,35 @@
     "retention": "Complete parsed retained add-on payload, CurrentFeatureChoices, CurrentSpells and56 exact remembered spell rows survive each edited save. Independent canonical fields/widgets/AP presence and original embedded-script hashes also pass on both final native outputs in the separate read-only post-verification. Does not prove all APs were rebuilt or exact appearance equality.",
     "visual": "Native and Reader page1 PNGs at1000px reviewed: used4 is visible. Native armor contribution still10 while Reader15 for canonical10+Wis; formatting is being investigated. Glyph/auto-size/layout differences remain. Full2014 comparison remains FAILED.",
     "command": "Use the Codex bundled Python: tools/native/legacy-import-resource-roundtrip.py --native output/testing/native-direct-import-1793461191966464798 --reader output/testing/reader-direct-import-1793460778411273239/direct-import.json --readiness output/testing/readiness-1793439251.json"
+  },
+  "calculate_cross_field_unchanged_format": {
+    "status": "qualified bounded synchronous event/API and original armor display through edited Reader/native rebuilds; broad milestone incomplete",
+    "scope": "Plain unchanged value assignments to another field during a Calculate action synchronously execute its Format action, as Reader does. Internal calculation commits retain end-of-pass formatting. No original script changes. Changed-value/rich-text/self-assignment Calculate timing remains separately unqualified.",
+    "reader_api": "output/testing/reader-script-observation-1793462028573855390/observation.json",
+    "native_api": "output/testing/script-observation-comparison-1793462316476908692/comparison.json",
+    "old107_counterexample": "output/testing/script-observation-comparison-1793462371539078301/comparison.json",
+    "counterexample_scope": "Old107 raw strict probe passes but full trace misses three Format events and retains display10. New108 matches all C-start/F/C-end events, state, ASCII checksum/sentinel and saved Player Name canonical formula/display15. The isolated observer overrides field actions and is not an original MPMB workflow pass.",
+    "native_original_import": "output/testing/native-direct-import-1793462359527977470/report.json",
+    "original_bounded_comparison": "output/testing/direct-import-comparison-1793462487777270904/comparison.json",
+    "original_armor_display": "output/testing/armor-original-display-1793462500000000000.json",
+    "original_scope": "Original CalcAC updates AC Armor Bonus.valueCalculated then reassigns unchanged10+Wis. Native previously dropped Format while calculating, leaving display10; Reader displays15. Native108 now preserves canonical10+Wis and displays15, without changing totalAC24. Checked legacy import state/complete retained payload remains equal; strict import still contains two matched original Format errors.",
+    "validation": "108 Rust tests/build/strict all-targets clippy; acceptance2/1793462372755887913, extended/import-Ashnar1793463055137339542 and generated6/1793463212398276289 pass.",
+    "edited_roundtrip": "output/testing/legacy-import-resource-roundtrip-1793462661642312005/roundtrip.json",
+    "edited_status": "PASS both native-origin and Reader-origin imported2014 characters. Native saves11+Wis/display16, freshly reopens changed snapshot and restores10+Wis/display15; actual Reader types both formulas, producesAC25/24 and saved displays16/15; after Reader, native repeats changed-save/fresh-reopen/restore. Ki use/rest/save/reopen and105 fields,56 remembered rows, complete retained payload/choices/spells and original scripts remain verified; both Reader processes terminated.",
+    "remaining": "Exact automatic font sizing, glyph advances/layout/pixels and complete event timing remain incomplete. Whole2014 comparison still fails; no broad milestone complete.",
+    "render_remaining": {
+      "crop": "output/testing/field-render-1793464097194259267/render.json",
+      "passed": false,
+      "changed_pixels": 198,
+      "total_pixels": 3520,
+      "font_metrics": "output/testing/armor-font-metrics-1793464637369510987.json",
+      "font_programs_equal": true,
+      "native_font_size": 8,
+      "reader_font_size": 8.258,
+      "full_comparison": "output/testing/legacy-2014-format-fixed-full-comparison-1793464200000000000.json",
+      "full_values_different": 13,
+      "full_appearances_different": 551,
+      "front_page_changed_pixel_fraction": 0.03725340013710576
+    }
   }
 }
