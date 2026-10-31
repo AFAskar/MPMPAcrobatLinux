@@ -55,6 +55,19 @@ fn normalize_pdf_text(value: String) -> String {
         value
     }
 }
+fn decode_xfdf_rich(ctx: Ctx, request: String) -> rquickjs::Result<String> {
+    (|| -> Result<String> {
+        let request: Value = serde_json::from_str(&request)?;
+        Ok(crate::pdf::xfdf::rich_import(
+            request["xml"]
+                .as_str()
+                .context("Missing rich XFDF markup")?,
+            &request["defaults"],
+        )?
+        .to_string())
+    })()
+    .map_err(|e| Exception::throw_message(&ctx, &format!("{e:#}")))
+}
 // Scripted probes select only options actually offered by the original dialog.
 // Preserve option magnitudes because Acrobat uses them as item identities.
 fn select_dialog_options(request: &Value, reply: &mut Value) -> Result<()> {
@@ -276,6 +289,34 @@ impl Runtime {
         let interactive = services.interactive;
         let print_output_dir = services.print_output_dir.clone();
         let attachment_output_dir = services.attachment_output_dir.clone();
+        let xfdf_base = pdf
+            .path
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .to_owned();
+        ctx.globals().set("__xfdfRead", Function::new(ctx.clone(), move |ctx: Ctx, path: String| -> rquickjs::Result<String> {
+            (|| -> Result<String> {
+                let selected = if path.is_empty() {
+                    if !interactive { bail!("XFDF file picker requires interactive mode or an explicit local path") }
+                    let output = std::process::Command::new("zenity").args(["--file-selection", "--title=Import XFDF form data", "--file-filter=XFDF | *.xfdf *.xml"]).output()?;
+                    if !output.status.success() {
+                        if output.status.code() == Some(1) { return Ok(json!({"cancelled":true}).to_string()) }
+                        bail!("Native XFDF file picker failed")
+                    }
+                    String::from_utf8(output.stdout)?.trim_end_matches(['\r', '\n']).to_owned()
+                } else { path };
+                if selected.contains("://") { bail!("XFDF import requires a local filesystem path") }
+                let path = std::path::Path::new(&selected);
+                let path = if path.is_absolute() { path.to_owned() } else { xfdf_base.join(path) };
+                let bytes = std::fs::read(&path)?;
+                if bytes.len() > 64 * 1024 * 1024 { bail!("XFDF import exceeds 64 MiB") }
+                let fields = crate::pdf::xfdf::parse::read(std::str::from_utf8(&bytes).context("XFDF import requires UTF-8")?)?;
+                let sha256 = Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect::<String>();
+                Ok(json!({"path":path,"sha256":sha256,"fields":fields}).to_string())
+            })().map_err(|e| Exception::throw_message(&ctx, &format!("{e:#}")))
+        })?)?;
+        ctx.globals()
+            .set("__xfdfRich", Function::new(ctx.clone(), decode_xfdf_rich)?)?;
         let repair_allowed = std::env::var_os("MPMB_STRICT_ORIGINAL_SCRIPTS").is_none()
             && pdf.scripts.iter().any(|(name, source)| {
                 name == "Functions2"
@@ -694,11 +735,50 @@ mod tests {
         context.with(|ctx|{
             ctx.globals().set("__roundRichMetric",Function::new(ctx.clone(),round_rich_metric).unwrap()).unwrap();
             ctx.globals().set("__normalizePdfText",Function::new(ctx.clone(),normalize_pdf_text).unwrap()).unwrap();
+            ctx.globals().set("__xfdfRich",Function::new(ctx.clone(),decode_xfdf_rich).unwrap()).unwrap();
             let field=|name:&str,value:&str,actions:Value|json!({"name":name,"value":value,"default_value":"","user_name":"","submit_name":"","kind":"Tx","flags":0,"display":0,"text_size":10,"widgets":[],"items":[],"actions":actions});
-            ctx.globals().set("__initial",json!({"fields":{"A":field("A","2",json!({"V":"if (Number(event.value)<0) event.rc=false;"})),"B":field("B","0",json!({"C":"event.value=getField('A').value+1;"})),"C":field("C","0",json!({"C":"event.value=getField('B').value+1;"})),"Unchecked":json!({"kind":"Btn","flags":0,"value":"Off","default_value":"","items":[],"widgets":[],"actions":{},"export_values":["True"]})},"order":["B","C"],"info":{},"bookmarks":{"children":[]},"pages":1,"templates":{"blank":{"fields":{},"order":[]}}}).to_string()).unwrap();
+            ctx.globals().set("__initial",json!({"fields":{"A":field("A","2",json!({"V":"if (Number(event.value)<0) event.rc=false;"})),"B":field("B","0",json!({"C":"event.value=getField('A').value+1;"})),"C":field("C","0",json!({"C":"event.value=getField('B').value+1;"})),"Choice":json!({"name":"Choice","kind":"Ch","flags":131072,"value":"Quarterstaff","default_value":"","items":[],"widgets":[],"actions":{}}),"Unchecked":json!({"kind":"Btn","flags":0,"value":"Off","default_value":"","items":[],"widgets":[],"actions":{},"export_values":["True"]})},"order":["B","C"],"info":{},"bookmarks":{"children":[]},"pages":1,"templates":{"blank":{"fields":{},"order":[]}}}).to_string()).unwrap();
             ctx.eval::<(),_>(concat!(include_str!("acrobat.js"),"\nvoid 0;")).unwrap();
-            assert!(ctx.eval::<bool,_>(test).unwrap());
+            let result=ctx.eval::<bool,_>(test);if result.is_err(){panic!("{:?}",ctx.catch());}assert!(result.unwrap());
         });
+    }
+    #[test]
+    fn xfdf_import_batches_document_events_and_rejects_invalid_commits() {
+        host(
+            r#"var trace=[];
+          getField('A').setAction('Keystroke',"trace.push(['K',event.source,event.value,getField('B').value]);");
+          getField('A').setAction('Format',"trace.push(['F',event.source,event.value,getField('B').value]);");
+          getField('B').setAction('Calculate',"trace.push(['C',event.source,getField('A').value,getField('C').value]);event.value=getField('A').value+1;");
+          __host.importXFDF({fields:[{name:'A',values:['8'],rich_xml:null},{name:'C',values:['50'],rich_xml:null},{name:'absent',values:['ignored'],rich_xml:null}]});
+          var first=JSON.stringify(trace.slice(0,3))===JSON.stringify([['K',null,'8',0],['F',null,'8',0],['C',null,8,50]]);if(!first)throw Error(JSON.stringify(trace));
+          __host.importXFDF({fields:[{name:'A',values:['-1'],rich_xml:null}]});
+          first&&getField('A').value===8&&getField('B').value===9&&getField('C').value===10"#,
+        );
+    }
+    #[test]
+    fn xfdf_rich_import_exposes_incoming_spans_and_preserves_validation_changes() {
+        host(
+            r#"var f=getField('A');f.richText=true;f.richValue=[{text:'old'}];var incoming;
+          f.setAction('Validate',"incoming=event.richValue;var spans=event.richValue;spans[0].linespacing=11;event.richValue=spans;");
+          __host.importXFDF({fields:[{name:'A',values:[],rich_xml:'<body xmlns="http://www.w3.org/1999/xhtml"><p><span style="font-size:9pt;font-weight:bold">new Ω</span></p></body>'}]});
+          incoming[0].text==='new Ω'&&incoming[0].textSize===9&&incoming[0].fontWeight===700&&f.valueAsString==='new Ω'&&f.richValue[0].linespacing===11"#,
+        );
+    }
+    #[test]
+    fn xfdf_valueless_combo_refreshes_without_replacing_or_validating() {
+        host(
+            r#"var f=getField('Choice'),trace=[];f.setAction('Keystroke',"trace.push('K')");f.setAction('Validate',"trace.push('V')");f.setAction('Format',"trace.push([event.name,event.value,event.source])");
+          __host.importXFDF({fields:[{name:'Choice',values:[],rich_xml:null}]});
+          f.valueAsString==='Quarterstaff'&&JSON.stringify(trace)===JSON.stringify([['Format','Quarterstaff',null]])"#,
+        );
+    }
+    #[test]
+    fn xfdf_import_preflight_and_cancel_do_not_partially_mutate_fields() {
+        host(
+            r#"var before=getField('A').value,error=false;
+          try{__host.importXFDF({fields:[{name:'A',values:['8'],rich_xml:null},{name:'B',values:[],rich_xml:null}]})}catch(e){error=true}
+          __host.importXFDF({cancelled:true});error&&getField('A').value===before"#,
+        );
     }
     #[test]
     fn rich_span_metrics_use_reader_decimal_rounding() {

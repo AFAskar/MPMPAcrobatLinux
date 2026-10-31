@@ -59,3 +59,5 @@ Read `docs/testing-environment.md` before changing or testing PDF behavior.
 - An original MPMB import can catch an internal error, return true and show its final summary. Inspect original console/error output before qualifying it as successful. Keep expected-error observation/cleanup qualification separate from a clean workflow pass; retain and close the same request/document without replay.
 
 - Reader's JavaScript runtime does not define `globalThis`. Shared native/Reader diagnostics must use the target document context (for example `tDoc` properties) and Reader-supported syntax; a QuickJS-only probe passing does not establish a valid reference diagnostic.
+
+- When preserving PDF field actions in diagnostics, use PDF names `/K`, `/V`, `/F` and `/C`, not unprefixed strings. Verify nonempty expected original action code before wrapping it. MPMB's `correctRichTextLineSpacing` validation can add leading during XFDF import; do not hardcode that as an XML parser default or attribute it to Reader without an original-action control.

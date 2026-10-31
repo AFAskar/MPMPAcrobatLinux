@@ -1,4 +1,5 @@
-//! Read-only XFDF serialization of the authoritative runtime's field values.
+//! XFDF serialization and parsing around the authoritative runtime's form state.
+pub(crate) mod parse;
 use anyhow::{bail, Context, Result};
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
@@ -9,6 +10,17 @@ use std::collections::BTreeMap;
 struct Node {
     field: Option<Value>,
     children: BTreeMap<String, Node>,
+}
+pub(crate) fn rich_import(xml: &str, defaults: &Value) -> Result<Value> {
+    let css = super::rich_text::style_css(defaults)?;
+    let font = defaults["fontFamily"][0].as_str().unwrap_or("Helvetica");
+    let size = defaults["textSize"].as_f64().unwrap_or(12.);
+    let alignment = match defaults["alignment"].as_str() {
+        Some("center") => 1,
+        Some("right") => 2,
+        _ => 0,
+    };
+    Ok(super::rich_text::metadata(&css, xml, font, size, alignment)?["spans"].clone())
 }
 fn valid_xml(text: &str) -> Result<()> {
     if text.chars().any(

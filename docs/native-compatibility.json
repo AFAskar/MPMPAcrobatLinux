@@ -2049,6 +2049,49 @@
     ],
     "failure_scope": "First strict rich import comparison fails Reader-added line spacing; retained/closed. A matched import report with tool exit143 remains CLI-unqualified; fresh controlled rerun exits0. Initial native UI test fails because alert traces were misclassified as dialog requests; corrected and stronger original-edit rerun passes. Earlier wrong whitespace candidate was rejected separately.",
     "checks": "118 Rust tests/build/strict all-targets Clippy and original acceptance2/1793473201738834927 pass. All original PDF hashes and pinned submodule unchanged.",
-    "remaining": "Direct file-export and native XFDF import APIs, full-field corpus/state exports, default href details, broader choices/flags/styles and original deprecated import workflow remain incomplete. Goal and broad milestones stay active."
+    "remaining": "Direct file-export API, full-field corpus/state exports, default href details, broader choices/flags/styles and complete character imports remain incomplete. Native import progress is recorded separately. Goal and broad milestones stay active."
+  },
+  "xfdf_native_import": {
+    "status": "bounded plain/rich import API and two native reopens qualified; broader import milestone incomplete",
+    "scope": "Local UTF-8 XFDF parsing into the authoritative QuickJS fields; hierarchical names, ignored unknown fields, incoming rich spans in K/V, original validation and Format actions, batched calculation and document-origin null event sources. Unsupported XML/annotation elements and unqualified field shapes fail explicitly.",
+    "reader_original_actions": "output/testing/reader-xfdf-events-1793474630777578206/events.json",
+    "native_exact_and_reopens": "output/testing/native-xfdf-events-1793476185568757583/events.json",
+    "settings": "Exact full 14-event/getter comparison uses the original SetTextOptions_Button dialog and its offered ckFF=false to match Windows. Original native UNIX default ckFF=true legitimately forces 7-point multiline formatting; no platform/source repair applied.",
+    "unmatched_default_profile": "output/testing/native-xfdf-events-1793475489293767880/events.json",
+    "native_default_profile_result": "FAIL comparison: four 7-versus-9-point differences from original platform-dependent text option; other captured import events/values agree.",
+    "empty_control_reference": "output/testing/reader-xfdf-events-1793476152680605046/events.json",
+    "empty_control_scope": "Reader and native match10 events and final empty Hair colour/retained Quarterstaff after original calcCont(true) settles the weapon seed. Two native save/reopen cycles and independent fields/widgets/AP/scripts pass. Choice rich getter availability remains explicitly excluded/unequal. Earlier native comparison1793476274117681688 FAILS while a seed timer is pending; not relabeled.",
+    "native_original_wrapper_pilot": "output/testing/native-original-xfdf-import-1793476283837202116/probe.json",
+    "wrapper_scope": "Reader original wrapper passes sampled name/notes import and owned Yes/summary dialogs; independent fields/widgets/AP/scripts pass. Native pilot has no script/console errors and same canonical values. Full wrapper event/raw-style comparison FAILS: ToggleTextSize defaults fixRT back to !tDoc.isWindows, changing the aligned native profile and rebuilding rich spans; additional Format/commit events and calculation-source timing differ. No platform spoof or original-source patch applied. Complete character transfer remains unqualified.",
+    "failed_or_invalid_history": [
+      "output/testing/reader-xfdf-events-1793474142207018244/events.json",
+      "output/testing/reader-xfdf-events-1793474466707143685/events.json",
+      "output/testing/reader-xfdf-events-1793476024466247463/events.json",
+      "output/testing/native-xfdf-events-1793476274117681688/events.json",
+      "output/testing/native-xfdf-picker-1793476065835105976/qualification.json",
+      "output/testing/native-original-xfdf-import-1793476261726522003/probe.json",
+      "output/testing/script-observation-comparison-1793476637028946250/comparison.json"
+    ],
+    "history_scope": "First two original-action claims invalidated: wrong PDF action keys; preserved reports/data and Reader closed. Empty-control initial diagnostic reads unavailable choice richText; failed/closed. Native picker launches actual portal but accessibility unavailable; owned zenity child terminated and no selection/cancel UI pass. Initial wrapper pilot supplied confirmation before startup alert; explicit valid startup reply fixes pilot. First Reader-saved comparison matched getters but failed the tool final hash guard, which still compared the new source to the original input hash; the corrected tool independently guards both sources and fresh run passes.",
+    "checks": "125 Rust tests and strict all-targets Clippy pass. Current sheet original acceptance2/1793476161498017004 passes. Two native reopens preserve full sampled raw-rich getters and independent fields/widgets/AP/scripts.",
+    "remaining": "Native picker selection/cancel; exact cross-platform original wrapper style/event parity; full-character/all-field transfers and all fixture/version pairs; valueless non-combo, multiselect/readonly and additional rich styles/paragraphs; timer processing while file picker blocks; full typography and every-class table workflows remain incomplete.",
+    "reader_original_wrapper": "output/testing/reader-xfdf-events-1793476301454287188/events.json",
+    "reader_independent": [
+      "output/testing/reader-xfdf-events-1793474630777578206/independent.json",
+      "output/testing/reader-xfdf-events-1793476301454287188/independent.json"
+    ],
+    "wrapper_comparison": "output/testing/native-xfdf-events-1793476445349014389/events.json",
+    "settled_empty_reference": "output/testing/reader-xfdf-events-1793476434256427874/events.json",
+    "settled_empty_native": "output/testing/native-xfdf-events-1793476543603259736/events.json",
+    "reader_reopen_native_import": "output/testing/reader-script-observation-1793476547768523005/observation.json",
+    "reader_reopen_scope": "Actual Reader reopens native import output and saves it: full raw getters match direct import reference with no properties ignored. Independent fields/widgets/AP/scripts pass in adjacent independent.json. Fresh native reopen of the actual Reader-saved file matches every captured getter; independent fields/widgets/AP/scripts pass in adjacent independent.json. This is a real native-import -> native reopens -> Reader reopen/save -> native chain, not just retention within one engine.",
+    "reproduce": [
+      "tools/native/reader-xfdf-events.py --native <qualified-native-xfdf/xfdf.json> --readiness <readiness.json> [--empty-controls | --original-wrapper]",
+      "tools/native/verify-xfdf-events.py --reader <events.json> [--reader-text-profile] --reopen",
+      "tools/native/reader-script-observation.py --input <native-reopen.pdf> --observer <reopen-observer.js> --readiness <readiness.json>",
+      "tools/native/verify-script-observation.py --reader <observation.json> --reader-saved"
+    ],
+    "native_after_reader": "output/testing/script-observation-comparison-1793476656068492243/comparison.json",
+    "fixture_scope": "Qualified direct API/style/event and mixed-engine persistence evidence is 2024 only. Current2014 Reader qualification1793476685261255084 is running; Ashnar remains pending."
   }
 }

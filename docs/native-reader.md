@@ -120,3 +120,6 @@ The Console toolbar button opens a modeless read-only selectable JavaScript outp
 
 
 `Doc.exportAsXFDFStr` supports the original XML fallback export view for the qualified subset. `tools/native/verify-xfdf.py`, `reader-xfdf-import.py` and `verify-xfdf-persistence.py` separate semantic XML comparison, actual Reader consumption/control and fresh native persistence. `xfdf-desktop.py` renders the original native export window; scenarios may explicitly set `interactive: true` to permit real native dialogs, while the default stays headless. Use controlled disposable copies and destinations. Direct `exportAsXFDF`/native `importAnXFDF`, full-state export corpus and wider options remain incomplete; see the compatibility matrix.
+
+
+`Doc.importAnXFDF(cPath)` now reads a local UTF-8 XFDF file and commits supported plain/rich values through original field actions. Relative paths resolve against the source PDF directory; an omitted path opens zenity in interactive mode. Noninteractive probes require a path. The parser supports hierarchical names and rich XHTML but rejects annotations, remote paths and unsupported structures. Unknown names are ignored. Rich imports and two native reopens have bounded Reader event/getter evidence; complete character transfer and real native picker selection/cancel remain unqualified. See `xfdf_native_import` in the compatibility matrix.

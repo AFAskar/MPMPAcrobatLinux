@@ -13,8 +13,8 @@ String.prototype.replace=function(pattern,replacement){
 };
 var __host = (function () {
   const data=JSON.parse(__initial), fields={}, names=[], journal=[];
-  const timers=new Map(), menus={}, gaps=[], errors=[], repairs=[], printJobs=[], attachmentExports=[], assigning=new Set(), formatDirty=new Set(), formatting=new Set();
-  let clock=0, timerId=0, calculating=false, pending=false, revision=0;
+  const timers=new Map(), menus={}, gaps=[], errors=[], repairs=[], printJobs=[], attachmentExports=[], xfdfImports=[], assigning=new Set(), formatDirty=new Set(), formatting=new Set();
+  let clock=0, timerId=0, calculating=false, pending=false, revision=0, importBatch=0, importActive=0;
   const applicationState=globalThis.__nativeApplicationState||(globalThis.__nativeApplicationState={});
   const consoleState=applicationState.console||(applicationState.console={visible:false,messages:[]});
   const unsupportedErrors=globalThis.__nativeApplicationState?(globalThis.__nativeApplicationState.unsupportedErrors||(globalThis.__nativeApplicationState.unsupportedErrors=new WeakSet())):new WeakSet();
@@ -50,6 +50,7 @@ var __host = (function () {
   function richStyleColor(value){if(!Array.isArray(value))throw Error('Invalid text color');let rgb;if(value[0]==='RGB'&&value.length===4)rgb=value.slice(1);else if(value[0]==='G'&&value.length===2)rgb=[value[1],value[1],value[1]];else return unsupported('Field.defaultStyle color '+value[0]);if(rgb.some(v=>!Number.isFinite(Number(v))))throw Error('Invalid text color');return ['RGB',...rgb.map(v=>Math.round(Math.round(Math.max(0,Math.min(1,Number(v)))*255)/255*65536)/65536)];}
   function textValue(f,value){let text=String(value);if(/[\u00a0\ufb01\ufb02]/.test(text))text=__normalizePdfText(text);return text.replace(/\r\n|\r|\n/g,f.multiline?'\r':' ');}
   function richChanges(value){return (String(value).match(/[^\r]*\r|[^\r]+$/g)||[]).map(text=>({changeMarker:true,text}));}
+  function richImportText(spans){return spans.map(span=>String(span.text||'')+(span.endParagraph&&!/[\r\n]$/.test(span.text)?'\r':'')).join('');}
   function richText(spans){return (spans||[]).map(span=>span.text===undefined?'':String(span.text)).join('');}
   function normalizeRich(f,input){
     if(!Array.isArray(input))return [];
@@ -109,7 +110,7 @@ var __host = (function () {
     for(const prop of ['userName','submitName']){let stored=f[prop];Object.defineProperty(f,prop,{enumerable:true,get(){return stored},set(v){stored=String(v)}})}
     Object.defineProperty(f,'display',{enumerable:true,get(){return widgetDisplay(f,0)},set(v){displayFlags(v,4);f._fallbackDisplay=Number(v);for(let i=0;i<f._widgets.length;i++)setWidgetDisplay(f,i,v);}});
     for(const prop of ['readonly']){let stored=f[prop];Object.defineProperty(f,prop,{enumerable:true,get(){return stored},set(v){if(stored!==v)revision++;stored=v}})}
-    let raw=x.value,richInput,settingRich=false;
+    let raw=x.value,richInput,settingRich=false,importInput;
     f._richRaw=copyData(x.rich_value||(x.rich_metadata&&x.rich_metadata.spans)||[]);if(f.richText&&!f._richRaw.length&&String(raw))f._richRaw=normalizeRich(f,[{text:String(raw)}]);
     f._initialRichRaw=copyData(f._richRaw);
     Object.defineProperty(f,'richValue',{enumerable:true,get(){if(x.kind!=='Tx'||!f.richText)return invalidFieldGet();return copyData(f._richRaw)},set(v){if(x.kind!=='Tx'||!f.richText)return unsupported('Field.richValue assignment on plain field');if(typeof v==='string'){reformat(f);return;}if(!Array.isArray(v))return unsupported('Field.richValue non-array assignment');const previous=richInput,wasSetting=settingRich;richInput=copyData(v);settingRich=true;try{f.value=v.map(span=>textValue(f,span.text===undefined?'':span.text)).join('');}finally{richInput=previous;settingRich=wasSetting;}}});
@@ -123,12 +124,13 @@ var __host = (function () {
       // Explicit unchanged assignments to another field inside Calculate still
       // run its Format action synchronously in Reader (e.g. CalcAC display).
       // Internal calculation commits retain the existing end-of-pass refresh.
-      if(!f.richText&&String(raw)===String(v)){reformat(f,calculating&&globalThis.event&&event.name==='Calculate'&&event.target!==f);return;}
+      if(!f.richText&&!importInput&&String(raw)===String(v)){reformat(f,calculating&&globalThis.event&&event.name==='Calculate'&&event.target!==f);return;}
       if(data.trace&&data.trace.includes(n))__log(n+': '+String(raw)+' -> '+String(v)+'\n'+new Error().stack);
       if(assigning.has(n)){raw=v;if(f.richText)f._richRaw=normalizeRich(f,[{text:String(v)}]);return}
       assigning.add(n);
-      try {const original=v,text=String(v),input=settingRich?copyData(richInput):null;let k=eventRun(f,'K',text,undefined,f.richText?(settingRich?copyData(f._richRaw):(text?richChanges(text):null)):null);if(!k.rc){reformat(f);return;}let e=eventRun(f,'V',k.value,undefined,k._richData);if(e.rc){let committed=String(e.value)===text?original:e.value;let spans;if(f.richText){if(e._valueWritten||k._valueWritten){spans=normalizeRich(f,[{text:String(e.value)}]);}else if(e._richWritten){spans=normalizeRich(f,e._richData);committed=textValue(f,richText(spans));}else {spans=normalizeRich(f,settingRich?input:[{text:String(e.value)}]);if(settingRich)committed=textValue(f,richText(spans));}}if(String(raw)!==String(committed))formatDirty.add(n);if(raw!==committed||spans&&JSON.stringify(spans)!==JSON.stringify(f._richRaw))revision++;if(spans&&JSON.stringify(spans)!==JSON.stringify(f._richRaw))gap('Field.richValue appearance/persistence');raw=committed;if(spans)f._richRaw=spans;f._formatted=undefined;f._formattedRichValue=undefined;if(globalThis.event&&event.target===f&&event.name==='Calculate')event.value=committed;if(globalThis.calculate&&globalThis.app&&app.calculate&&!calculating)calculateNow();reformat(f);}} finally{assigning.delete(n)}
+      try {const original=v,text=String(v),input=settingRich?copyData(richInput):null;let k=eventRun(f,'K',text,undefined,f.richText?(importInput?(importInput.spans!==null?copyData(importInput.spans):(text?richChanges(text):null)):(settingRich?copyData(f._richRaw):(text?richChanges(text):null))):null);if(!k.rc){reformat(f);return;}let e=eventRun(f,'V',k.value,undefined,k._richData);if(e.rc){let committed=String(e.value)===text?original:e.value;let spans;if(f.richText){if(e._valueWritten||k._valueWritten){spans=normalizeRich(f,[{text:String(e.value)}]);}else if(e._richWritten){spans=normalizeRich(f,e._richData);committed=textValue(f,richText(spans));}else if(importInput&&importInput.spans!==null){spans=copyData(importInput.spans);committed=textValue(f,richImportText(spans));}else {spans=normalizeRich(f,settingRich?input:[{text:String(e.value)}]);if(settingRich)committed=textValue(f,richText(spans));}}if(String(raw)!==String(committed))formatDirty.add(n);if(raw!==committed||spans&&JSON.stringify(spans)!==JSON.stringify(f._richRaw))revision++;if(spans&&JSON.stringify(spans)!==JSON.stringify(f._richRaw))gap('Field.richValue appearance/persistence');raw=committed;if(spans)f._richRaw=spans;f._formatted=undefined;f._formattedRichValue=undefined;if(globalThis.event&&event.target===f&&event.name==='Calculate')event.value=committed;if(globalThis.calculate&&globalThis.app&&app.calculate&&!calculating&&!importBatch)calculateNow();reformat(f);}} finally{assigning.delete(n)}
     }});
+    Object.defineProperty(f,'_importValue',{value(value,spans){const previous=importInput;importInput={spans};try{f.value=value}finally{importInput=previous}}});
     Object.defineProperty(f,'valueAsString',{get(){return String(raw)}});
     Object.defineProperty(f,'rect',{get(){return widgetRect(f,0)},set(r){setWidgetRect(f,0,r)}});
     Object.defineProperty(f,'currentValueIndices',{get(){const values=Array.isArray(f.value)?f.value:[f.value];const found=f.items.map((_,i)=>i).filter(i=>values.some(v=>String(v)===String(f.getItemAt(i,true))));return x.flags&2097152?found:found.length?found[0]:-1},set(v){const ids=Array.isArray(v)?v:[v];if(ids.some(i=>!Number.isInteger(Number(i))||Number(i)<0||Number(i)>=f.items.length))throw Error('Invalid choice index');f.value=x.flags&2097152?ids.map(i=>f.getItemAt(Number(i),true)):f.getItemAt(Number(ids[0]),true)}});
@@ -169,7 +171,7 @@ var __host = (function () {
   }
   function eventRun(f,key,value,extra,richInput) {
     let previous=globalThis.event;
-    let e=Object.assign({target:f,targetName:f.name,source:fields[data.focus]||f,name:({C:'Calculate',V:'Validate',K:'Keystroke',F:'Format',U:'Mouse Up'})[key]||key,type:'Field',value:['K','V','C','F'].includes(key)?String(value):value,rc:true,willCommit:key==='K',change:'',selStart:0,selEnd:0},extra||{});
+    let e=Object.assign({target:f,targetName:f.name,source:importActive?null:(fields[data.focus]||f),name:({C:'Calculate',V:'Validate',K:'Keystroke',F:'Format',U:'Mouse Up'})[key]||key,type:'Field',value:['K','V','C','F'].includes(key)?String(value):value,rc:true,willCommit:key==='K',change:'',selStart:0,selEnd:0},extra||{});
     let eventValue=e.value,valueWritten=false,richWritten=false;
     let richData=richInput===undefined?((key==='K'||key==='V')?(String(value)?richChanges(value):null):copyData(f._richRaw||[])):copyData(richInput);
     Object.defineProperty(e,'value',{enumerable:true,get(){return eventValue},set(v){eventValue=v;valueWritten=true;}});
@@ -186,6 +188,32 @@ var __host = (function () {
     // A setter refreshes its own Format action. Calculation commits defer that
     // refresh until the pass finishes; unchanged fields do not run commit hooks.
     try {let passes=0; do {pending=false;for(const n of data.order){let f=fields[n];if(!f)throw Error('Missing calculation target '+n);if(f._actions.C){const e=eventRun(f,'C',f.value);if(e.rc)f.value=e.value;}}if(++passes>8)throw Error('calculation did not settle');}while(pending);for(const n of names.slice()){const f=fields[n];if(f&&f._actions.F&&(data.order.includes(n)||(formatDirty.has(n)&&typeof f.value==='number'&&!f.richText)))formatResult(f,eventRun(f,'F',f.value));}formatDirty.clear();}finally{calculating=false}
+  }
+  // XFDF supplies incoming spans to K/V; direct richValue assignments expose
+  // the previous spans instead. Validate each input shape before committing,
+  // then defer automatic calculations until the document import is finished.
+  function importXFDF(document) {
+    if(document.cancelled){xfdfImports.push({cancelled:true});return;}
+    const plan=[],ignored=[];
+    for(const imported of document.fields){
+      const f=fields[imported.name];if(!f){ignored.push(imported.name);continue;}
+      if(!imported.values.length&&imported.rich_xml===null){if(f.type==='combobox'){plan.push({f,refresh:true});continue;}return unsupported('XFDF import field without a value: '+imported.name);}
+      const spans=imported.rich_xml===null?null:JSON.parse(__xfdfRich(JSON.stringify({xml:imported.rich_xml,defaults:f._defaultStyle})));
+      if(spans!==null&&!f.richText)return unsupported('XFDF rich import into a plain field: '+imported.name);
+      if(imported.values.length>1&&!(f._exportFlags&2097152))return unsupported('XFDF multiple values for a single-value field: '+imported.name);
+      const value=spans!==null?richImportText(spans):imported.values.length>1?imported.values:imported.values[0];
+      plan.push({f,value,spans});
+    }
+    const before=revision,job={path:document.path,sha256:document.sha256,requested:document.fields.length,processed:0,ignored:ignored.length};
+    xfdfImports.push(job);importActive++;importBatch++;let batchHeld=true;
+    try{
+      for(const item of plan){if(item.refresh)reformat(item.f);else item.f._importValue(item.value,item.spans);job.processed++;}
+      importBatch--;batchHeld=false;
+      if(!importBatch&&plan.length&&globalThis.calculate&&app.calculate&&!globalThis.delay)calculateNow();
+      if(revision!==before)globalThis.dirty=true;
+      job.changed=revision!==before;
+    }catch(error){job.error=String(error);throw error;}
+    finally{if(batchHeld)importBatch--;importActive--;}
   }
   function edit(n,v) {
     let f=fields[n];if(!f)throw Error('Unknown field '+n);if(f.readonly)throw Error('Read-only field '+n);
@@ -253,7 +281,7 @@ var __host = (function () {
     const repair={id:'mpmb-2024-261023-wildshape-pop-typo',scope:'runtime only',embedded_scripts_modified:false,reason:'Original ApplyWildshape reads pop instead of its local prop variable'};
     repairs.push(repair);__log('Applied qualified runtime repair: '+repair.id);
   }
-  return {activate,pageWidgets,widgetDisplay,setWidgetDisplay,widgetRect,setWidgetRect,menuItems,popup,applyQualifiedRepairs,get revision(){return revision},recordError(e){errors.push(e)},fields,names,data,menus,gaps,errors,source,unsupported,gap,calculateNow,edit,advance,execDialog,invokeMenu,command,spawn,removeField,deletePages,
+  return {activate,pageWidgets,widgetDisplay,setWidgetDisplay,widgetRect,setWidgetRect,menuItems,popup,applyQualifiedRepairs,get revision(){return revision},recordError(e){errors.push(e)},fields,names,data,menus,gaps,errors,source,unsupported,gap,calculateNow,edit,advance,execDialog,invokeMenu,command,spawn,removeField,deletePages,importXFDF,
     consoleView(){return copyData(consoleState)},
     consoleVisible(visible){consoleState.visible=!!visible},
     consolePrint(message){consoleState.messages.push({document:data.file,text:message});__log(message)},
@@ -264,7 +292,7 @@ var __host = (function () {
     ready(){let n=0;while(!globalThis.calculate||!app.calculate||globalThis.delay){let t=Array.from(timers.values()).sort((a,b)=>a.at-b.at)[0];if(!t||++n>100)throw Error('Document calculations suspended without a resumable timer');advance(Math.max(0,t.at-clock));}return true},
     snapshot(){let o={__structure:journal,__order:data.order};if(data.bookmarksChanged)o.__bookmarks=bookmarkRoot;for(const n of names){let f=fields[n];o[n]={value:Array.isArray(f.value)?f.value:f.valueAsString,icon:f._icon,caption:f._caption,captions:f._captions,actions:f._modifiedActions,widgets:f._widgets,currentValueIndices:f.currentValueIndices,textSize:f.textSize,alignment:f.alignment,multiline:f.multiline,textColor:f.textColor,textFont:f.textFont,richText:f.richText,rawRichValue:copyData(f._richRaw),richValueChanged:!sameRich(f._richRaw,f._initialRichRaw),appearanceDirty:!!f._appearanceDirty,richValue:f.richText?(f._formattedRichValue===null?[]:copyData(f._formattedRichValue===undefined?f._richRaw:f._formattedRichValue)):[],richRenderActive:!!f.richText&&f._formattedRichValue!==null,defaultStyle:copyData(f._defaultStyle),formatted:f._formatted===undefined?f.valueAsString:f._formatted,display:f.display,userName:f.userName,submitName:f.submitName,readonly:f.readonly,items:f.items};}return JSON.stringify(o)},
     timer(code,ms){let id=++timerId;timers.set(id,{id,code:String(code),at:clock+Math.max(1,Number(ms)||1)});return id},clear(id){timers.delete(id)},
-    diagnostics(){return JSON.stringify({gaps,errors,repairs,printJobs,attachmentExports,console:consoleState,timers:timers.size,field_count:names.length,menus:Object.keys(menus)})}
+    diagnostics(){return JSON.stringify({gaps,errors,repairs,printJobs,attachmentExports,xfdfImports,console:consoleState,timers:timers.size,field_count:names.length,menus:Object.keys(menus)})}
   };
 })();
 var display={visible:0,hidden:1,noPrint:2,noView:3};
@@ -348,6 +376,7 @@ Object.assign(globalThis,{
   getDataObject(name){const found=__host.dataObjects().filter(d=>d.name===name);if(!found.length)throw Error('Unknown data object '+name);return found[0]},
   exportDataObject:__host.exportDataObject,
   exportAsXFDFStr(options={}){if(globalThis.__nativeDocumentClosed)throw Error('Document is closed');if(!options||typeof options!=='object'||Array.isArray(options))return __host.unsupported('Doc.exportAsXFDFStr positional options');return __xfdfExport(JSON.stringify({options,href:String(path||documentFileName||''),fields:__host.names.map(name=>{const f=__host.fields[name];return {name,type:f.type,flags:f._exportFlags,value:Array.isArray(f.value)?f.value:f.valueAsString,rich:f.richText?f._richRaw:null,defaultStyle:f._defaultStyle}})}))},
+  importAnXFDF(path){if(globalThis.__nativeDocumentClosed)throw Error('Document is closed');if(path&&typeof path==='object')path=path.cPath;return __host.importXFDF(JSON.parse(__xfdfRead(path===undefined?'':String(path))))},
   importDataObject(){return __host.unsupported('Doc.importDataObject')},
   getNthFieldName(i){return __host.names[i]},calculateNow:__host.calculateNow,
   resetForm(list){if(typeof list==='string')list=[list];for(const n of __host.names){if(!list||list.some(x=>n===x||n.startsWith(x+'.')))__host.fields[n].value=__host.fields[n].defaultValue;}},
