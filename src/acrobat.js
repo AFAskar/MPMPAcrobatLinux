@@ -174,7 +174,7 @@ var __host = (function () {
     let e=Object.assign({target:f,targetName:f.name,source:importActive?null:(fields[data.focus]||f),name:({C:'Calculate',V:'Validate',K:'Keystroke',F:'Format',U:'Mouse Up'})[key]||key,type:'Field',value:['K','V','C','F'].includes(key)?String(value):value,rc:true,willCommit:key==='K',change:'',selStart:0,selEnd:0},extra||{});
     let eventValue=e.value,valueWritten=false,richWritten=false;
     let richData=richInput===undefined?((key==='K'||key==='V')?(String(value)?richChanges(value):null):copyData(f._richRaw||[])):copyData(richInput);
-    Object.defineProperty(e,'value',{enumerable:true,get(){return eventValue},set(v){eventValue=v;valueWritten=true;}});
+    Object.defineProperty(e,'value',{enumerable:true,get(){return eventValue},set(v){if(['K','V','C','F'].includes(key)){if(typeof v!=='string'&&typeof v!=='number'){const error=new Error('Set not possible, invalid or unknown.');error.name='InvalidSetError';throw error;}v=String(v);}eventValue=v;valueWritten=true;}});
     Object.defineProperty(e,'richValue',{enumerable:true,get(){if(f.type!=='text'||!f.richText||!['K','V','C','F'].includes(key))return invalidFieldGet();return copyData(richData)},set(v){if(f.type!=='text'||!f.richText)return unsupported('Event.richValue on plain field');if(v!==null&&!Array.isArray(v))return unsupported('Event.richValue non-array assignment');richData=copyData(v);richWritten=true;}});
     Object.defineProperties(e,{_valueWritten:{get(){return valueWritten}},_richWritten:{get(){return richWritten}},_richData:{get(){return copyData(richData)}}});
     globalThis.event=e;

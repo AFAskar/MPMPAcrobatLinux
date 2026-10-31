@@ -2077,7 +2077,7 @@
     ],
     "history_scope": "First two original-action claims invalidated: wrong PDF action keys; preserved reports/data and Reader closed. Empty-control initial diagnostic reads unavailable choice richText; failed/closed. Native picker launches actual portal but accessibility unavailable; owned zenity child terminated and no selection/cancel UI pass. Initial wrapper pilot supplied confirmation before startup alert; explicit valid startup reply fixes pilot. First Reader-saved comparison matched getters but failed the tool final hash guard, which still compared the new source to the original input hash; the corrected tool independently guards both sources and fresh run passes. GTK cancel pilots failed transient button discovery and absent ENABLED state; both owned children cleaned; sensitive/showing corrected run passes. Legacy native alignment pilots used a nonexistent startup source dialog/ckFF option and remain failures; verifier now rejects the unsupported legacy profile before execution.",
     "checks": "125 Rust tests and strict all-targets Clippy pass. Current sheet original acceptance2/1793476161498017004 passes. Two native reopens preserve full sampled raw-rich getters and independent fields/widgets/AP/scripts.",
-    "remaining": "Default KDE portal and native file selection; exact cross-platform original wrapper style/event parity; Ashnar event.value write conversion; full-character/all-field transfers and all fixture/version pairs; valueless non-combo, multiselect/readonly and additional rich styles/paragraphs; timer processing while file picker blocks; full typography and every-class table workflows remain incomplete.",
+    "remaining": "Default KDE portal and native file selection; exact cross-platform original wrapper style/event parity; full-character/all-field transfers and all fixture/version pairs; valueless non-combo, multiselect/readonly and additional rich styles/paragraphs; timer processing while file picker blocks; full typography and every-class table workflows remain incomplete.",
     "reader_original_wrapper": "output/testing/reader-xfdf-events-1793476301454287188/events.json",
     "reader_independent": [
       "output/testing/reader-xfdf-events-1793474630777578206/independent.json",
@@ -2095,12 +2095,36 @@
       "tools/native/verify-script-observation.py --reader <observation.json> --reader-saved"
     ],
     "native_after_reader": "output/testing/script-observation-comparison-1793476656068492243/comparison.json",
-    "fixture_scope": "Current2024 and2014 exact direct API events/raw getters and two native reopens pass. Ashnar Reader passes but native comparison fails one original Calculate event.value type (-1 number versus string); field values/styles and other13 trace entries agree. Full fixture/character compatibility is not established.",
+    "fixture_scope": "Current2024/current2014 and legacy Ashnar now have exact bounded direct API event/raw getter and two native reopen evidence. Native Ashnar126 fixes the original Calculate value type mismatch; failed125 remains retained. Full fixture/character compatibility is not established; 2024-only mixed-engine persistence and GTK-only cancellation boundaries remain.",
     "reader_2014": "output/testing/reader-xfdf-events-1793476685261255084/events.json",
     "native_2014": "output/testing/native-xfdf-events-1793476799755887162/events.json",
     "reader_ashnar": "output/testing/reader-xfdf-events-1793476849287859611/events.json",
     "native_ashnar_failure": "output/testing/native-xfdf-events-1793477021082262170/events.json",
     "native_picker_cancel": "output/testing/native-xfdf-picker-cancel-1793476993766595842/picker.json",
-    "picker_scope": "Genuine owned GTK dialog using GDK_DEBUG=no-portals and GTK_A11Y=atspi. Actual offered Cancel clicked, canonical/raw rich state unchanged, save and independent fields/widgets/AP/scripts pass. GTK exposes SENSITIVE/SHOWING but omits ENABLED; harness uses recorded sensitivity/visibility and exact button action. Default KDE portal and successful file selection remain unqualified."
+    "picker_scope": "Genuine owned GTK dialog using GDK_DEBUG=no-portals and GTK_A11Y=atspi. Actual offered Cancel clicked, canonical/raw rich state unchanged, save and independent fields/widgets/AP/scripts pass. GTK exposes SENSITIVE/SHOWING but omits ENABLED; harness uses recorded sensitivity/visibility and exact button action. Default KDE portal and successful file selection remain unqualified.",
+    "native_ashnar_fixed": "output/testing/native-xfdf-events-1793477293623661963/events.json"
+  },
+  "field_event_value_write": {
+    "status": "primitive type conversion and rejection qualified; normalization reentry remains incomplete",
+    "scope": "K/V/C/F event.value accepts primitive string/number writes; numbers immediately read back as strings, including NaN/infinities. Other sampled values throw exact InvalidSetError and retain previous event state; boxed objects and throwing toString objects are rejected without coercion. Field.value coercion remains separate.",
+    "reader32": "output/testing/reader-script-observation-1793477106705121682/observation.json",
+    "native32": "output/testing/script-observation-comparison-1793477272212433276/comparison.json",
+    "old125_failure": "output/testing/script-observation-comparison-1793477204710801526/comparison.json",
+    "reader68": "output/testing/reader-script-observation-1793477262802248462/observation.json",
+    "native68_failed": "output/testing/script-observation-comparison-1793477347708324723/comparison.json",
+    "difference_summary": "output/testing/script-observation-comparison-1793477347708324723/differences.json",
+    "edge_result": "Full comparison FAILS:66/68 exact rows; Keystroke and Validate ASCII-only NBSP writes cause a second normalized commit/action in Reader but not native. Immediate event.value preserves NBSP, including the rejected-write unchanged-state capture. This separate commit/reentry failure is not normalized away.",
+    "original_ashnar_import": "output/testing/native-xfdf-events-1793477293623661963/events.json",
+    "original_result": "Full14-event/raw-getter Ashnar XFDF import now matches Reader, with two native reopens and independent fields/widgets/AP/scripts. All three fixtures have bounded import event/raw style evidence; full mixed-engine persistence remains 2024-only.",
+    "checks": "126 Rust tests/build/strict all-targets Clippy; boxed-type and enabled-calculation targeted units pass. Original acceptance2/1793477294804670591, extended import/Ashnar2/1793477398379396146 and generated6/1793477461431301924 pass. Original fixture hashes/pinned submodule unchanged.",
+    "remaining": "Post-event text normalization/reentry; broader event kinds and combinations; all-class choices/resources/table workflows; complete imports, picker selection and full typography remain incomplete.",
+    "extended": "output/testing/native-extended-1793477398379396146/extended.json",
+    "reproduce": [
+      "tools/native/reader-event-value.py --readiness <readiness.json>",
+      "tools/native/verify-script-observation.py --reader <reader-observation.json>",
+      "tools/native/verify-xfdf-events.py --reader <qualified-Ashnar-events.json> --reopen"
+    ],
+    "generated": "output/testing/native-generated-1793477461431301924/generated.json",
+    "fixture_hashes": "output/testing/continuation-event-value-fixtures.json"
   }
 }

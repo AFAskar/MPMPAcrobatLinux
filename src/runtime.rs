@@ -785,6 +785,19 @@ mod tests {
         host("var f=getField('A');f.richText=true;var sizes=[7.25,7.9,8.05,8.5,8.9,9.5,8.049999999999999];var expected=[7.2,7.9,8.1,8.5,8.9,9.5,8];var good=true;sizes.forEach(function(size,i){f.richValue=[{text:'metric',textSize:size,linespacing:14.75}];good=good&&f.richValue[0].textSize===expected[i]&&f.richValue[0].linespacing===14.8;});f.setAction('Format','event.richValue=[{text:\"formatted\",textSize:8.049999999999999,linespacing:7.25}]');f.value='stored';var span=JSON.parse(__host.snapshot()).A.richValue[0];good&&span.textSize===8&&span.linespacing===7.2");
     }
     #[test]
+    fn field_event_value_writes_convert_numbers_and_reject_other_types_without_commit() {
+        host(
+            r#"app.calculate=false;var seen=[],valid=true;
+          ['Keystroke','Validate','Format','Calculate'].forEach(function(kind){
+            var f=getField(kind==='Calculate'?'B':'A');
+            f.setAction(kind,"event.value=-1;seen.push([typeof event.value,event.value]);var bad=[true,false,null,undefined,[],{},new Number(2),new String('text')];bad.forEach(function(value){try{event.value=value;valid=false}catch(error){valid=valid&&error.name==='InvalidSetError'&&event.value==='-1'}});");
+            if(kind==='Calculate'){app.calculate=true;calculateNow();app.calculate=false;}else f.value='next '+kind;
+            f.setAction(kind,'');
+          });
+          valid&&seen.length===4&&seen.every(function(item){return item[0]==='string'&&item[1]==='-1'})&&getField('B').value===-1&&getField('B').valueAsString==='-1'"#,
+        );
+    }
+    #[test]
     fn original_order_and_numeric_values() {
         host("__host.edit('A','18'); getField('A').value===18 && getField('B').value===19 && getField('C').value===20 && getField('A').valueAsString==='18'");
     }
@@ -918,12 +931,12 @@ mod tests {
     #[test]
     fn calculate_cross_field_unchanged_assignment_formats_synchronously() {
         host(
-            r#"app.calculate=false;var a=getField('A'),trace=[],operand=15;a.valueCalculated=10;a.setAction('Format',"trace.push('F'+event.target.valueCalculated);event.value=event.target.valueCalculated;");a.value='formula';getField('B').setAction('Calculate',"trace.push('C-start');var other=getField('A');other.valueCalculated=operand;other.value=other.value;trace.push('C-end');event.value=0;");app.calculate=true;calculateNow();var state=JSON.parse(__host.snapshot()).A;state.value==='formula'&&state.formatted===15&&trace.join(',')==='F10,C-start,F15,C-end'&&JSON.parse(__host.diagnostics()).errors.length===0"#,
+            r#"app.calculate=false;var a=getField('A'),trace=[],operand=15;a.valueCalculated=10;a.setAction('Format',"trace.push('F'+event.target.valueCalculated);event.value=event.target.valueCalculated;");a.value='formula';getField('B').setAction('Calculate',"trace.push('C-start');var other=getField('A');other.valueCalculated=operand;other.value=other.value;trace.push('C-end');event.value=0;");app.calculate=true;calculateNow();var state=JSON.parse(__host.snapshot()).A;state.value==='formula'&&state.formatted==='15'&&trace.join(',')==='F10,C-start,F15,C-end'&&JSON.parse(__host.diagnostics()).errors.length===0"#,
         );
     }
     #[test]
     fn formatted_display_invalidates_appearance_without_changing_canonical_value() {
-        host("var f=getField('A');var offset=10;f.setAction('Format','event.value=Number(event.value)+offset');f.value=2;f._appearanceDirty=false;offset=20;f.value=2;var s=JSON.parse(__host.snapshot()).A;s.value==='2'&&s.formatted===22&&s.appearanceDirty");
+        host("var f=getField('A');var offset=10;f.setAction('Format','event.value=Number(event.value)+offset');f.value=2;f._appearanceDirty=false;offset=20;f.value=2;var s=JSON.parse(__host.snapshot()).A;s.value==='2'&&s.formatted==='22'&&s.appearanceDirty");
     }
     #[test]
     fn rich_format_invalidation_survives_an_unchanged_value_commit() {
