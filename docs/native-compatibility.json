@@ -1992,5 +1992,35 @@
     "dialect_failure": "output/testing/reader-script-observation-1793469305412303258/observation.json",
     "same_request_recovery": "output/testing/reader-script-observation-1793469305412303258/recovery.json",
     "note": "Reader globalThis is undefined; document-context callback properties work. Four mode/action trace and eight fresh-field cases match original native110 in comparisons1793469688599573252 and1793469932940468815. A plain-vs-rich normalization candidate FAILS comparison1793469687444926203 and was reverted. Mixed Greek/NBSP XFDF input differs; encoding-boundary investigation pending. No universal whitespace rule or broad milestone pass."
+  },
+  "pdfdoc_field_conversion": {
+    "status": "bounded encoding/span APIs qualified across all three fixture Readers; broad milestone incomplete",
+    "scope": "PDFDocEncoding representability chooses narrow conversion. NBSP folds to space and fi/fl ligatures expand on the narrow path; values requiring Unicode retain them. This is not general NFKC: fractions, micro sign and accents stay unchanged. Rich setter inputs convert each span, canonical text derives from converted spans, and adjacent equal-style runs without paragraph boundaries merge. Keystroke/Validate see converted incoming value but previous stored rich spans; plain-value setter behavior remains separate.",
+    "reader_encoding": "output/testing/reader-script-observation-1793469931763989387/observation.json",
+    "reader_pdfdoc_and_spans": "output/testing/reader-script-observation-1793470103053656953/observation.json",
+    "reader_compatibility_and_events": "output/testing/reader-script-observation-1793470491394959753/observation.json",
+    "native_compatibility_and_events": "output/testing/script-observation-comparison-1793470731716443307/comparison.json",
+    "earlier_text_and_span_comparisons": [
+      "output/testing/script-observation-comparison-1793470422703734552/comparison.json",
+      "output/testing/script-observation-comparison-1793470423866192915/comparison.json"
+    ],
+    "old110_counterexample": "output/testing/script-observation-comparison-1793470104224358625/comparison.json",
+    "event_candidate_counterexample": "output/testing/script-observation-comparison-1793470621091732409/comparison.json",
+    "native_reader_reopen": "output/testing/reader-script-observation-1793470771761406989/observation.json",
+    "reader_rich_getter_reopen": "output/testing/reader-script-observation-1793470873496861456/observation.json",
+    "fresh_native_after_reader": "output/testing/script-observation-comparison-1793470968242756534/comparison.json",
+    "independent_pdf": "output/testing/pdfdoc-text-native-independent.json",
+    "retained_appearance_render": "output/testing/field-render-1793471020016445956/render.json",
+    "render_scope": "Both A/Greek crops visually reviewed; canonical NBSP is exact and visible native Player Name AP retained in Reader (zero changed pixels). Reader retained that AP, so this is not independently regenerated Reader font/size equality. Notes.Left is inactive in this diagnostic; its full bold/regular raw rich getter/defaultStyle is read and retained by Reader and fresh native, but visible rich layout is not qualified here.",
+    "checks": "113 Rust tests/build/strict all-targets Clippy; current-sheet acceptance2/1793470734088475850 and final import/Ashnar extended2/1793470960688682653 pass. Original PDFs and pinned submodule unchanged.",
+    "original_notes_regression": "output/testing/pdfdoc-original-notes-1793471006905906845/notes.json",
+    "original_notes_result": "All three execute with unchanged original actions/scripts and matching captured APIs, physical faces and first baseline. ALL THREE full workflows remain FAILED due unequal decoration positions. This is a regression check, not a rendering compatibility pass.",
+    "failed_reference": "output/testing/reader-script-observation-1793470296122823283/observation.json",
+    "failed_reference_recovery": "output/testing/reader-script-observation-1793470296122823283/recovery.json",
+    "failure_scope": "Bridge acknowledgement failed after original diagnostic completed. Same request retained/closed; recovered measurements verified. Failed suite stays failed; fresh reference1793470491394959753 independently passes.",
+    "reproduce": "Reader script-observation with tools/native/nbsp-encoding-observer.js, nbsp-pdfdoc-boundary.js or nbsp-compatibility-observer.js; verify-script-observation.py against its report. read-whitespace-state.js reads canonical/raw rich state after real Reader reopen.",
+    "remaining": "Other control characters, complex paragraph/run merging, all rich event combinations, visible rich layout, complete Unicode glyph support and all-class table/persistence behavior remain incomplete. Original scripts are not patched.",
+    "legacy_reader": "output/testing/reader-script-observation-1793471150540067018/observation.json",
+    "legacy_native": "output/testing/script-observation-comparison-1793471237651481191/comparison.json"
   }
 }

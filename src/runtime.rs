@@ -4,10 +4,10 @@ use rquickjs::{Context, Ctx, Exception, Function, Runtime as Engine};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     path::PathBuf,
     rc::Rc,
-    sync::{Arc, Mutex},
+    sync::{Arc, LazyLock, Mutex},
 };
 mod document_context;
 mod documents;
@@ -32,6 +32,28 @@ pub struct Runtime {
 // first would erase the distinction at some half-way values.
 fn round_rich_metric(value: f64) -> f64 {
     format!("{value:.1}").parse().unwrap_or(value)
+}
+// Reader folds spaces and ligatures when a string fits PDFDocEncoding;
+// a value requiring Unicode retains them. Rich inputs convert each span.
+fn normalize_pdf_text(value: String) -> String {
+    static PDF_DOC_CHARACTERS: LazyLock<HashSet<char>> = LazyLock::new(|| {
+        let bytes = lopdf::Object::String((0..=255).collect(), lopdf::StringFormat::Literal);
+        lopdf::decode_text_string(&bytes)
+            .expect("The PDFDocEncoding byte map is valid")
+            .chars()
+            .collect()
+    });
+    if value
+        .chars()
+        .all(|c| c == '\u{a0}' || PDF_DOC_CHARACTERS.contains(&c))
+    {
+        value
+            .replace('\u{a0}', " ")
+            .replace('ﬁ', "fi")
+            .replace('ﬂ', "fl")
+    } else {
+        value
+    }
 }
 // Scripted probes select only options actually offered by the original dialog.
 // Preserve option magnitudes because Acrobat uses them as item identities.
@@ -439,6 +461,10 @@ impl Runtime {
             "__roundRichMetric",
             Function::new(ctx.clone(), round_rich_metric)?,
         )?;
+        ctx.globals().set(
+            "__normalizePdfText",
+            Function::new(ctx.clone(), normalize_pdf_text)?,
+        )?;
         ctx.globals().set("__initial", initial.to_string())?;
         ctx.eval::<(), _>(concat!(include_str!("acrobat.js"), "\nvoid 0;"))
             .map_err(|e| anyhow!("Acrobat host: {e}: {:?}", ctx.catch()))?;
@@ -655,6 +681,7 @@ mod tests {
         let context = Context::full(&engine).unwrap();
         context.with(|ctx|{
             ctx.globals().set("__roundRichMetric",Function::new(ctx.clone(),round_rich_metric).unwrap()).unwrap();
+            ctx.globals().set("__normalizePdfText",Function::new(ctx.clone(),normalize_pdf_text).unwrap()).unwrap();
             let field=|name:&str,value:&str,actions:Value|json!({"name":name,"value":value,"default_value":"","user_name":"","submit_name":"","kind":"Tx","flags":0,"display":0,"text_size":10,"widgets":[],"items":[],"actions":actions});
             ctx.globals().set("__initial",json!({"fields":{"A":field("A","2",json!({"V":"if (Number(event.value)<0) event.rc=false;"})),"B":field("B","0",json!({"C":"event.value=getField('A').value+1;"})),"C":field("C","0",json!({"C":"event.value=getField('B').value+1;"})),"Unchecked":json!({"kind":"Btn","flags":0,"value":"Off","default_value":"","items":[],"widgets":[],"actions":{},"export_values":["True"]})},"order":["B","C"],"info":{},"bookmarks":{"children":[]},"pages":1,"templates":{"blank":{"fields":{},"order":[]}}}).to_string()).unwrap();
             ctx.eval::<(),_>(concat!(include_str!("acrobat.js"),"\nvoid 0;")).unwrap();
@@ -668,6 +695,34 @@ mod tests {
     #[test]
     fn original_order_and_numeric_values() {
         host("__host.edit('A','18'); getField('A').value===18 && getField('B').value===19 && getField('C').value===20 && getField('A').valueAsString==='18'");
+    }
+    #[test]
+    fn pdfdoc_conversion_preserves_unicode_and_folds_only_narrow_text() {
+        for (input, expected) in [
+            ("A\u{a0}B", "A B"),
+            ("€\u{a0}œ", "€ œ"),
+            ("Ł\u{a0}ı", "Ł ı"),
+            ("ﬁ\u{a0}ﬂ", "fi fl"),
+            ("½\u{a0}µ", "½ µ"),
+            ("A\u{a0}Ω", "A\u{a0}Ω"),
+            ("Ā\u{a0}B", "Ā\u{a0}B"),
+            ("\u{ad}\u{a0}B", "\u{ad}\u{a0}B"),
+            ("ﬁ\u{a0}Ω", "ﬁ\u{a0}Ω"),
+        ] {
+            assert_eq!(normalize_pdf_text(input.into()), expected);
+        }
+    }
+    #[test]
+    fn rich_assignments_convert_each_span_then_commit_merged_text() {
+        host(
+            r#"var f=getField('A');f.richText=true;f.richValue=[{text:'A\u00a0B'},{text:'Ω'}];var merged=f.valueAsString==='A BΩ'&&f.richValue.length===1&&f.richValue[0].text==='A BΩ';f.richValue=[{text:'A\u00a0B',fontWeight:700},{text:'Ω',fontWeight:400}];var styles=f.valueAsString==='A BΩ'&&f.richValue.length===2&&f.richValue[0].text==='A B'&&f.richValue[0].fontWeight===700;f.richValue=[{text:'A\u00a0Ω'}];merged&&styles&&f.valueAsString==='A\u00a0Ω'&&f.richValue[0].text===f.valueAsString"#,
+        );
+    }
+    #[test]
+    fn rich_assignment_commit_events_expose_previous_spans_and_converted_new_text() {
+        host(
+            r#"var f=getField('A'),trace=[];f.richText=true;f.richValue=[{text:'old\u00a0Ω'}];f.setAction('Keystroke',"trace.push({name:event.name,value:event.value,rich:event.richValue.map(s=>s.text)});");f.setAction('Validate',"trace.push({name:event.name,value:event.value,rich:event.richValue.map(s=>s.text)});");f.richValue=[{text:'A\u00a0B'},{text:'Ω'}];f.valueAsString==='A BΩ'&&trace.length===2&&trace[0].name==='Keystroke'&&trace[1].name==='Validate'&&trace.every(e=>e.value==='A BΩ'&&e.rich.length===1&&e.rich[0]==='old\u00a0Ω')&&f.richValue[0].text==='A BΩ'"#,
+        );
     }
     #[test]
     fn rejected_validation_does_not_change_value() {

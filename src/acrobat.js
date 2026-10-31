@@ -48,7 +48,7 @@ var __host = (function () {
   }
   function invalidFieldGet(){const e=new Error('Get not possible, invalid or unknown.');e.name='InvalidGetError';throw e;}
   function richStyleColor(value){if(!Array.isArray(value))throw Error('Invalid text color');let rgb;if(value[0]==='RGB'&&value.length===4)rgb=value.slice(1);else if(value[0]==='G'&&value.length===2)rgb=[value[1],value[1],value[1]];else return unsupported('Field.defaultStyle color '+value[0]);if(rgb.some(v=>!Number.isFinite(Number(v))))throw Error('Invalid text color');return ['RGB',...rgb.map(v=>Math.round(Math.round(Math.max(0,Math.min(1,Number(v)))*255)/255*65536)/65536)];}
-  function textValue(f,value){return String(value).replace(/\u00a0/g,' ').replace(/\r\n|\r|\n/g,f.multiline?'\r':' ');}
+  function textValue(f,value){let text=String(value);if(/[\u00a0\ufb01\ufb02]/.test(text))text=__normalizePdfText(text);return text.replace(/\r\n|\r|\n/g,f.multiline?'\r':' ');}
   function richChanges(value){return (String(value).match(/[^\r]*\r|[^\r]+$/g)||[]).map(text=>({changeMarker:true,text}));}
   function richText(spans){return (spans||[]).map(span=>span.text===undefined?'':String(span.text)).join('');}
   function normalizeRich(f,input){
@@ -61,7 +61,7 @@ var __host = (function () {
       span.text=textValue(f,item.text===undefined?'':item.text);
       if(!span.endParagraph||i===input.length-1)delete span.endParagraph;
       if(item.textColor){let rgb;if(item.textColor[0]==='RGB')rgb=item.textColor.slice(1);else if(item.textColor[0]==='G')rgb=[item.textColor[1],item.textColor[1],item.textColor[1]];else return unsupported('Field.richValue color '+item.textColor[0]);span.textColor=['RGB',...rgb.map(v=>Math.round(Math.floor(Math.floor(Math.max(0,Math.min(1,Number(v)))*65536)/65536*255)/255*65536)/65536)];}
-      if(span.text||span.endParagraph)result.push(span);
+      if(span.text||span.endParagraph){const previous=result[result.length-1];const style=s=>{const v=copyData(s);delete v.text;return v;};if(previous&&!previous.endParagraph&&!span.endParagraph&&sameRich([style(previous)],[style(span)]))previous.text+=span.text;else result.push(span);}
     }
     return result;
   }
@@ -112,7 +112,7 @@ var __host = (function () {
     let raw=x.value,richInput,settingRich=false;
     f._richRaw=copyData(x.rich_value||(x.rich_metadata&&x.rich_metadata.spans)||[]);if(f.richText&&!f._richRaw.length&&String(raw))f._richRaw=normalizeRich(f,[{text:String(raw)}]);
     f._initialRichRaw=copyData(f._richRaw);
-    Object.defineProperty(f,'richValue',{enumerable:true,get(){if(x.kind!=='Tx'||!f.richText)return invalidFieldGet();return copyData(f._richRaw)},set(v){if(x.kind!=='Tx'||!f.richText)return unsupported('Field.richValue assignment on plain field');if(typeof v==='string'){reformat(f);return;}if(!Array.isArray(v))return unsupported('Field.richValue non-array assignment');const previous=richInput,wasSetting=settingRich;richInput=copyData(v);settingRich=true;try{f.value=richText(v);}finally{richInput=previous;settingRich=wasSetting;}}});
+    Object.defineProperty(f,'richValue',{enumerable:true,get(){if(x.kind!=='Tx'||!f.richText)return invalidFieldGet();return copyData(f._richRaw)},set(v){if(x.kind!=='Tx'||!f.richText)return unsupported('Field.richValue assignment on plain field');if(typeof v==='string'){reformat(f);return;}if(!Array.isArray(v))return unsupported('Field.richValue non-array assignment');const previous=richInput,wasSetting=settingRich;richInput=copyData(v);settingRich=true;try{f.value=v.map(span=>textValue(f,span.text===undefined?'':span.text)).join('');}finally{richInput=previous;settingRich=wasSetting;}}});
     Object.defineProperty(f,'value',{enumerable:true,get(){return x.kind!=='Btn'&&typeof raw==='string'&&/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(raw)?Number(raw):raw},set(v){
       // Reader converts null/undefined to text, then runs the commit keystroke
       // and validation actions. Numeric MPMB fields reject that text themselves.
@@ -127,7 +127,7 @@ var __host = (function () {
       if(data.trace&&data.trace.includes(n))__log(n+': '+String(raw)+' -> '+String(v)+'\n'+new Error().stack);
       if(assigning.has(n)){raw=v;if(f.richText)f._richRaw=normalizeRich(f,[{text:String(v)}]);return}
       assigning.add(n);
-      try {const original=v,text=String(v),input=settingRich?copyData(richInput):null;let k=eventRun(f,'K',text,undefined,f.richText?(settingRich?(text?input:null):(text?richChanges(text):null)):null);if(!k.rc){reformat(f);return;}let e=eventRun(f,'V',k.value,undefined,k._richData);if(e.rc){let committed=String(e.value)===text?original:e.value;let spans;if(f.richText){if(e._valueWritten||k._valueWritten){spans=normalizeRich(f,[{text:String(e.value)}]);}else if(e._richWritten){spans=normalizeRich(f,e._richData);committed=textValue(f,richText(spans));}else spans=normalizeRich(f,settingRich?input:[{text:String(e.value)}]);}if(String(raw)!==String(committed))formatDirty.add(n);if(raw!==committed||spans&&JSON.stringify(spans)!==JSON.stringify(f._richRaw))revision++;if(spans&&JSON.stringify(spans)!==JSON.stringify(f._richRaw))gap('Field.richValue appearance/persistence');raw=committed;if(spans)f._richRaw=spans;f._formatted=undefined;f._formattedRichValue=undefined;if(globalThis.event&&event.target===f&&event.name==='Calculate')event.value=committed;if(globalThis.calculate&&globalThis.app&&app.calculate&&!calculating)calculateNow();reformat(f);}} finally{assigning.delete(n)}
+      try {const original=v,text=String(v),input=settingRich?copyData(richInput):null;let k=eventRun(f,'K',text,undefined,f.richText?(settingRich?copyData(f._richRaw):(text?richChanges(text):null)):null);if(!k.rc){reformat(f);return;}let e=eventRun(f,'V',k.value,undefined,k._richData);if(e.rc){let committed=String(e.value)===text?original:e.value;let spans;if(f.richText){if(e._valueWritten||k._valueWritten){spans=normalizeRich(f,[{text:String(e.value)}]);}else if(e._richWritten){spans=normalizeRich(f,e._richData);committed=textValue(f,richText(spans));}else {spans=normalizeRich(f,settingRich?input:[{text:String(e.value)}]);if(settingRich)committed=textValue(f,richText(spans));}}if(String(raw)!==String(committed))formatDirty.add(n);if(raw!==committed||spans&&JSON.stringify(spans)!==JSON.stringify(f._richRaw))revision++;if(spans&&JSON.stringify(spans)!==JSON.stringify(f._richRaw))gap('Field.richValue appearance/persistence');raw=committed;if(spans)f._richRaw=spans;f._formatted=undefined;f._formattedRichValue=undefined;if(globalThis.event&&event.target===f&&event.name==='Calculate')event.value=committed;if(globalThis.calculate&&globalThis.app&&app.calculate&&!calculating)calculateNow();reformat(f);}} finally{assigning.delete(n)}
     }});
     Object.defineProperty(f,'valueAsString',{get(){return String(raw)}});
     Object.defineProperty(f,'rect',{get(){return widgetRect(f,0)},set(r){setWidgetRect(f,0,r)}});
