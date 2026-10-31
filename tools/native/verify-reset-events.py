@@ -20,7 +20,7 @@ def main():
     binary=folder/'mpmb-reader';shutil.copy2(args.binary,binary);output=folder/'native.pdf';probe=folder/'probe.json'
     report={'passed':False,'scope':__doc__,'reader':str(args.reader.resolve()),'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest()}
     summary="(function(){var s=getField('PC Name').valueAsString,a=1,b=0;for(var i=0;i<s.length;i++){a=(a+s.charCodeAt(i))%65521;b=(b+a)%65521}return {code_units:s.length,adler32_utf16:String((b*65536+a)>>>0)}})()"
-    scenario={'dialogs':[{'title':'SOURCE SELECTION DIALOG','result':'ok'}],'alerts':[1]*20,'steps':[{'op':'advance','ms':4100},{'op':'eval','code':reset.OBSERVER},{'op':'eval','code':summary},{'op':'save','path':str(output)}]}
+    scenario={'dialogs':[{'title':'SOURCE SELECTION DIALOG','result':'ok'}],'alerts':[1]*20,'steps':[{'op':'advance','ms':4100},{'op':'eval','code':reset.STRING_ARGUMENT_OBSERVER if reference.get('observer_profile')=='string-arguments' else reset.OBSERVER},{'op':'eval','code':summary},{'op':'save','path':str(output)}]}
     scenario_path=folder/'scenario.json';scenario_path.write_text(json.dumps(scenario))
     try:
         with (folder/'probe.log').open('w') as log:result=subprocess.run([str(binary),str(source),'--probe',str(scenario_path),str(probe)],stdout=log,stderr=log,timeout=300)

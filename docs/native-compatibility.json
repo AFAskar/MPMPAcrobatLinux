@@ -1845,5 +1845,15 @@
     "reader": "output/testing/reader-info-case-1793443145909944804/info-case.json",
     "scope": "Standard aliases case-insensitive, custom names exact, missing custom empty, PDF date objects/epochs; actual PDF scalar types retained. Native locale Date string deliberately not compared.",
     "remaining": "Reader coerces text SheetVersionBuild to number; Authors/ContactEmail enumeration overlay missing. Mutation/delete/defineProperty explicitly unsupported."
+  },
+  "reset_form_string_overload": {
+    "status": "qualified bounded Reader trace and original legacy feat-path repair; complete reset semantics unqualified",
+    "reader": "output/testing/reader-reset-events-1793460302021104205/reset-events.json",
+    "native": "output/testing/native-reset-events-1793460414531082884/reset-events.json",
+    "old_binary_counterexample": "output/testing/native-reset-events-1793460431405530936/reset-events.json",
+    "original_workflow_before": "output/testing/native-direct-import-1793460232621932949/report.json",
+    "original_workflow_after": "output/testing/native-direct-import-1793460390619193480/report.json",
+    "scope": "Original FeatClear passes one field-name string to resetForm; prior host called list.some on it, suppressing a Background Feature Validate TypeError during legacy import. Normalize strings to one-element field lists. Native exact trace matches Reader: changed string reset K/V/F, unchanged Format only, unknown string no actions. Old105 binary fails the same captured test. Fresh original Ashnar->2024 import removes the extra Background Feature error; its raw strict report retains two original carrying-capacity Format errors. Hierarchical names/array behavior retained; named-object overload and full invalid input/partial-event semantics remain unqualified.",
+    "validation": "106 Rust tests, build and strict all-targets clippy pass; native-acceptance-1793460437004027142 passes both current-sheet slices."
   }
 }

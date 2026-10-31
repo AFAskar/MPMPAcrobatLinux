@@ -335,7 +335,7 @@ Object.assign(globalThis,{
   exportDataObject:__host.exportDataObject,
   importDataObject(){return __host.unsupported('Doc.importDataObject')},
   getNthFieldName(i){return __host.names[i]},calculateNow:__host.calculateNow,
-  resetForm(list){for(const n of __host.names){if(!list||list.some(x=>n===x||n.startsWith(x+'.')))__host.fields[n].value=__host.fields[n].defaultValue;}},
+  resetForm(list){if(typeof list==='string')list=[list];for(const n of __host.names){if(!list||list.some(x=>n===x||n.startsWith(x+'.')))__host.fields[n].value=__host.fields[n].defaultValue;}},
   getTemplate(n){return __host.data.templates&&__host.data.templates[n]?{name:n,spawn(index,rename,overlay){return __host.spawn(n,index,rename,overlay)}}:null},
   get templates(){return Object.keys(__host.data.templates||{}).map(n=>getTemplate(n))},
   removeField:__host.removeField,deletePages:__host.deletePages,

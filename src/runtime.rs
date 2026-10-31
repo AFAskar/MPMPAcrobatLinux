@@ -558,6 +558,10 @@ mod tests {
         host("var f=getField('A'),ok=true;for(var kind of ['Keystroke','Validate','Format']){for(var type of ['Keystroke','Validate','Format'])f.setAction(type,'');f.value='baseline';f.defaultValue='default';f.setAction(kind,\"throw Error('field exception sentinel')\");try{f.value='changed';ok=ok&&f.valueAsString==='changed';resetForm(['A']);ok=ok&&f.valueAsString==='default'}catch(e){ok=false}}ok&&JSON.parse(__host.diagnostics()).errors.length===6");
     }
     #[test]
+    fn string_resets_used_by_original_feat_removal_commit_and_leave_other_fields_intact() {
+        host("app.calculate=false;var f=getField('A'),trace=[];f.defaultValue='default';getField('B').value='unrelated';f.setAction('Keystroke',\"trace.push('K')\");f.setAction('Validate',\"trace.push('V')\");f.setAction('Format',\"trace.push('F')\");resetForm('A');var first=trace.join('');resetForm('nonexistent');first==='KVF'&&trace.join('')==='KVF'&&f.valueAsString==='default'&&getField('B').valueAsString==='unrelated'&&JSON.parse(__host.diagnostics()).errors.length===0");
+    }
+    #[test]
     fn unimplemented_host_calls_remain_explicit_failures_inside_field_actions() {
         host("var f=getField('A'),rejected=false;f.setAction('Format',\"__host.unsupported('test missing host method')\");try{f.value='changed'}catch(e){rejected=/Unsupported Acrobat API/.test(String(e))}rejected&&JSON.parse(__host.diagnostics()).errors.length===1");
     }
