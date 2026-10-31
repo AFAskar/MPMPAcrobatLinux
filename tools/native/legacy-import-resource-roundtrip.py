@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""Edit/rest/save imported 2014 Ashnar in native, Reader, then native again.
+
+Only actual Ki usage is entered. Original resetLimFeaUsed calculates short/long
+rest effects. Check imported payloads, remembered spells, selected serialized
+state, canonical fields/AP/scripts and input hashes; no full rendering claim.
+"""
+import argparse,hashlib,importlib.util,json,shutil,subprocess,sys,time
+from pathlib import Path
+ROOT=Path(__file__).resolve().parents[2]
+sys.path.insert(0,str(ROOT/'tools/acrobat'))
+import control as c
+from pypdf import PdfReader
+from verify import canonical_fields,inspect,script_hashes
+spec=importlib.util.spec_from_file_location('state',ROOT/'tools/native/compare-state.py');state=importlib.util.module_from_spec(spec);spec.loader.exec_module(state)
+
+
+def retained_state(before,after):
+    left,right=[canonical_fields(PdfReader(path)) for path in [before,after]]
+    names=['User_Imported_Files.Stringified','CurrentFeatureChoices.Stringified','CurrentSpells.Stringified']
+    expressions={n:[left[n]['/V'],right[n]['/V']] for n in names}
+    run=subprocess.run(['node','-e',state.COMPARE],input=json.dumps(expressions),text=True,capture_output=True,check=True,timeout=30)
+    result=json.loads(run.stdout)
+    remembered=[n for n in left if '.spells.remember.' in n.lower()]
+    assert remembered
+    result['remembered_rows']={'equal':all(n in right and left[n]['/V']==right[n]['/V'] for n in remembered),'count':len(remembered)}
+    assert all(row['equal'] for row in result.values()),result
+    return result
+
+
+def main():
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--native',type=Path,required=True);p.add_argument('--reader',type=Path,required=True);p.add_argument('--readiness',type=Path,required=True);args=p.parse_args()
+    reference=json.loads(args.reader.read_text());execution=json.loads((args.native/'execution.json').read_text());ready=json.loads(args.readiness.read_text())
+    assert reference['passed'] and reference['profile']=='legacy' and execution['profile']=='legacy'
+    assert '_2014_' in reference['target_fixture'] and ready['passed'] and len(ready['cases'])==24 and ready['harness_sha256']==c.harness_fingerprint()
+    baseline=reference['captured']['fields'];assert baseline['Limited Feature 1']=='Ki Points' and baseline['Limited Feature Max Usages 1']=='12' and baseline['Limited Feature Recovery 1']=='short rest'
+    folder=ROOT/'output/testing'/('legacy-import-resource-roundtrip-'+str(time.time_ns()));folder.mkdir();print(folder,flush=True);binary=folder/'mpmb-reader';shutil.copy2(args.native/'mpmb-reader',binary)
+    report={'passed':False,'scope':__doc__,'native':str(args.native.resolve()),'reader':str(args.reader.resolve()),'readiness':str(args.readiness.resolve()),'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'cases':[]};opened=False;remote=None
+    def publish():(folder/'roundtrip.json').write_text(json.dumps(report,indent=2)+'\n')
+    def probe(source,label,steps):
+        scenario=folder/(label+'-scenario.json');evidence=folder/(label+'-probe.json');scenario.write_text(json.dumps({'steps':steps,'dialogs':[{'result':'ok'}]*10,'alerts':[1]*20}))
+        with (folder/(label+'.log')).open('w') as log:run=subprocess.run([str(binary),str(source),'--probe',str(scenario),str(evidence)],stdout=log,stderr=log,timeout=300)
+        result=json.loads(evidence.read_text());assert run.returncode==0 and result['passed'],result.get('error')
+        return result
+    def capture(phase):return {'op':'eval','code':'({phase:'+json.dumps(phase)+',fields:(function(){var out={};'+json.dumps(list(baseline))+'.forEach(function(n){out[n]=getField(n).valueAsString});return out})()})'}
+    try:
+        for label,input_pdf in [('native-import',args.native/'native.pdf'),('reader-import',args.reader.parent/'reader-imported.pdf')]:
+            case={'label':label,'input':str(input_pdf.resolve()),'input_sha256':hashlib.sha256(input_pdf.read_bytes()).hexdigest()};report['cases'].append(case);publish()
+            used='Limited Feature Used 1';steps=[{'op':'advance','ms':4100},{'op':'assert','values':baseline},capture('baseline')]
+            for value,phase,rest in [('2','used-two','short rest'),('3','used-three','long rest'),('4','saved-four',None)]:
+                steps += [{'op':'edit','field':used,'value':value},{'op':'advance','ms':1000},capture(phase)]
+                if rest:steps += [{'op':'eval','code':'__host.command('+json.dumps('resetLimFeaUsed('+json.dumps(rest)+')')+')'},{'op':'advance','ms':1000},capture(rest)]
+            edited=folder/(label+'-native.pdf');steps.append({'op':'save','path':str(edited)});result=probe(input_pdf,label,steps)
+            phases={s['result']['phase']:s['result']['fields'] for s in result['stages'] if isinstance(s.get('result'),dict) and 'phase' in s['result']};case['native_phases']=phases
+            assert phases['used-two'][used]=='2' and phases['used-three'][used]=='3' and phases['saved-four'][used]=='4'
+            assert phases['short rest'][used]==phases['long rest'][used]==''
+            expected=phases['saved-four'];assert inspect(edited,expected)['passed'] and script_hashes(edited)==script_hashes(input_pdf);case['native_retained_state']=retained_state(input_pdf,edited)
+            probe(edited,label+'-native-reopen',[{'op':'advance','ms':4100},{'op':'assert','values':expected}]);publish()
+            with c.desktop_lock():
+                assert not [e for e in c.command('inspect') if e.get('class')=='AcrobatSDIWindow' and '.pdf' in e.get('name','').lower()], 'Pre-existing Reader document'
+                remote=c.remote_path('runs/legacy-resource-'+str(time.time_ns())+'.pdf');subprocess.run(c.SCP+[str(edited),'mpmb-test@127.0.0.1:MPMB-Testing/runs/'+remote.replace('\\','/').split('/')[-1]],check=True,capture_output=True)
+                opened=True;c.ensure_document(remote);case['reader_reopened']=c.script('read',path=remote,fields=list(expected))['fields'];assert case['reader_reopened']==expected
+                case['reader_phases']={}
+                for value,phase,rest in [('2','used-two','short rest'),('3','used-three','long rest'),('4','saved-four',None)]:
+                    c.script('focus',path=remote,field=used);typed=c.command('paste',value=value);assert typed['verified']
+                    actual=c.script('read',path=remote,fields=list(expected))['fields'];case['reader_phases'][phase]=actual;assert actual==phases[phase]
+                    if rest:
+                        c.script('call',path=remote,name='resetLimFeaUsed',args=[rest]);actual=c.script('read',path=remote,fields=list(expected))['fields'];case['reader_phases'][rest]=actual;assert actual==phases[rest]
+                    publish()
+                saved=remote[:-4]+'-saved.pdf';c.script('save',path=remote,output=saved);remote=saved;case['close']=c.script('close',path=remote);opened=False;local=c.fetch(remote,folder/(label+'-reader.pdf'))
+            assert inspect(local,expected)['passed'] and script_hashes(local)==script_hashes(input_pdf);case['reader_retained_state']=retained_state(input_pdf,local)
+            final=folder/(label+'-native-after-reader.pdf');probe(local,label+'-native-after-reader',[{'op':'advance','ms':4100},{'op':'assert','values':expected},{'op':'edit','field':used,'value':'5'},{'op':'advance','ms':1000},{'op':'assert','values':{used:'5'}},{'op':'save','path':str(final)}])
+            assert inspect(final,expected|{used:'5'})['passed'] and script_hashes(final)==script_hashes(input_pdf);case['final_retained_state']=retained_state(input_pdf,final);assert hashlib.sha256(input_pdf.read_bytes()).hexdigest()==case['input_sha256'];case['passed']=True;publish()
+        report['passed']=True
+    except Exception as error:report['error']=str(error);raise
+    finally:
+        if opened:
+            try:
+                with c.desktop_lock():
+                    shot=c.command('screenshot');c.fetch(shot['path'],folder/'failure.png');retained=remote[:-4]+'-failed-retained.pdf';c.script('save',path=remote,output=retained);report['cleanup_close']=c.script('close',path=retained);c.fetch(retained,folder/'failed-retained.pdf')
+            except Exception as error:report['cleanup_error']=str(error)
+        publish();print(folder/'roundtrip.json',flush=True)
+
+
+if __name__=='__main__':main()

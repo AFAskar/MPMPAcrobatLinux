@@ -1890,8 +1890,17 @@
       "widget_equality": false,
       "different_appearance_entries": 551,
       "front_page_changed_pixel_fraction": 0.037259747623924144,
-      "semantic_remaining": "CurrentVars.fixRichTextFormatting; seven other serialized objects equal after parsing. Diagnostic name mirrors and Weight Carrying Capacity.Button remain nonserialized differences. Armor contribution displays blank/incorrectly in native while Reader shows15 for canonical10+Wis; under investigation."
+      "semantic_remaining": "CurrentVars.fixRichTextFormatting; seven other serialized objects equal after parsing. Diagnostic name mirrors and Weight Carrying Capacity.Button remain nonserialized differences. Armor contribution displays10 in native while Reader shows15 for canonical10+Wis; under investigation."
     },
     "legacy_2024_failure": "reader-direct-import-1793460544635610835 FAILED on observed JavaScript Debugger. Original Reader caught TypeError spBonusiFrom undefined; native log also catches selection of undefined in FunctionsImport. No original script repair authorized/applied. Same completed request recovered, retained and process terminated in recovery.json, source hash unchanged. Final summary/returned=true does not prove a successful original import. Legacy2024 conversion remains incomplete."
+  },
+  "legacy_import_resource_persistence": {
+    "status": "two bounded original Ki/rest/edited native-Reader-native cases pass; broad milestone incomplete",
+    "evidence": "output/testing/legacy-import-resource-roundtrip-1793461343107863401/roundtrip.json",
+    "final_independent_verification": "output/testing/legacy-import-resource-roundtrip-1793461343107863401/post-verification.json",
+    "scope": "Start separately with same-entry original native and original Reader Ashnar->2014 imports. Fresh native probes assert105 fields, spend2 Ki, original short rest, spend3 Ki, original long rest, save4 spent and reopen. Actual Reader focuses/types the same resource field, repeats both rests and save4. Fresh native after Reader save asserts state, edits to5 and saves. Both original resource rows are Ki Points/max12/SR; this does not qualify every resource or class. All native probes strict pass; both Reader processes terminate. All three original fixtures unchanged.",
+    "retention": "Complete parsed retained add-on payload, CurrentFeatureChoices, CurrentSpells and56 exact remembered spell rows survive each edited save. Independent canonical fields/widgets/AP presence and original embedded-script hashes also pass on both final native outputs in the separate read-only post-verification. Does not prove all APs were rebuilt or exact appearance equality.",
+    "visual": "Native and Reader page1 PNGs at1000px reviewed: used4 is visible. Native armor contribution still10 while Reader15 for canonical10+Wis; formatting is being investigated. Glyph/auto-size/layout differences remain. Full2014 comparison remains FAILED.",
+    "command": "Use the Codex bundled Python: tools/native/legacy-import-resource-roundtrip.py --native output/testing/native-direct-import-1793461191966464798 --reader output/testing/reader-direct-import-1793460778411273239/direct-import.json --readiness output/testing/readiness-1793439251.json"
   }
 }
