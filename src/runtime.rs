@@ -798,6 +798,20 @@ mod tests {
         );
     }
     #[test]
+    fn plain_validation_must_write_to_commit_a_keystroke_replacement() {
+        host(
+            r#"app.calculate=false;var f=getField('A'),validated,formatted;
+          f.setAction('Keystroke',"event.value='K replacement'");
+          f.setAction('Validate',"validated=event.value");
+          f.setAction('Format',"formatted=event.value");f.value='requested';
+          var observed=validated==='K replacement'&&formatted==='requested'&&f.valueAsString==='requested';
+          f.setAction('Validate',"event.value=event.value");f.value='second';var same=f.valueAsString==='K replacement';
+          f.setAction('Validate',"event.value='V replacement'");f.value='third';var replaced=f.valueAsString==='V replacement';
+          f.setAction('Validate',"event.rc=false");f.value='rejected';var rejected=f.valueAsString==='V replacement';
+          f.setAction('Validate','');f.value='fourth';observed&&same&&replaced&&rejected&&f.valueAsString==='K replacement'"#,
+        );
+    }
+    #[test]
     fn original_order_and_numeric_values() {
         host("__host.edit('A','18'); getField('A').value===18 && getField('B').value===19 && getField('C').value===20 && getField('A').valueAsString==='18'");
     }

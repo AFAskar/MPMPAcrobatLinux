@@ -2126,5 +2126,35 @@
     ],
     "generated": "output/testing/native-generated-1793477461431301924/generated.json",
     "fixture_hashes": "output/testing/continuation-event-value-fixtures.json"
+  },
+  "plain_validation_commit": {
+    "status": "bounded plain-text validation precedence qualified with calculations disabled; calculation-enabled normalization remains incomplete",
+    "scope": "Programmatic plain text commits across12 K/V/F handler combinations and five text classes. A present Validate action that does not write event.value commits the original requested text even after K changes the value observed by V. Explicit V self-write/replacement commits; rejection and absent V retain their separately qualified behavior. Rich and choice fields are intentionally outside this repair.",
+    "reader_no_target_reads": "output/testing/reader-script-observation-1793478135739862195/observation.json",
+    "reader_with_target_reads": "output/testing/reader-script-observation-1793478279547901634/observation.json",
+    "native_no_target_reads": "output/testing/script-observation-comparison-1793478330189444443/comparison.json",
+    "native_with_target_reads": "output/testing/script-observation-comparison-1793478384868567015/comparison.json",
+    "observer_control": "output/testing/post-event-getter-control-off.json",
+    "control_scope": "Reader final stored values and common event phase/name/value sequence agree across both observer configurations. The optional target-read column/readStored marker are deliberately different; no full-schema equality claimed between distinct controls. Each native comparison matches its entire corresponding capture exactly.",
+    "old126_counterexample": "output/testing/script-observation-comparison-1793478268066387759/comparison.json",
+    "checks": "127 Rust tests/build/strict all-targets Clippy pass. Current text-only guard: original acceptance2/1793478776528852713, extended import/Ashnar2/1793478846837691140 and generated6/1793478895294978523 pass. Fresh current-binary60-case comparison1793478983561555001 passes. Originals and pinned submodule unchanged.",
+    "failed_reference_history": [
+      "output/testing/reader-script-observation-1793477769177088369/observation.json",
+      "output/testing/reader-script-observation-1793478372378222385/observation.json",
+      "output/testing/reader-script-observation-1793478671074935208/observation.json",
+      "output/testing/reader-script-observation-1793478915511335269/observation.json"
+    ],
+    "failure_scope": "All four result-acknowledgement suites remain FAILED. Every SAME document was recovered/retained/closed without replay; recovery.json verifies readiness, carrier checksum, scripts and observed data. Hiding or fixing carrier size did not resolve the failure. Full recovered60-case captures agree across default visible/hidden/fixed8pt carriers, but recovery equality is not a qualification pass. A smaller calculation-enabled batch without rejected field commits is now running to isolate the cause.",
+    "coverage_invalidated": "output/testing/reader-event-value-1793477531833169356/event-value.json",
+    "coverage_scope": "The earlier24-case pilot has six empty Calculate traces; its wrapper qualification is invalidated and original summary retained.18 K/V/F measurements remain diagnostic data. New helper requires nonempty target traces and freezes source bytes before execution.",
+    "remaining": "Calculation-enabled post-event normalization/reentry and exact sequencing, rich/choice commits, real class/table coverage and per-fixture persistence remain incomplete. No broad milestone or overall goal complete.",
+    "native_current_text_scope": "output/testing/script-observation-comparison-1793478983561555001/comparison.json",
+    "generated": "output/testing/native-generated-1793478895294978523/generated.json",
+    "recovered_carrier_control": "output/testing/post-event-carrier-recovery-control.json",
+    "reproduce": [
+      "tools/native/reader-event-value.py --readiness <readiness.json> --observer tools/native/post-event-commit-observer.js --expected-cases 60 --observer-options '{\"calculations\":false,\"readStored\":false}'",
+      "tools/native/verify-script-observation.py --reader <observation.json>",
+      "tools/native/recover-script-observation.py --failed <failed-observation.json>"
+    ]
   }
 }
