@@ -298,7 +298,7 @@ impl Runtime {
             (|| -> Result<String> {
                 let selected = if path.is_empty() {
                     if !interactive { bail!("XFDF file picker requires interactive mode or an explicit local path") }
-                    let output = std::process::Command::new("zenity").args(["--file-selection", "--title=Import XFDF form data", "--file-filter=XFDF | *.xfdf *.xml"]).output()?;
+                    let output = std::process::Command::new("zenity").args(["--file-selection", "--title=Import XFDF form data", "--file-filter=XFDF | *.xfdf *.xml"]).arg(format!("--filename={}/", xfdf_base.display())).output()?;
                     if !output.status.success() {
                         if output.status.code() == Some(1) { return Ok(json!({"cancelled":true}).to_string()) }
                         bail!("Native XFDF file picker failed")

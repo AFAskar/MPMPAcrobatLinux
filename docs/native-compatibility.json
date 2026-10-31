@@ -2217,5 +2217,31 @@
     ],
     "generated_regression": "output/testing/native-generated-1793483492926450924/generated.json",
     "lifecycle_regression": "output/testing/native-lifecycle-1793483670608819995/lifecycle.json"
+  },
+  "xfdf_picker_positive": {
+    "status": "bounded 2024 GTK selection/cancel and native-Reader-native retained state qualified; full imports milestone incomplete",
+    "scope": "Picker starts beside the current PDF. Actual owned GTK file list offers exactly one disposable XFDF; invoke its offered list.select-all action then the sensitive/showing owned OK button. Import diagnostics must match the file path and SHA-256. No focus guess, hidden path injection or direct-path import substitutes for selection. Existing rich notes remain unchanged.",
+    "native": "output/testing/native-xfdf-picker-select-1793484169796806681/picker.json",
+    "cancel": "output/testing/native-xfdf-picker-cancel-1793484243343725360/picker.json",
+    "reader": "output/testing/reader-script-observation-1793484242186091772/observation.json",
+    "native_reader_saved": "output/testing/script-observation-comparison-1793484326048599235/comparison.json",
+    "comparison": "Fresh native reopens retain complete decoded field/span data, ignoring only JSON object-member order; every property/value and field/span array order remains strict. Reader checksum/sentinel/scripts and saved canonical/visible Player Name AP match. Native page1 Poppler render reviewed. Full pixels are not equal or claimed.",
+    "checks": "129 Rust tests/build/formatting/strict all-targets Clippy; native successful selection, unrelated-note raw-data control, Cancel no-mutation, native fresh reopen/save and independent canonical/widgets/AP/scripts pass. Real Reader reopen/save and subsequent native full captured-state/AP checks pass.",
+    "failed_pilots": [
+      "output/testing/native-xfdf-picker-select-1793483858269860453/picker.json",
+      "output/testing/native-xfdf-picker-select-1793483903050186382/picker.json",
+      "output/testing/native-xfdf-picker-select-1793483969506416771/picker.json",
+      "output/testing/native-xfdf-picker-select-1793484009060211826/picker.json",
+      "output/testing/native-xfdf-picker-select-1793484025186766099/picker.json",
+      "output/testing/native-xfdf-picker-select-1793484122325439281/picker.json"
+    ],
+    "failure_scope": "GTK roles did not expose Table/Selection interfaces; offered row actions were list actions; a direct-child count missed container nesting. One repeated invalid-action pilot followed a failed edit command. The final strict JSON-string reopen pilot failed only object-member ordering; all those reports remain failed, with owned picker cleanup. Initial positive1793484060969906966 passes selection/save but did not run fresh reopen.",
+    "remaining": "Default KDE portal and other fixtures/multiple-file UI scenarios remain unqualified. Original deprecated Import wrapper platform text-sizing divergence, complete character transfers/options and all-class table workflows remain incomplete. No broad milestone or overall goal complete.",
+    "reproduce": [
+      "python3 tools/native/xfdf-picker.py --select",
+      "python3 tools/native/xfdf-picker.py",
+      "tools/native/reader-script-observation.py --input <picker-native.pdf> --observer tools/native/xfdf-picker-state-observer.js --readiness output/testing/readiness-1793480531.json",
+      "tools/native/verify-script-observation.py --reader <observation.json> --reader-saved --field \"Player Name\" --canonical-value \"Picked \u03a9\" --display-value \"Picked \u03a9\""
+    ]
   }
 }

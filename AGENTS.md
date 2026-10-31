@@ -70,3 +70,5 @@ Read `docs/testing-environment.md` before changing or testing PDF behavior.
 - When a calculated mirror validates back into its primary field, distinguish cross-field reentry from same-field recursion. Preserve the outer assignment guard and qualify the actual K/V/C/F sequence. A normalized final value alone does not establish a generic post-calculation normalization rule.
 
 - Generated widgets must not reuse template appearances that can predate current field values. Qualify original generation after edited save/reopen, checking canonical and visible AP text separately; preserve live formatted display when cloning without introducing extra field events.
+
+- A GTK tree-table role does not establish Table/Selection interfaces. Inspect offered actions. A list.select-all picker test is qualified only with exactly one known disposable file and must verify actual imported path/hash; keep default-portal/multiple-file coverage separate. JSON object-member order normalization must be disclosed while retaining all span properties and array order.
