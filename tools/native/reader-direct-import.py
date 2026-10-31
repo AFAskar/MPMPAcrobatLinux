@@ -43,6 +43,27 @@ def acknowledge(owner,elements):
     return c.command('invoke',name='OK',owner=owner)
 
 
+def import_console(report,elements):
+    roots=[item for item in elements if item.get('class')=='#32770' and item.get('name')=='JavaScript Debugger']
+    if not roots:return None
+    assert len(roots)==1,'More than one Reader console'
+    owner=roots[0]['handle'];edits=[item for item in elements if item.get('owner')==owner and item.get('class')=='RICHEDIT50W'];assert len(edits)==1
+    edit=edits[0];live=c.command('dialog_control',owner=owner,handle=edit['handle']);text=live['text']
+    assert 'An error occurred during importing:' in text or 'requires you to make a selection of a sub-choice' in text,'Unexpected console content; no input sent'
+    observed={'owner':owner,'edit':edit['handle'],'live':live}
+    previous=report.setdefault('original_console',[])
+    if not previous or previous[-1]['live']['text']!=text:previous.append(observed)
+    return observed
+
+
+def close_import_console(report):
+    observed=import_console(report,c.command('inspect'))
+    if observed is None:return
+    focused=c.command('focus_control',owner=observed['owner'],handle=observed['edit']);assert focused['focused']
+    report['console_close']={'focus':focused,'action':c.command('keys',keys='%{F4}')}
+    assert not [item for item in c.command('inspect') if item.get('class')=='#32770' and item.get('name')=='JavaScript Debugger']
+
+
 def wait_import_summary(source,report,folder):
     deadline=time.monotonic()+300
     normalize=lambda value:re.sub(r'\\+',lambda _:chr(92),value).replace('\r','').replace('\n','').lower()
@@ -56,6 +77,9 @@ def wait_import_summary(source,report,folder):
                 assert normalize(source) in normalize(text), 'Security warning is not the exact uploaded source PDF'
                 allowed=[item for item in elements if item.get('owner')==owner and item.get('class')=='Button' and item.get('name')=='Allow'];assert len(allowed)==1
                 report.setdefault('file_access',[]).append({'dialog':elements,'action':c.command('invoke',name='Allow',owner=owner)})
+                (folder/'progress.json').write_text(json.dumps(report,indent=2)+'\n')
+            elif root.get('name')=='JavaScript Debugger':
+                import_console(report,elements)
                 (folder/'progress.json').write_text(json.dumps(report,indent=2)+'\n')
             elif root.get('name')!='IMPORT FROM PDF DIALOG':
                 report['unexpected_dialog']=elements
@@ -84,6 +108,7 @@ def main():
             report['import_click']=c.command('invoke',name=buttons[0]['name'],owner=root['handle'])
             root,elements=wait_import_summary(from_path,report,folder);report['summary_controls']=elements;report['summary_ack']=acknowledge(root['handle'],elements)
             report['completion']=c.script_result(pending,timeout=120);pending=None
+            close_import_console(report)
             summary=c.script('field_summary',path=remote,fields=['PC Name'])['fields']['PC Name'];report['summary']=summary
             c.script('set',path=remote,values={'User Script':''});saved=remote[:-4]+'-saved.pdf';c.script('save',path=remote,output=saved);remote=saved
             report['close']=c.script('close',path=remote);opened=False;local=c.fetch(remote,folder/'reader-imported.pdf');captured=style.saved_capture(local,summary,source);report['captured']=captured
@@ -94,7 +119,10 @@ def main():
                 assert len(captured['cantrips'])==3 and len(captured['spells'])==6 and captured['choice']==['agonizing blast: eldritch blast']
             assert inspect(local,captured['fields'])['passed'] and script_hashes(local)==script_hashes(source)
             report['source_after_sha256']=c.powershell('(Get-FileHash -Algorithm SHA256 '+c.literal(from_path)+').Hash').strip().lower();assert report['source_after_sha256']==report['source_sha256']
-            report['passed']=True
+            report['observation_verified']=True
+            report['workflow_passed']=not any('An error occurred during importing:' in entry['live']['text'] for entry in report.get('original_console',[]))
+            report['passed']=report['workflow_passed']
+            if not report['passed']:report['error']='Original DirectImport reported an internal failure; see original_console'
     except Exception as error:
         report['error']=str(error)
         if opened:
@@ -110,9 +138,12 @@ def main():
                         if root.get('name')=='IMPORT FROM PDF DIALOG':c.command('invoke',name='Cancel',owner=root['handle'])
                         elif root.get('name') in ['Things to consider about the import','File not found','File is not one of MPMB\'s Character Record Sheets']:acknowledge(root['handle'],elements)
                     if pending:report['original_completion']=c.script_result(pending,timeout=90)
+                    close_import_console(report)
                     retained=remote[:-4]+'-failed-retained.pdf';c.script('save',path=remote,output=retained);report['cleanup_close']=c.script('close',path=retained);c.fetch(retained,folder/'failed-retained.pdf')
             except Exception as error:report['cleanup_error']=str(error)
         (folder/'direct-import.json').write_text(json.dumps(report,indent=2)+'\n');print(folder/'direct-import.json',flush=True)
 
+    return 0 if report['passed'] else 1
 
-if __name__=='__main__':main()
+
+if __name__=='__main__':raise SystemExit(main())

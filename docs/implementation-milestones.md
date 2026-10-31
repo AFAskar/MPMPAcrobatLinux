@@ -36,3 +36,6 @@ Milestone3a/4 progress: imported Monk resource persistence1793461343107863401 no
 
 
 Milestone4 progress: the synchronous cross-field Format repair now passes exact Reader event order and the original armor formula display. Edited two-input native→Reader→native qualification1793462661642312005 forces changed-save/fresh-reopen/restore (16→15), with actual Reader formula edits and AC25→24. Ki/resource/spells/payload/scripts persist;108 tests/build/clippy, acceptance2, extended2 and generated6 pass. Both Reader processes closed. Exact presentation still fails198/3520 crop pixels; font programs match but automatic sizes8/8.258 differ. Full updated2014 comparison remains unequal. No broad milestone is complete.
+
+
+Milestone3a/4 progress: native console methods/window now have Reader API/output/clear evidence, exact native comparison, six reviewed desktop views including the original legacy2024 error, and source-discard/shared-output tests.109 tests/build/clippy, acceptance2, extended2 and generated6 pass. Reader import failure output is retained/closed while workflow remains explicitly FAILED. The console fixes visible error handling; it does not repair the upstream conversion or complete any broad milestone. Auto sizing, all-class choices/table coverage and other listed gaps remain open.

@@ -15,6 +15,8 @@ var __host = (function () {
   const data=JSON.parse(__initial), fields={}, names=[], journal=[];
   const timers=new Map(), menus={}, gaps=[], errors=[], repairs=[], printJobs=[], attachmentExports=[], assigning=new Set(), formatDirty=new Set(), formatting=new Set();
   let clock=0, timerId=0, calculating=false, pending=false, revision=0;
+  const applicationState=globalThis.__nativeApplicationState||(globalThis.__nativeApplicationState={});
+  const consoleState=applicationState.console||(applicationState.console={visible:false,messages:[]});
   const unsupportedErrors=globalThis.__nativeApplicationState?(globalThis.__nativeApplicationState.unsupportedErrors||(globalThis.__nativeApplicationState.unsupportedErrors=new WeakSet())):new WeakSet();
   function unsupported(name) { gaps.push(name);const error=Error('Unsupported Acrobat API: '+name);unsupportedErrors.add(error);throw error; }
   function safeExceptionText(value){try{return String(value)}catch(_){return '[unprintable thrown value]'}}
@@ -252,13 +254,17 @@ var __host = (function () {
     repairs.push(repair);__log('Applied qualified runtime repair: '+repair.id);
   }
   return {activate,pageWidgets,widgetDisplay,setWidgetDisplay,widgetRect,setWidgetRect,menuItems,popup,applyQualifiedRepairs,get revision(){return revision},recordError(e){errors.push(e)},fields,names,data,menus,gaps,errors,source,unsupported,gap,calculateNow,edit,advance,execDialog,invokeMenu,command,spawn,removeField,deletePages,
+    consoleView(){return copyData(consoleState)},
+    consoleVisible(visible){consoleState.visible=!!visible},
+    consolePrint(message){consoleState.messages.push({document:data.file,text:message});__log(message)},
+    consoleClear(){consoleState.messages.length=0},
     dataObjects(){return JSON.parse(JSON.stringify(data.attachments||[]))},
     exportDataObject(params){if(typeof params==='string')params={cName:params};const result=JSON.parse(__attachment(JSON.stringify(params)));attachmentExports.push(result);},
     print(params){const result=JSON.parse(__print(JSON.stringify({params,state:JSON.parse(__host.snapshot())})));printJobs.push(result);return undefined},
     ready(){let n=0;while(!globalThis.calculate||!app.calculate||globalThis.delay){let t=Array.from(timers.values()).sort((a,b)=>a.at-b.at)[0];if(!t||++n>100)throw Error('Document calculations suspended without a resumable timer');advance(Math.max(0,t.at-clock));}return true},
     snapshot(){let o={__structure:journal,__order:data.order};if(data.bookmarksChanged)o.__bookmarks=bookmarkRoot;for(const n of names){let f=fields[n];o[n]={value:Array.isArray(f.value)?f.value:f.valueAsString,icon:f._icon,caption:f._caption,captions:f._captions,actions:f._modifiedActions,widgets:f._widgets,currentValueIndices:f.currentValueIndices,textSize:f.textSize,alignment:f.alignment,multiline:f.multiline,textColor:f.textColor,textFont:f.textFont,richText:f.richText,rawRichValue:copyData(f._richRaw),richValueChanged:!sameRich(f._richRaw,f._initialRichRaw),appearanceDirty:!!f._appearanceDirty,richValue:f.richText?(f._formattedRichValue===null?[]:copyData(f._formattedRichValue===undefined?f._richRaw:f._formattedRichValue)):[],richRenderActive:!!f.richText&&f._formattedRichValue!==null,defaultStyle:copyData(f._defaultStyle),formatted:f._formatted===undefined?f.valueAsString:f._formatted,display:f.display,userName:f.userName,submitName:f.submitName,readonly:f.readonly,items:f.items};}return JSON.stringify(o)},
     timer(code,ms){let id=++timerId;timers.set(id,{id,code:String(code),at:clock+Math.max(1,Number(ms)||1)});return id},clear(id){timers.delete(id)},
-    diagnostics(){return JSON.stringify({gaps,errors,repairs,printJobs,attachmentExports,timers:timers.size,field_count:names.length,menus:Object.keys(menus)})}
+    diagnostics(){return JSON.stringify({gaps,errors,repairs,printJobs,attachmentExports,console:consoleState,timers:timers.size,field_count:names.length,menus:Object.keys(menus)})}
   };
 })();
 var display={visible:0,hidden:1,noPrint:2,noView:3};
@@ -269,7 +275,7 @@ var highlight={n:'none',i:'invert',p:'push',o:'outline'};
 var position={textOnly:0,iconOnly:1,iconTextV:2,textIconV:3,iconTextH:4,textIconH:5,overlay:6};
 var scaleWhen={always:0,never:1,tooBig:2,tooSmall:3},scaleHow={proportional:0,anamorphic:1};
 var event={target:globalThis,name:'Open',type:'Doc',value:'',rc:true};
-var console={println(s){__log(String(s))},show(){__host.gap('console.show UI')},clear(){__host.gap('console.clear UI')}};
+var console={println(s){__host.consolePrint(String(s));return true},show(){__host.consoleVisible(true)},clear(){__host.consoleClear()}};
 var global=globalThis.__nativeApplicationGlobal||{};
 var __appState=globalThis.__nativeApplicationState||{};
 var app={viewerType:'Reader',viewerVersion:26,formsVersion:26,platform:'UNIX',language:'ENU',calculate:true,runtimeHighlight:false,

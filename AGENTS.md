@@ -55,3 +55,5 @@ Read `docs/testing-environment.md` before changing or testing PDF behavior.
 - Match diagnostic entry points in native and Reader. Original RunUserScript executes every installed CurrentScriptFiles add-on before the manual observer; calling only the observer body natively can miss duplicate subclass registrations and produce misleading parser/identity differences. Record this side effect and compare the same original invocation in both engines.
 
 - Serialized state stored in PDF text fields must protect Unicode string values and property names from field normalization. Independently compare complete decoded imported payloads; a matching length or normalized NBSP/space comparison cannot establish preserved scripts.
+
+- An original MPMB import can catch an internal error, return true and show its final summary. Inspect original console/error output before qualifying it as successful. Keep expected-error observation/cleanup qualification separate from a clean workflow pass; retain and close the same request/document without replay.

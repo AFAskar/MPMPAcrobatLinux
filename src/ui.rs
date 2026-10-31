@@ -138,13 +138,20 @@ pub fn main() -> Result<()> {
         std::fs::create_dir_all(dir)?;
         std::env::set_var("MPMB_UI_SMOKE_DIR", dir);
     }
+    let mut smoke_dialogs = if smoke.is_some() {
+        vec![json!({"result":"ok"})]
+    } else {
+        vec![]
+    };
+    if smoke.is_some() && std::env::var_os("MPMB_UI_SMOKE_CONSOLE").is_some() {
+        if let Some(source) = std::env::var_os("MPMB_UI_SMOKE_IMPORT_SOURCE") {
+            let source = PathBuf::from(source).canonicalize()?;
+            smoke_dialogs.push(json!({"title":"IMPORT FROM PDF DIALOG","result":"ok","values":{"fLoc":source,"fRel":false,"icYe":false,"icNo":true}}));
+        }
+    }
     let rt = Runtime::new(
         &pdf,
-        if smoke.is_some() {
-            vec![json!({"result":"ok"})]
-        } else {
-            vec![]
-        },
+        smoke_dialogs,
         if smoke.is_some() {
             vec![json!(1), json!(1)]
         } else {
@@ -273,6 +280,167 @@ fn bookmark_items(ui: &mut egui::Ui, node: &Value, path: &str, action: &mut Opti
     }
 }
 impl Reader {
+    fn draw_console(&mut self, ctx: &egui::Context) {
+        let Ok(state) = self.rt.eval("__host.consoleView()") else {
+            return;
+        };
+        if state["visible"] != true {
+            return;
+        }
+        let text = state["messages"]
+            .as_array()
+            .map(|messages| {
+                messages
+                    .iter()
+                    .map(|message| {
+                        format!(
+                            "[{}]\n{}",
+                            message["document"].as_str().unwrap_or(""),
+                            message["text"].as_str().unwrap_or("")
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
+        let mut open = true;
+        let mut clear = false;
+        egui::Window::new("JavaScript Console")
+            .open(&mut open)
+            .default_size([820., 350.])
+            .show(ctx, |ui| {
+                clear = ui.button("Clear").clicked();
+                if text.is_empty() {
+                    ui.label("Console is empty");
+                } else {
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            let mut read_only = text.as_str();
+                            ui.add(
+                                egui::TextEdit::multiline(&mut read_only)
+                                    .font(egui::TextStyle::Monospace)
+                                    .desired_width(ui.available_width()),
+                            );
+                        });
+                }
+            });
+        let result = if clear {
+            self.rt.eval("console.clear()")
+        } else {
+            Ok(Value::Null)
+        };
+        if let Err(error) = result {
+            self.status = format!("Console clear failed: {error:#}");
+        }
+        if !open {
+            if let Err(error) = self.rt.eval("__host.consoleVisible(false)") {
+                self.status = format!("Console close failed: {error:#}");
+            }
+        }
+    }
+    fn console_smoke(&mut self, ctx: &egui::Context, dir: &std::path::Path) {
+        let import_failure = std::env::var_os("MPMB_UI_SMOKE_IMPORT_SOURCE").is_some();
+        let step = (|| -> Result<bool> {
+            match self.smoke_phase {
+                0 if self.texture.is_some() => {
+                    if import_failure {
+                        self.rt.command("console.clear();DirectImport(true)")?;
+                    } else {
+                        self.rt.command("console.clear();console.println('Native console output\\nSecond line.');console.show()")?;
+                    }
+                    self.smoke_phase = 1;
+                }
+                1 => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+                    self.smoke_phase = 2;
+                }
+                2 if capture(ctx, &dir.join("console-visible.png")) => {
+                    let state = self.rt.eval("__host.consoleView()")?;
+                    if state["visible"] != true {
+                        bail!("Console did not become visible");
+                    }
+                    let messages = state["messages"]
+                        .as_array()
+                        .ok_or_else(|| anyhow::anyhow!("Missing console messages"))?;
+                    if import_failure {
+                        if !messages.iter().any(|m| {
+                            m["text"]
+                                .as_str()
+                                .unwrap_or("")
+                                .contains("An error occurred during importing:")
+                        }) {
+                            bail!("Original import error was not displayed");
+                        }
+                        let diagnostics = self.rt.diagnostics()?;
+                        let errors = diagnostics["errors"].as_array().ok_or_else(|| {
+                            anyhow::anyhow!("Missing original field error evidence")
+                        })?;
+                        if errors.len() != 2
+                            || !errors.iter().all(|e| {
+                                e["field"] == "Carrying Capacity Multiplier" && e["event"] == "F"
+                            })
+                        {
+                            bail!("Original field error profile changed");
+                        }
+                    } else if messages.len() != 1
+                        || messages[0]["text"] != "Native console output\nSecond line."
+                    {
+                        bail!("Console text changed");
+                    }
+                    std::fs::write(
+                        dir.join("console-visible.json"),
+                        serde_json::to_vec_pretty(&state)?,
+                    )?;
+                    self.rt.eval("console.clear()")?;
+                    self.smoke_phase = 3;
+                }
+                3 => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+                    self.smoke_phase = 4;
+                }
+                4 if capture(ctx, &dir.join("console-cleared.png")) => {
+                    let state = self.rt.eval("__host.consoleView()")?;
+                    if state["visible"] != true || state["messages"] != json!([]) {
+                        bail!("Clear did not preserve an empty visible console");
+                    }
+                    std::fs::write(
+                        dir.join("console-cleared.json"),
+                        serde_json::to_vec_pretty(&state)?,
+                    )?;
+                    self.rt.eval("__host.consoleVisible(false)")?;
+                    self.smoke_phase = 5;
+                }
+                5 => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+                    self.smoke_phase = 6;
+                }
+                6 if capture(ctx, &dir.join("console-closed.png")) => {
+                    let state = self.rt.eval("__host.consoleView()")?;
+                    if state["visible"] != false {
+                        bail!("Console did not close");
+                    }
+                    std::fs::write(
+                        dir.join("console-closed.json"),
+                        serde_json::to_vec_pretty(&state)?,
+                    )?;
+                    return Ok(true);
+                }
+                _ => {}
+            }
+            Ok(false)
+        })();
+        if matches!(step, Ok(false)) {
+            return;
+        }
+        let report = json!({"passed":step.is_ok(),"status":self.status,"scope":"Actual native console window show/output/clear/close. Scripted original import dialogs only; this is not clean-import or pointer-control qualification.","expected_original_import_failure":import_failure,"mpmb_workflow_passed":if import_failure {Some(false)} else {None},"error":step.err().map(|e|format!("{e:#}")),"diagnostics":self.rt.diagnostics().unwrap_or(Value::Null)});
+        let _ = std::fs::write(
+            dir.join("desktop-result.json"),
+            serde_json::to_vec_pretty(&report).unwrap(),
+        );
+        self.smoke_phase = 7;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
     fn result(&mut self, r: Result<()>) {
         if r.is_ok() {
             self.unsaved = true;
@@ -329,7 +497,18 @@ impl eframe::App for Reader {
                     ui.label(&self.status);
                 });
         }
-        if let Some(dir) = self.smoke.clone() {
+        if std::env::var_os("MPMB_UI_SMOKE_CONSOLE").is_some() {
+            if let Some(dir) = self.smoke.clone() {
+                if self.smoke_phase < 7 {
+                    self.console_smoke(ctx, &dir);
+                }
+            }
+        }
+        if let Some(dir) = self
+            .smoke
+            .clone()
+            .filter(|_| std::env::var_os("MPMB_UI_SMOKE_CONSOLE").is_none())
+        {
             if self.texture.is_some() && self.smoke_phase == 0 {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
                 self.smoke_phase = 1;
@@ -473,6 +652,9 @@ impl eframe::App for Reader {
                     });
                 }},Err(e)=>{ui.label(format!("Menu error: {e:#}"));}
             }});
+            if ui.button("Console").clicked() {
+                if let Err(error) = self.rt.eval("console.show()") { self.status = format!("Console failed: {error:#}"); }
+            }
             if let Ok(d)=self.rt.diagnostics(){if d["repairs"].as_array().is_some_and(|v|!v.is_empty()){ui.colored_label(egui::Color32::YELLOW,"Known sheet repair active: 2024 wild-shape typo. Original PDF scripts are preserved.");}}
             ui.label(&self.status);
         });
@@ -583,6 +765,7 @@ impl eframe::App for Reader {
                 }
             });
         });
+        self.draw_console(ctx);
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
     }
 }

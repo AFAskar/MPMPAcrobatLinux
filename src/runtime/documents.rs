@@ -348,6 +348,27 @@ mod tests {
     }
 
     #[test]
+    fn console_is_application_scoped_and_survives_source_discard_without_dirtying_fields() {
+        let files = Fixture::new();
+        let target = files.pdf("target.pdf", "target");
+        files.pdf("source.pdf", "source");
+        let runtime = Runtime::new(
+            &Arc::new(Pdf::open(&target).unwrap()),
+            vec![],
+            vec![],
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+        let observed = runtime.eval(r#"var printed=console.println('root output');console.show();var source=app.openDoc({cPath:'source.pdf',oDoc:this,bHidden:true});source.console.println('\u00a0\u2028\ud83d\ude00');source.closeDoc(true);var view=__host.consoleView(),out={printlnReturn:printed,visible:view.visible,messages:view.messages.slice(),root:getField('A').valueAsString,dirty:dirty};view.messages.length=0;out.snapshotIsCopy=__host.consoleView().messages.length===2;console.clear();out.clearLeavesVisible=__host.consoleView().visible;out.cleared=__host.consoleView().messages.length;__host.consoleVisible(false);out.closed=__host.consoleView().visible;out.diagnosticErrors=JSON.parse(__host.diagnostics()).errors.length;out"#).unwrap();
+        assert_eq!(
+            observed,
+            json!({"printlnReturn":true,"visible":true,"messages":[{"document":"target.pdf","text":"root output"},{"document":"source.pdf","text":"\u{a0}\u{2028}😀"}],"root":"target","dirty":false,"snapshotIsCopy":true,"clearLeavesVisible":true,"cleared":0,"closed":false,"diagnosticErrors":0})
+        );
+    }
+
+    #[test]
     fn invalid_relative_owners_and_missing_files_leave_the_target_intact() {
         let files = Fixture::new();
         let target = files.pdf("target.pdf", "target");

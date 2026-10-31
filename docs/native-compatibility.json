@@ -1932,5 +1932,22 @@
       "full_appearances_different": 551,
       "front_page_changed_pixel_fraction": 0.03725340013710576
     }
+  },
+  "native_console": {
+    "status": "qualified three observed console methods, application sharing and native output/clear/close views; interactive input/pointer controls unqualified",
+    "scope": "console.println records genuine output and returns observed true after writing; show/clear return undefined. One application-scoped message/visibility state is shared by live documents. Source messages survive discard; view snapshots are copies; clear preserves visible window and recorded field errors. Native modeless read-only selectable console supports show/clear/close and toolbar opening without changing form dirty state.",
+    "reader": "output/testing/reader-console-1793466256620441882/console.json",
+    "native_api": [
+      "output/testing/script-observation-comparison-1793466590252918518/comparison.json",
+      "output/testing/script-observation-comparison-1793466590252622973/comparison.json"
+    ],
+    "old_return_counterexample": "output/testing/script-observation-comparison-1793466420773302297/comparison.json",
+    "native_desktop": "output/testing/native-console-1793466591337368543/console.json",
+    "visual_scope": "Six corrected-return native visible/empty/closed screenshots reviewed in native-console1793466591337368543: basic2014 and actual original legacy->2024 failure. Chef warning and caught selection-of-undefined import error are readable, followed by genuinely empty and closed views. Original dialogs use explicit scripted replies; pointer/keyboard console controls and interactive code input remain unqualified.",
+    "reference_failure_cleanup": "output/testing/reader-direct-import-1793466677538925381/direct-import.json",
+    "failure_scope": "Reader original legacy2024 import is still FAILED/exit1, workflow_passed=false; observation_verified=true, source unchanged, output retained, owned console closed and Reader process terminated. Recognize only the observed original import warning/error console, wait for same request to complete, close its verified owned edit window, then save/close. No mutation replay and no original script repair. Console/error output is checked before calling an import successful; returned=true and final summary are insufficient.",
+    "validation": "109 Rust tests/build/strict all-targets clippy; acceptance2/1793466718961344432, extended/import-Ashnar1793466808273243890 and generated6/1793466896181913412 pass.",
+    "failed_history": "Reader-console1793465973908707976 failed an incorrect undefined-return assumption, retained/closed. Corrected actual-value oracle1793466256620441882 passes; earlier failed result is not relabeled. Native old UI109 showed/cleared correctly but println returned undefined, rejected by exact API comparator.",
+    "remaining": "Original legacy2024 conversion still fails upstream. Full layout/auto sizing, dialog styles/controls, imports/version pairs, all-class choices/table behavior and lifecycle remain incomplete. No broad milestone complete."
   }
 }
