@@ -728,6 +728,10 @@ mod tests {
         host("var f=getField('A');f._widgets=[{page:2,rect:[30.664100646972656,390.4129943847656,326.3550109863281,768.0960083007812]}];f.rect[0]===30.664108276367188&&f._widgets[0].rect[0]===30.664100646972656");
     }
     #[test]
+    fn inactive_rectangle_writes_reject_without_mutating_widgets_or_revision() {
+        host("var f=getField('A');f._widgets=[{page:-1,rect:[1,2,20,30]},{page:2,rect:[40,50,60,70]}];var before=JSON.stringify(f._widgets),revision=__host.revision,errors=0;[f,getField('A.0')].forEach(function(widget){try{widget.rect=[10,40,25,5]}catch(e){if(e.name==='InvalidSetError'&&e.message==='Set not possible, invalid or unknown.')errors++}});var rejected=errors===2&&JSON.stringify(f._widgets)===before&&__host.revision===revision;getField('A.1').rect=[41,80,65,52];rejected&&JSON.stringify(f._widgets[0].rect)==='[1,2,20,30]'&&JSON.stringify(f._widgets[1].rect)==='[41,52,65,80]'&&__host.revision===revision+1");
+    }
+    #[test]
     fn field_rect_uses_acrobat_top_bottom_order() {
         host("var f=getField('A');f._widgets=[{page:0,rect:[1,2,20,30]}];var correct=f.rect[1]===30;f.rect=[10,40,25,5];correct&&JSON.stringify(f._widgets[0].rect)==='[10,5,25,40]'");
     }

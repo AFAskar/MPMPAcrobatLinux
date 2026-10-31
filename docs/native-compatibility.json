@@ -1949,5 +1949,37 @@
     "validation": "109 Rust tests/build/strict all-targets clippy; acceptance2/1793466718961344432, extended/import-Ashnar1793466808273243890 and generated6/1793466896181913412 pass.",
     "failed_history": "Reader-console1793465973908707976 failed an incorrect undefined-return assumption, retained/closed. Corrected actual-value oracle1793466256620441882 passes; earlier failed result is not relabeled. Native old UI109 showed/cleared correctly but println returned undefined, rejected by exact API comparator.",
     "remaining": "Original legacy2024 conversion still fails upstream. Full layout/auto sizing, dialog styles/controls, imports/version pairs, all-class choices/table behavior and lifecycle remain incomplete. No broad milestone complete."
+  },
+  "single_line_autosize_discovery": {
+    "status": "Reader diagnostics pass; native presentation differs; candidate rejected",
+    "scope": "Isolated actions cleared on eight active 2014 widgets, two fonts, dimensions and short/long text. Not original MPMB workflow passes.",
+    "reader_segoe": "output/testing/reader-script-observation-1793467394881580670/observation.json",
+    "reader_footlight": "output/testing/reader-script-observation-1793467887312222429/observation.json",
+    "native_baseline": "output/testing/native-autosize-grid-1793467430900907853/report.json",
+    "ap_comparison": "output/testing/autosize-active-grid-1793467378692525566/ap-comparison.json",
+    "differences": "Segoe auto sizes for heights8/11/14/20/30 are Reader6/8.258/10.495/15.017/22.517 versus native5/8/11/17/18. Width-constrained cases also differ.",
+    "rejected_candidate": "Continuous hhea line-cell sizing approximates Segoe but is disproved by Footlight. Its embedded em2048/hhea1416,-458 predicts much larger text than observed Reader5.889/8.117/10.318/14.763/22.135. Candidate reverted, no sizing repair qualified.",
+    "failed_probe": "Reader1793466897307062547 failed rect assignment to inactive widget0. Same request recovered, calculations restored, saved/closed; remains failed.",
+    "remaining": "Derive metrics across fonts; exact sizes, advances, layout and pixels remain incomplete. Full goal and milestones remain active."
+  },
+  "inactive_widget_rectangles": {
+    "status": "qualified inactive setter rejection in three fixtures; broad geometry/presentation partial",
+    "scope": "Parent rect addresses widget0. Valid rectangle writes to inactive widget0 reject with exact InvalidSetError and preserve both widgets; indexed active sibling can move/restore. Legacy has no active sibling. Native rejection leaves revision unchanged. Isolated API diagnostics, not original class/table workflows.",
+    "reader": [
+      "output/testing/reader-script-observation-1793468268595106999/observation.json",
+      "output/testing/reader-script-observation-1793468352015329682/observation.json",
+      "output/testing/reader-script-observation-1793468722127630330/observation.json"
+    ],
+    "native": [
+      "output/testing/script-observation-comparison-1793468410611012628/widget-rectangles.json",
+      "output/testing/script-observation-comparison-1793468433417522273/widget-rectangles.json",
+      "output/testing/script-observation-comparison-1793468801460112714/widget-rectangles.json"
+    ],
+    "counterexample": "output/testing/script-observation-comparison-1793468350862004220/comparison.json",
+    "failed_legacy_diagnostic": "output/testing/reader-script-observation-1793468432260551972/observation.json",
+    "same_request_recovery": "output/testing/reader-script-observation-1793468432260551972/recovery.json",
+    "checks": "110 Rust tests, build, strict all-targets Clippy and original current-sheet acceptance2/1793468460102530515 pass. Source hashes/submodule unchanged.",
+    "reproduce": "tools/native/reader-script-observation.py --input PDF --observer tools/native/widget-rectangle-observer.js --readiness QUALIFIED_READINESS; tools/native/verify-script-observation.py --reader OBSERVATION; tools/native/verify-widget-rectangles.py OBSERVATION COMPARISON",
+    "remaining": "Other rejected rectangle inputs, generic widget-property setters, full geometry/rendering and all-class persistence remain incomplete."
   }
 }
