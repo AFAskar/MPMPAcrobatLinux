@@ -26,6 +26,40 @@ public static class DesktopNative {
  static long NumberMessage(IntPtr h,uint message){UIntPtr result;if(MessageValue(h,message,UIntPtr.Zero,IntPtr.Zero,2,1000,out result)==IntPtr.Zero)throw new Exception("Control query timed out");return unchecked((long)result.ToUInt64());}
  public static bool ReadOnlyEdit(IntPtr h){return (WindowStyle(h,-16).ToInt64()&0x800)!=0;}
  public static string ControlText(IntPtr h){long length=NumberMessage(h,0xE);if(length<0||length>1048576)throw new Exception("Unsupported control text length");var text=new StringBuilder((int)length+1);UIntPtr result;if(MessageRead(h,0xD,(UIntPtr)(length+1),text,2,1000,out result)==IntPtr.Zero)throw new Exception("Control text read timed out");if(result.ToUInt64()!=(ulong)text.Length)throw new Exception("Control text read length differs");return text.ToString();}
+ [StructLayout(LayoutKind.Sequential)] struct MENUBARINFO {public uint size;public RECT rect;public IntPtr menu,window;public uint flags;}
+ [StructLayout(LayoutKind.Sequential)] struct MENUITEMINFO {public uint size,mask,type,state,id;public IntPtr submenu,checkedBitmap,uncheckedBitmap;public UIntPtr data;public IntPtr text;public uint length;public IntPtr bitmap;}
+ [DllImport("user32.dll",SetLastError=true)] static extern bool GetMenuBarInfo(IntPtr window,int obj,int item,ref MENUBARINFO info);
+ [DllImport("user32.dll")] static extern bool IsMenu(IntPtr menu);
+ [DllImport("user32.dll")] static extern int GetMenuItemCount(IntPtr menu);
+ [DllImport("user32.dll",EntryPoint="GetMenuItemInfoW",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool GetMenuItemInfo(IntPtr menu,uint item,bool byPosition,ref MENUITEMINFO info);
+ [DllImport("user32.dll",SetLastError=true)] static extern bool GetMenuItemRect(IntPtr owner,IntPtr menu,uint item,out RECT rect);
+ public sealed class MenuEntry {public int position;public uint id,type,state;public long submenu;public string text;public bool text_qualified;public int[] rect;}
+ public sealed class PopupInfo {public long window,menu;public MenuEntry[] items;}
+ public static PopupInfo PopupMenu(IntPtr window){
+  var bar=new MENUBARINFO();bar.size=(uint)Marshal.SizeOf(bar);
+  if(!GetMenuBarInfo(window,-4,0,ref bar)||!IsMenu(bar.menu))throw new Exception("Cannot read popup menu handle");
+  int count=GetMenuItemCount(bar.menu);if(count<0||count>4096)throw new Exception("Unsupported popup item count");
+  var entries=new List<MenuEntry>();
+  for(uint index=0;index<count;index++){
+   var item=new MENUITEMINFO();item.size=(uint)Marshal.SizeOf(item);item.mask=0x147;
+   if(!GetMenuItemInfo(bar.menu,index,true,ref item))throw new Exception("Cannot read popup item metadata");
+   if(item.length>65535)throw new Exception("Popup label exceeds limit");
+   string text="";bool qualified=false;
+   if(item.length>0){
+    uint capacity=item.length+1;IntPtr buffer=Marshal.AllocHGlobal(checked((int)capacity*2));
+    try{
+     for(int p=0;p<capacity;p++)Marshal.WriteInt16(buffer,p*2,0);
+     item.text=buffer;item.length=capacity;
+     if(!GetMenuItemInfo(bar.menu,index,true,ref item))throw new Exception("Cannot read popup label");
+     if(item.text!=buffer||item.length>=capacity)throw new Exception("Popup label buffer changed");
+     text=Marshal.PtrToStringUni(buffer,(int)item.length);qualified=text.Length==item.length&&text.IndexOf('\0')<0;
+    }finally{Marshal.FreeHGlobal(buffer);}
+   }
+   RECT bounds;int[] rect=null;if(GetMenuItemRect(IntPtr.Zero,bar.menu,index,out bounds))rect=new[]{bounds.Left,bounds.Top,bounds.Right-bounds.Left,bounds.Bottom-bounds.Top};
+   entries.Add(new MenuEntry{position=(int)index,id=item.id,type=item.type,state=item.state,submenu=item.submenu.ToInt64(),text=text,text_qualified=qualified,rect=rect});
+  }
+  return new PopupInfo{window=window.ToInt64(),menu=bar.menu.ToInt64(),items=entries.ToArray()};
+ }
  public static int ComboIndex(IntPtr h){return checked((int)NumberMessage(h,0x147));}
  public static int ComboCount(IntPtr h){long count=NumberMessage(h,0x146);if(count<0||count>4096)throw new Exception("Unsupported combo item count");return (int)count;}
  public static void FocusControl(IntPtr h,IntPtr owner){uint pid;uint target=GetWindowThreadProcessId(h,out pid),own=GetCurrentThreadId();if(!AttachThreadInput(own,target,true))throw new Exception("Cannot attach control input focus");try{SetForegroundWindow(owner);SetFocus(h);}finally{AttachThreadInput(own,target,false);}if(GetForegroundWindow()!=owner||FocusedControl()!=h)throw new Exception("Input focus differs from requested editable control");}
@@ -132,6 +166,44 @@ function Describe($element) {
  if ($element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern,[ref]$pattern)) {$value=$pattern.Current.Value}
  @{name=$c.Name;class=$c.ClassName;type=$c.ControlType.ProgrammaticName;id=$c.AutomationId;value=$value;rect=@($c.BoundingRectangle.X,$c.BoundingRectangle.Y,$c.BoundingRectangle.Width,$c.BoundingRectangle.Height)}
 }
+function Focused-Element {
+ $element=[Windows.Automation.AutomationElement]::FocusedElement
+ if(-not $element){throw 'No focused UI Automation element'}
+ $current=$element.Current;$ids=@((Reader-Processes).Id);$inReader=$current.ProcessId -in $ids
+ [uint32]$foregroundPid=0;$foreground=[DesktopNative]::GetForegroundWindow();[DesktopNative]::GetWindowThreadProcessId($foreground,[ref]$foregroundPid)|Out-Null
+ # FromHandle can yield only a generic pane for an owner-drawn popup. The
+ # focused Menu provider is a different accessible object; inspect it directly.
+ $children=@()
+ if($inReader -and $current.ControlType -eq [Windows.Automation.ControlType]::Menu -and $current.ClassName -eq '#32768'){
+  $items=$element.FindAll([Windows.Automation.TreeScope]::Children,[Windows.Automation.Condition]::TrueCondition)
+  if($items.Count -gt 4096){throw 'Focused popup exceeds child limit'}
+  $children=@($items|ForEach-Object {Describe $_})
+ }
+ # Do not read an unrelated control's ValuePattern when inventorying focus.
+ @{name=$current.Name;class=$current.ClassName;type=$current.ControlType.ProgrammaticName;rect=@($current.BoundingRectangle.X,$current.BoundingRectangle.Y,$current.BoundingRectangle.Width,$current.BoundingRectangle.Height);process_id=$current.ProcessId;in_reader=$inReader;foreground_pid=$foregroundPid;foreground_class=[DesktopNative]::Class($foreground);native_window_handle=$current.NativeWindowHandle;children=$children}
+}
+function Activate-Popup($wire) {
+ $q=$wire|ConvertFrom-Json;$owner=[IntPtr]([long]$q.owner)
+ if($owner -notin @(Reader-Windows) -or [DesktopNative]::Class($owner) -ne '#32768'){throw 'Owner is not an observed visible Reader popup'}
+ $element=[Windows.Automation.AutomationElement]::FocusedElement
+ for($i=0;$i -lt 4 -and $element -and $element.Current.ControlType -ne [Windows.Automation.ControlType]::Menu;$i++){$element=[Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($element)}
+ if(-not $element -or $element.Current.ControlType -ne [Windows.Automation.ControlType]::Menu -or $element.Current.NativeWindowHandle -ne $owner.ToInt64()){throw 'Focused popup differs from requested owner'}
+ $native=[DesktopNative]::PopupMenu($owner)
+ $items=$element.FindAll([Windows.Automation.TreeScope]::Children,[Windows.Automation.Condition]::TrueCondition)
+ $position=[int]$q.position
+ if($items.Count -ne $native.items.Length -or $position -lt 0 -or $position -ge $items.Count){throw 'Popup item position differs from observed menu'}
+ $item=$items[$position];$current=$item.Current
+ if(-not $q.name -or $current.Name -cne $q.name -or $current.ControlType -ne [Windows.Automation.ControlType]::MenuItem){throw 'Popup item name differs from observed target'}
+ $meta=$native.items[$position]
+ if(($meta.state -band 3) -ne 0 -or ($meta.type -band 0x800) -ne 0 -or -not $meta.rect){throw 'Popup item is disabled, a separator or has no bounds'}
+ $b=$current.BoundingRectangle
+ if([Math]::Abs($b.X-$meta.rect[0]) -gt 1 -or [Math]::Abs($b.Y-$meta.rect[1]) -gt 1 -or [Math]::Abs($b.Width-$meta.rect[2]) -gt 1 -or [Math]::Abs($b.Height-$meta.rect[3]) -gt 1){throw 'Accessible and native popup bounds differ'}
+ Assert-Reader
+ $x=[int]($b.X+$b.Width/2);$y=[int]($b.Y+$b.Height/2)
+ if([DesktopNative]::PidAt($x,$y) -notin @((Reader-Processes).Id)){throw 'Another application covers popup item'}
+ [DesktopNative]::SetCursorPos($x,$y)|Out-Null;[DesktopNative]::mouse_event(2,0,0,0,[UIntPtr]::Zero);[DesktopNative]::mouse_event(4,0,0,0,[UIntPtr]::Zero)
+ @{owner=$q.owner;position=$position;clicked=$q.name;rect=$meta.rect}
+}
 function Find-Element($name,$regex=$false,$timeout=10) {
  $clock=[Diagnostics.Stopwatch]::StartNew()
  do {
@@ -190,7 +262,7 @@ function Native-Elements {
   foreach($handle in $handles){
    $name=[DesktopNative]::Text($handle);$class=[DesktopNative]::Class($handle);$textError=$null;$readOnly=$null
    if($class -match '^(Edit|RICHEDIT[0-9]+W)$'){try{$name=[DesktopNative]::ControlText($handle)}catch{$textError=$_.Exception.Message};$readOnly=[DesktopNative]::ReadOnlyEdit($handle)}
-   if(-not $name -and $class -notmatch 'Edit|ComboBox'){continue}
+   if(-not $name -and $class -notmatch 'Edit|ComboBox|^#32768$'){continue}
    if($class -eq 'Button'){$name=$name.Replace('&','')}
    $parent=[DesktopNative]::GetParent($handle)
    @{name=$name;class=$class;owner=$h;handle=$handle;rect=[DesktopNative]::Bounds($handle);parent=$parent;parent_class=[DesktopNative]::Class($parent);enabled=[DesktopNative]::IsWindowEnabled($handle);read_only=$readOnly;text_error=$textError}
@@ -286,7 +358,15 @@ function Acknowledge-Reader-Result($element) {
   if(-not $remaining.Count){return}
   if($remaining.Count -ne 1 -or $remaining[0].name -ne $element.name){throw 'Reader result receipt changed before acknowledgement completed'}
   if($watch.Elapsed.TotalMilliseconds -ge 250){
-   if([DesktopNative]::GetForegroundWindow() -ne $owner){throw 'Reader result dialog lost foreground before acknowledgement'}
+   if([DesktopNative]::GetForegroundWindow() -ne $owner){
+    # Space/pointer acknowledgement can close the receipt between the earlier
+    # visibility snapshot and this foreground check. Confirm closure before
+    # treating a foreground change as interference; never send another input.
+    if(-not [DesktopNative]::IsWindowVisible($owner)){return}
+    $still=@(Native-Elements|Where-Object {$_.owner -eq $owner -and $_.name.StartsWith('MPMB_RESULT')})
+    if(-not $still.Count){return}
+    throw 'Reader result dialog lost foreground before acknowledgement'
+   }
    if(-not $spaceSent -and [DesktopNative]::FocusedControl() -eq [IntPtr]$button.handle){
     [DesktopNative]::Key(0x20);$spaceSent=$true
    }elseif(-not $pointerSent -and (-not $spaceSent -or $watch.Elapsed.TotalMilliseconds -ge 1000)){
@@ -500,7 +580,14 @@ function Uia-Child($action,$value='') {
  $quote={param($v) "'"+([string]$v).Replace("'","''")+"'"}
  $code="& "+(& $quote "$Root\desktop.ps1")+" -Root "+(& $quote $Root)+" -UiAutomationChild -ChildAction "+(& $quote $action)+" -ChildValue "+(& $quote $value)+" -ChildOutput "+(& $quote $file)
  $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($code))
- $child=Start-Process powershell.exe -ArgumentList "-NoProfile -STA -WindowStyle Hidden -ExecutionPolicy Bypass -EncodedCommand $encoded" -PassThru
+ # Hiding a newly created console is too late: Windows Terminal can take
+ # foreground and dismiss an observed popup before PowerShell hides itself.
+ $start=New-Object Diagnostics.ProcessStartInfo
+ $start.FileName='powershell.exe'
+ $start.Arguments="-NoProfile -NonInteractive -STA -ExecutionPolicy Bypass -EncodedCommand $encoded"
+ $start.UseShellExecute=$false
+ $start.CreateNoWindow=$true
+ $child=[Diagnostics.Process]::Start($start)
  if(-not $child.WaitForExit(15000)){$child.Kill();throw 'UI Automation child timed out after 15 seconds; desktop worker remains available'}
  if(-not(Test-Path $file)){throw 'UI Automation child exited without a response'}
  $response=Get-Content $file -Raw|ConvertFrom-Json
@@ -509,7 +596,7 @@ function Uia-Child($action,$value='') {
 }
 function Execute($q) {
  switch($q.action){
-  'health' {[uint32]$fp=0;$fh=[DesktopNative]::GetForegroundWindow();$ft=[DesktopNative]::GetWindowThreadProcessId($fh,[ref]$fp);@{version=3;capabilities=@('dialog_control','focus_control');foreground_handle=$fh.ToInt64();foreground_pid=$fp;foreground_thread=$ft;session=(Get-Process -Id $PID).SessionId;readers=@(Reader-Processes | Select-Object Id,SessionId);windows=@(Reader-Windows | ForEach-Object {$b=New-Object Text.StringBuilder(512);[DesktopNative]::GetWindowText($_,$b,512) | Out-Null;$b.ToString()})}}
+  'health' {[uint32]$fp=0;$fh=[DesktopNative]::GetForegroundWindow();$ft=[DesktopNative]::GetWindowThreadProcessId($fh,[ref]$fp);@{version=3;capabilities=@('dialog_control','focus_control','inspect_focused','inspect_menu','activate_menu');foreground_handle=$fh.ToInt64();foreground_pid=$fp;foreground_thread=$ft;session=(Get-Process -Id $PID).SessionId;readers=@(Reader-Processes | Select-Object Id,SessionId);windows=@(Reader-Windows | ForEach-Object {$b=New-Object Text.StringBuilder(512);[DesktopNative]::GetWindowText($_,$b,512) | Out-Null;$b.ToString()})}}
   'dismiss_pin' {
    [uint32]$fp=0;$fh=[DesktopNative]::GetForegroundWindow();[DesktopNative]::GetWindowThreadProcessId($fh,[ref]$fp)|Out-Null
    if((Get-Process -Id $fp).ProcessName -ne 'ShellExperienceHost'){throw 'Foreground is not Windows notification host'}
@@ -524,6 +611,9 @@ function Execute($q) {
   'inspect' {,@(Native-Elements)}
   'dialog_control' {Dialog-Control $q}
   'focus_control' {Dialog-Control $q}
+  'activate_menu' {Uia-Child 'activate_menu' ($q|ConvertTo-Json -Compress)}
+  'inspect_focused' {Uia-Child 'inspect_focused'}
+  'inspect_menu' {$owner=[IntPtr]([long]$q.owner);if($owner -notin @(Reader-Windows) -or [DesktopNative]::Class($owner) -ne '#32768'){throw 'Owner is not an observed visible Reader popup'};[DesktopNative]::PopupMenu($owner)}
   'inspect_uia' {,@(Uia-Child 'inspect_uia')}
   'inspect_full' {,@(Uia-Child 'inspect_full')}
   'invoke' {$parent=[IntPtr]::Zero;if($q.owner){$parent=[IntPtr]([long]$q.owner)};$element=$null;try{$element=Find-Native $q.name 0.3 $parent}catch{};if($element){Invoke-Native $element}elseif($q.owner){throw 'Named control is absent from the requested dialog'}else{Uia-Child 'invoke' $q.name|Out-Null};@{invoked=$q.name}}
@@ -544,6 +634,8 @@ function Execute($q) {
 if($UiAutomationChild){
  try {
   $result=switch($ChildAction){
+   'activate_menu' {Activate-Popup $ChildValue}
+   'inspect_focused' {Focused-Element}
    'inspect_uia' {@(Elements | ForEach-Object {Describe $_})}
    'inspect_full' {@(Elements $true | ForEach-Object {Describe $_})}
    'invoke' {Invoke-Element (Find-Element $ChildValue);@{invoked=$ChildValue}}

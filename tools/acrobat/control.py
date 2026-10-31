@@ -162,7 +162,9 @@ def script(op, **params):
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     sub=p.add_subparsers(dest='action',required=True)
-    sub.add_parser('health');sub.add_parser('inspect');sub.add_parser('inspect_full');sub.add_parser('inspect_uia');sub.add_parser('ping')
+    sub.add_parser('health');sub.add_parser('inspect');sub.add_parser('inspect_full');sub.add_parser('inspect_uia');sub.add_parser('inspect-focused');sub.add_parser('ping')
+    menu=sub.add_parser('inspect-menu');menu.add_argument('owner',type=int)
+    menu=sub.add_parser('activate-menu');menu.add_argument('owner',type=int);menu.add_argument('position',type=int);menu.add_argument('name')
     picker=sub.add_parser('select-file');picker.add_argument('request_id');picker.add_argument('path')
     for action in ['dialog-control','focus-control']:
         s=sub.add_parser(action);s.add_argument('owner',type=int);s.add_argument('handle',type=int)
@@ -174,6 +176,9 @@ def main():
     with desktop_lock():
         if args.action=='health':result=command('health')
         elif args.action in ['inspect','inspect_full','inspect_uia']:result=command(args.action)
+        elif args.action=='inspect-focused':result=command('inspect_focused')
+        elif args.action=='inspect-menu':result=command('inspect_menu',owner=args.owner)
+        elif args.action=='activate-menu':result=command('activate_menu',owner=args.owner,position=args.position,name=args.name)
         elif args.action=='ping':result=script('ping')
         elif args.action=='select-file':result=command('select_file',request_id=args.request_id,path=remote_path(args.path))
         elif args.action in ['dialog-control','focus-control']:result=command(args.action.replace('-','_'),owner=args.owner,handle=args.handle)

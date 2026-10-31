@@ -1757,5 +1757,18 @@
     "generated": "output/testing/native-generated-1793402782209209539/generated.json",
     "scope": "Embedded PDF ascent/descent are retained separately from rich BBox and typographic leading, and used for plain single-line centering. Original generated Warlock spell description at6.25pt: baseline native2.9024901 vs Reader2.903 within0.001pt. Actual marker values are saved, freshly reopened in native, restored/resaved; Reader edits/saves marker and restores, then another fresh native marker/reopen/restore. New MPMB font resources prove native rebuilding, not old AP reuse. Source class/spell/invocation lists, source exclusions, derived/generated values, scripts and Reader checksum/sentinel961/3388285582 pass. Old92 actual generated artifact baseline2.6520996 fails. Invalid/missing descriptor metrics retain face fallback; original rich metrics remain separate.",
     "remaining": "Horizontal inset/advances, automatic font sizing, full pixel equality, broader fonts/field styles and complete character/table coverage remain incomplete. New crop field-render-1793402718791168025 remains FAILED3311/18656 pixels; older3550/18656 also failed."
+  },
+  "reader_popup_transport": {
+    "status": "bounded reference transport qualified; native/Reader invocation effects still pending",
+    "preflight": "output/testing/receipt-closure-guard-preflight.json",
+    "preflight_checks": 29,
+    "readiness": "output/testing/readiness-1793439251.json",
+    "readiness_cases": 24,
+    "focused_labels": "output/testing/reader-warlock-menu-1793407321709523087/menu.json",
+    "activation": "output/testing/reader-warlock-menu-1793407561560662699/menu.json",
+    "failed_readiness": "output/testing/readiness-1793407714.json",
+    "failed_cleanup": "output/testing/popup-readiness-failure-1793407714/cleanup.json",
+    "scope": "No-console isolated UIA preserves Reader focus. Exact labels come from focused Menu children, not empty owner-drawn native strings. Activation verifies owner, position, exact name, native enabled state, native/accessibility bounds and hit ownership. Wrong-name rejection, submenu expansion, cancellation, saved fields/scripts and Reader termination pass. Receipt closure is rechecked on foreground loss before reporting interference; no additional input is sent after closure. Fresh full readiness passes with unchanged harness fingerprint and no new Reader crash/resource exhaustion.",
+    "remaining": "Invocation selection/effects, deeper popup paths and full native class/table compatibility remain unqualified by this transport test."
   }
 }
