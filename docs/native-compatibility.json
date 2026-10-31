@@ -2070,11 +2070,14 @@
       "output/testing/native-xfdf-events-1793476274117681688/events.json",
       "output/testing/native-xfdf-picker-1793476065835105976/qualification.json",
       "output/testing/native-original-xfdf-import-1793476261726522003/probe.json",
-      "output/testing/script-observation-comparison-1793476637028946250/comparison.json"
+      "output/testing/script-observation-comparison-1793476637028946250/comparison.json",
+      "output/testing/native-xfdf-picker-cancel-1793476899332110084/picker.json",
+      "output/testing/native-xfdf-picker-cancel-1793476925600341172/picker.json",
+      "output/testing/native-xfdf-events-1793476986896007273/events.json"
     ],
-    "history_scope": "First two original-action claims invalidated: wrong PDF action keys; preserved reports/data and Reader closed. Empty-control initial diagnostic reads unavailable choice richText; failed/closed. Native picker launches actual portal but accessibility unavailable; owned zenity child terminated and no selection/cancel UI pass. Initial wrapper pilot supplied confirmation before startup alert; explicit valid startup reply fixes pilot. First Reader-saved comparison matched getters but failed the tool final hash guard, which still compared the new source to the original input hash; the corrected tool independently guards both sources and fresh run passes.",
+    "history_scope": "First two original-action claims invalidated: wrong PDF action keys; preserved reports/data and Reader closed. Empty-control initial diagnostic reads unavailable choice richText; failed/closed. Native picker launches actual portal but accessibility unavailable; owned zenity child terminated and no selection/cancel UI pass. Initial wrapper pilot supplied confirmation before startup alert; explicit valid startup reply fixes pilot. First Reader-saved comparison matched getters but failed the tool final hash guard, which still compared the new source to the original input hash; the corrected tool independently guards both sources and fresh run passes. GTK cancel pilots failed transient button discovery and absent ENABLED state; both owned children cleaned; sensitive/showing corrected run passes. Legacy native alignment pilots used a nonexistent startup source dialog/ckFF option and remain failures; verifier now rejects the unsupported legacy profile before execution.",
     "checks": "125 Rust tests and strict all-targets Clippy pass. Current sheet original acceptance2/1793476161498017004 passes. Two native reopens preserve full sampled raw-rich getters and independent fields/widgets/AP/scripts.",
-    "remaining": "Native picker selection/cancel; exact cross-platform original wrapper style/event parity; full-character/all-field transfers and all fixture/version pairs; valueless non-combo, multiselect/readonly and additional rich styles/paragraphs; timer processing while file picker blocks; full typography and every-class table workflows remain incomplete.",
+    "remaining": "Default KDE portal and native file selection; exact cross-platform original wrapper style/event parity; Ashnar event.value write conversion; full-character/all-field transfers and all fixture/version pairs; valueless non-combo, multiselect/readonly and additional rich styles/paragraphs; timer processing while file picker blocks; full typography and every-class table workflows remain incomplete.",
     "reader_original_wrapper": "output/testing/reader-xfdf-events-1793476301454287188/events.json",
     "reader_independent": [
       "output/testing/reader-xfdf-events-1793474630777578206/independent.json",
@@ -2092,6 +2095,12 @@
       "tools/native/verify-script-observation.py --reader <observation.json> --reader-saved"
     ],
     "native_after_reader": "output/testing/script-observation-comparison-1793476656068492243/comparison.json",
-    "fixture_scope": "Qualified direct API/style/event and mixed-engine persistence evidence is 2024 only. Current2014 Reader qualification1793476685261255084 is running; Ashnar remains pending."
+    "fixture_scope": "Current2024 and2014 exact direct API events/raw getters and two native reopens pass. Ashnar Reader passes but native comparison fails one original Calculate event.value type (-1 number versus string); field values/styles and other13 trace entries agree. Full fixture/character compatibility is not established.",
+    "reader_2014": "output/testing/reader-xfdf-events-1793476685261255084/events.json",
+    "native_2014": "output/testing/native-xfdf-events-1793476799755887162/events.json",
+    "reader_ashnar": "output/testing/reader-xfdf-events-1793476849287859611/events.json",
+    "native_ashnar_failure": "output/testing/native-xfdf-events-1793477021082262170/events.json",
+    "native_picker_cancel": "output/testing/native-xfdf-picker-cancel-1793476993766595842/picker.json",
+    "picker_scope": "Genuine owned GTK dialog using GDK_DEBUG=no-portals and GTK_A11Y=atspi. Actual offered Cancel clicked, canonical/raw rich state unchanged, save and independent fields/widgets/AP/scripts pass. GTK exposes SENSITIVE/SHOWING but omits ENABLED; harness uses recorded sensitivity/visibility and exact button action. Default KDE portal and successful file selection remain unqualified."
   }
 }
