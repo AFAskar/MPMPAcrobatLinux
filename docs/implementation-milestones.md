@@ -176,6 +176,6 @@ The user prioritizes behavior over appearance. Qualify automatic registration/re
 
 140 tests and exact8-state Reader evidence qualify calculateNow gating by both enable flags, independent of display delay. All3 prior original resource/lifecycle comparisons still match. Real class tests yield to original calcCont before asserting completed user actions. Mid-pass/cross-document flag behavior remains open.
 
-### Milestone3d: actual Bard instrument choice and resource workflow — in progress
+### Milestone3d: bounded2024 Bard1 instrument/resource workflow — qualified; progression open
 
-Require real three-control instrument entry, retained proficiencies, ability-dependent inspiration, spending/rests and changed native/Reader save/reopen. Initial ready-boundary Reader/native states pass; final Reader-saved/native edit is running. This remains only a level-one case; progression/subclass/feat/spell paths need further work.
+Require real three-control instrument entry, retained proficiencies, ability-dependent inspiration, spending/rests and changed native/Reader save/reopen. Reader create1793511360457261057/native1793511628923771967 match actual choices and all5 ready states. Reader edits native output in1793511667629411564, native matches exactly in1793511819702343596, and final fresh native ability edit1793512078345253083 retains instruments/recalculates1. Original scripts and selected canonical/widget values pass. Creation has7 serialized-field differences, with semantic equivalence beyond tested state unproven; after Reader edit only CurrentEvals.Stringified differs. This remains only a level-one case; progression/subclass/feat/spell paths need further work.

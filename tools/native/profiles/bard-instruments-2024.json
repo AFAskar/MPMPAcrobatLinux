@@ -1,0 +1,5 @@
+[
+  {"title":"SOURCE SELECTION DIALOG","result":"ok"},
+  {"title":"ASK USER DIALOG","header":"Select proficiencies","result":"ok","values":{"r000":"Flute","r001":"Lute","r002":"Drum"}},
+  {"title":"CHANGES ALERT DIALOG","result":"ok"}
+]

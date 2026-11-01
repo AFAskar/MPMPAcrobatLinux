@@ -2423,5 +2423,21 @@
       "Do not read class-derived states inside a still-suspended original update as completed user actions; yield the menu and check readiness.",
       "Bard first inline test1793510751636628756 and row-count pilot1793511192237843890 remain failed and closed; source saved math was correct."
     ]
+  },
+  "bard_instrument_resource_workflow": {
+    "status": "bounded2024 Bard1 instrument/resource/persistence case qualified; full Bard/class compatibility incomplete",
+    "reader_create": "output/testing/reader-bard-resources-1793511360457261057/observation.json",
+    "native_ready_comparison": "output/testing/bard-ready-comparison-1793511628923771967/comparison.json",
+    "reader_native_saved_edit": "output/testing/reader-bard-resources-1793511667629411564/observation.json",
+    "native_reader_edit_comparison": "output/testing/script-observation-comparison-1793511819702343596/comparison.json",
+    "final_native_reopen": "output/testing/bard-reader-native-reopen-1793512078345253083/reopen.json",
+    "scope": "Three original owned Bard Tools edits receive Flute/Lute/Drum with actual focus/paste/readback/OK. Scripted native input uses those same observed controls. Both immediate class submission and five separately ready action states match: class1/proficiency2, inspiration4\u21921\u21925, short rest retains used1, long rest resets empty, level1 spell-slot selectors2/0. Native changed/fresh reopen reaches3; Reader reopens/edits native output3; final fresh native edit reaches1 while retaining tools and original scripts.",
+    "full_canonical_control": "output/testing/bard-ready-full-canonical-control.json",
+    "full_canonical_limits": "Creation differs in7 serialized state fields (ChangesDialogSkip,CurrentProfs,CurrentEvals,CurrentSpells,CurrentVars,CurrentStats,CurrentSources); semantic equality beyond tested behavior is unproven. After Reader edit only CurrentEvals.Stringified differs. Exact complete canonical equality is not claimed.",
+    "remaining": [
+      "2014/Ashnar Bard instrument cases not exercised",
+      "Level/subclass changes/removal, skills/expertise/feats/ASIs, spell choices/generation and full combat state remain incomplete",
+      "Original class calcStop requires returning to menu then checking readiness; failed inline/row-count pilots remain failed and closed"
+    ]
   }
 }
