@@ -201,6 +201,9 @@ var __host = (function () {
     finally {globalThis.event=previous;}
   }
   function calculateNow() {
+    // Explicit calls do not override either calculation-enable flag. Display
+    // delay is independent: enabled calculations still run while drawing waits.
+    if(!globalThis.calculate||!app.calculate)return;
     if(calculating){pending=true;return}
     calculating=true;
     // A setter refreshes its own Format action. Calculation commits defer that

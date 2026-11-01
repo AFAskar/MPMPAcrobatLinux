@@ -170,3 +170,12 @@ Acceptance requires literal/named flags, default inheritance, unchanged immediat
 ### Milestone3b: bounded Calculate lifecycle and original resource behavior — qualified; class continuation open
 
 The user prioritizes behavior over appearance. Qualify automatic registration/replacement/removal, execution order, original AddFeature/resource dependency changes/removal and edited native/Reader save/reopen across the authorized fixtures. The registration/order repair now passes139 tests and all3 exact Reader/native controls, retaining every physical CO slot and original non-leaf reference. Edited persistence across all3 fixtures passes15 native stages plus6 Reader mutations/6 exact native comparisons, including dependent maximum changes, spending, short/long rests, removal and re-addition. Original table6/generated6/lifecycle2/acceptance2/import/Ashnar regressions pass. This qualifies the tested original resource primitive; all predefined class-dependent resources/choices/progression remain incomplete. Next is actual Bard instrument choices and inspiration progression against Reader.
+
+
+### Milestone3c: explicit calculation-enable flags — bounded contract qualified
+
+140 tests and exact8-state Reader evidence qualify calculateNow gating by both enable flags, independent of display delay. All3 prior original resource/lifecycle comparisons still match. Real class tests yield to original calcCont before asserting completed user actions. Mid-pass/cross-document flag behavior remains open.
+
+### Milestone3d: actual Bard instrument choice and resource workflow — in progress
+
+Require real three-control instrument entry, retained proficiencies, ability-dependent inspiration, spending/rests and changed native/Reader save/reopen. Initial ready-boundary Reader/native states pass; final Reader-saved/native edit is running. This remains only a level-one case; progression/subclass/feat/spell paths need further work.

@@ -789,6 +789,14 @@ mod tests {
         );
     }
     #[test]
+    fn explicit_calculation_respects_enable_flags_independently_of_display_delay() {
+        host(
+            r#"var f=getField('A'),count=0,good=true;getField('B').setAction('Calculate','');getField('C').setAction('Calculate','');f.value='seed';f.setAction('Calculate',"count++;event.value=String(count)");
+        for(var a=0;a<2;a++)for(var d=0;d<2;d++)for(var v=0;v<2;v++){app.calculate=!!a;calculate=!!d;delay=!!v;count=0;calculateNow();good=good&&count===(a&&d?1:0);}
+        app.calculate=true;calculate=true;delay=false;good"#,
+        );
+    }
+    #[test]
     fn preserved_non_leaf_calculation_slots_count_without_executing() {
         host(
             r#"__host.data.order.splice(1,0,{reference:[99,0]});var a=getField('A'),b=getField('B'),c=getField('C');

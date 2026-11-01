@@ -1,5 +1,17 @@
 # Implementation handoff
 
+## Active140 calculation timing and Bard1 choices — 2026-11-01
+
+677fc97 committed the139-test registration/physical CO/resource persistence repair;6202bbf committed prior decoration behavior. Behavior remains the priority; full goal ACTIVE.
+
+UNCOMMITTED140 runtime candidate now gates explicit calculateNow by both app/document flags, independent of display delay. Reader8-state1793511012863940786/native1793511336969796123 match exactly;139 negative1793511513749535127 stays failed.140 tests/build/fmt/strict all-targets Clippy pass. Cached3-fixture resource/registration comparisons1793511656455060337/1793511668863212147/1793511684091010788 still pass. Commit this small API repair atomically with calculation-flags-observer.js and relevant docs; keep the Bard workflow tools for their separate commit. Mid-pass/cross-document flags remain unqualified.
+
+Actual Bard1 Reader case1793511360457261057 PASSES real owned Flute/Lute/Drum text entry and callback, then separate ready-boundary actions: Cha18/max4→Cha10/max1, used1 retained at short rest, empty after long rest, Cha20/max5. Native comparison1793511628923771967 matches immediate submitted class state and all5 ready states, canonical/widgets/scripts, and fresh native edit Cha16/max3 with retained tools. Reader then reopens native.pdf and edits Cha16/max3 in1793511667629411564 (PASS/closed). Generic native exact comparison1793511819702343596 PASSES. Final native Reader-saved reopen/Cha12/max1 in bard-final-native-reopen1793511820694987304 PASSES, including independent.json selected canonical/widgets/scripts. This bounded Bard1 workflow is ready for its separate test/evidence commit; full class progression/spells remain incomplete.
+
+Bard tests remain UNCOMMITTED: bard-resource-observer.js, reader-bard-resources.py, verify-bard-ready.py, profiles/bard-instruments-2024.json, plus --dialogs support in verify-script-observation.py. Actual controls are three r000/r001/r002 edit fields; Reader matches their live initial text, ownership, focus, paste readback and OK. Only class1 is qualified; progression/subclass/feat/spell paths remain incomplete. Next extend genuine Bard progression/removal and spell/feature choices, then broaden predefined classes. Do not return to cosmetic typography.
+
+Retained FAILED Bard pilots:1793510751636628756 incorrectly asserted intermediate values inside original calcStop; saved Reader math was correct after calcCont.1793511192237843890 assumed20 resource rows but fixtures have16; it retained/closed its own document. New harness enumerates canonical field names and tests separate user actions with readiness. No Reader suite is currently pending after1793511667629411564; check live processes before starting another.
+
 ## Active calculation/resource repair — 2026-11-01
 
 Behavior is the user priority. Decoration behavior is committed6202bbf; no further typography work is planned before functional workflows. The full Codex goal remains ACTIVE.
