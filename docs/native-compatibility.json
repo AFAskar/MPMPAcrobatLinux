@@ -2450,5 +2450,19 @@
     "readiness": "output/testing/readiness-1793513831.json",
     "checks": "Node protocol test covers ampersand keys/values, repeated ampersands, Unicode, escaped overflow, deferred delivery and focus. Real Reader rich Class Features and synthetic plain Player Name read strings match independent Reader code-unit/checksum summaries and saved PDF exactly. All24 readiness cases pass unchanged fingerprint and crash/resource audit.",
     "limits": "Older direct reads containing ampersands need retained failure/recovery evidence; do not silently reinterpret old reports. Use current readiness1793513831 for this harness."
+  },
+  "bard_lore_progression": {
+    "status": "bounded2024 Bard1/Lore5 progression, down-level/removal and ten phase reopens qualified; complete Bard/class behavior incomplete",
+    "reader": "output/testing/reader-bard-progression-1793515115978320932/progression.json",
+    "native": "output/testing/bard-progression-comparison-1793515380656717696/comparison.json",
+    "reopens": "output/testing/bard-progression-reopens-1793515461595140486/reopens.json",
+    "scope": "Original ApplyClasses progression1\u2192Lore5\u2192short rest\u21921\u2192removed. All selected feature/resource/tool/slot fields and original displayed Acr/Arc totals agree. Every native and Reader phase reopens natively and supports a fresh Charisma edit. Removed resource calculation and visible label/max remain absent. Original embedded scripts retained.",
+    "comparison_rules": "Complete selected API strings exact. Raw checkbox PDF Name/empty versus API export/Off is recorded explicitly; full-sheet canonical equivalence is not claimed. Skill API raw bonuses are separate from displayed calculated totals.",
+    "retained_failed_reference": "output/testing/reader-bard-progression-1793512594766403159/progression.json",
+    "remaining": [
+      "ASI/feat, expertise/skill choices, full HP/combat and spell selection not covered by this progression case",
+      "Other subclasses,2014/Ashnar Bard and comprehensive source/multiclass behavior remain unqualified",
+      "All-field serialized-state equivalence remains unproven"
+    ]
   }
 }

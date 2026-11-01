@@ -179,3 +179,8 @@ The user prioritizes behavior over appearance. Qualify automatic registration/re
 ### Milestone3d: bounded2024 Bard1 instrument/resource workflow — qualified; progression open
 
 Require real three-control instrument entry, retained proficiencies, ability-dependent inspiration, spending/rests and changed native/Reader save/reopen. Reader create1793511360457261057/native1793511628923771967 match actual choices and all5 ready states. Reader edits native output in1793511667629411564, native matches exactly in1793511819702343596, and final fresh native ability edit1793512078345253083 retains instruments/recalculates1. Original scripts and selected canonical/widget values pass. Creation has7 serialized-field differences, with semantic equivalence beyond tested state unproven; after Reader edit only CurrentEvals.Stringified differs. This remains only a level-one case; progression/subclass/feat/spell paths need further work.
+
+
+### Milestone3e: bounded2024 Bard/Lore progression and removal — qualified
+
+Required concrete gates now pass: real Reader five-phase progression1793515115978320932, native exact selected-state/display comparison1793515380656717696 and all10 fresh native/Reader phase reopen/edit cases1793515461595140486. Original class actions, resources, slot totals, tool retention/removal, short-rest recovery, dependent Charisma maxima and removed calculation/visible state are checked. This completes only the stated progression case. ASI/feat/skill/expertise choices, full combat/HP and other class/subclass/source combinations remain open. Milestone3f spell choices/regeneration/persistence is in progress; full goal remains ACTIVE.
