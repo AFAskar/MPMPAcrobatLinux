@@ -2439,5 +2439,16 @@
       "Level/subclass changes/removal, skills/expertise/feats/ASIs, spell choices/generation and full combat state remain incomplete",
       "Original class calcStop requires returning to menu then checking readiness; failed inline/row-count pilots remain failed and closed"
     ]
+  },
+  "reference_alert_transport": {
+    "status": "qualified repaired transport:29 preflight and24 readiness cases; native compatibility still incomplete",
+    "failure": "Reader alert Static text doubles literal ampersands. Prior direct read responses could report && for & although Reader numeric UTF16 summaries and saved PDF contained the original value. This is transport corruption, not document save behavior.",
+    "implementation": "Escape every ampersand in encoded result JSON as a Unicode escape before presenting the alert. Length/overflow checks use escaped text; decoding preserves original keys, literals and repeated ampersands.",
+    "negative": "output/testing/reader-field-transport-1793513159788503697/transport.json",
+    "positive": "output/testing/reader-field-transport-1793513675541045398/transport.json",
+    "preflight": "output/testing/continuation-ampersand-preflight.json",
+    "readiness": "output/testing/readiness-1793513831.json",
+    "checks": "Node protocol test covers ampersand keys/values, repeated ampersands, Unicode, escaped overflow, deferred delivery and focus. Real Reader rich Class Features and synthetic plain Player Name read strings match independent Reader code-unit/checksum summaries and saved PDF exactly. All24 readiness cases pass unchanged fingerprint and crash/resource audit.",
+    "limits": "Older direct reads containing ampersands need retained failure/recovery evidence; do not silently reinterpret old reports. Use current readiness1793513831 for this harness."
   }
 }

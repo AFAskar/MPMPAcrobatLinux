@@ -104,10 +104,12 @@ MPMBTesting.run=app.trustedFunction(function(q) {
         response.result=MPMBTesting.execute(q);response.ok=true;
     } catch(e) {response.error=String(e);}
     finally {app.endPriv();}
-    var encoded=JSON.stringify(response);
+    // Acrobat doubles literal ampersands in the native alert text. Keep JSON
+    // free of mnemonic markers; JSON parsing restores exact keys and values.
+    var encoded=JSON.stringify(response).replace(/&/g,"\\u0026");
     if(encoded.length>12000){
         response={id:q.id,session:MPMBTesting.session,ok:false,operation_completed:response.ok,error:'Response exceeds the dialog transport limit. Do not repeat mutations; use field_summary or inspect a saved PDF.'};
-        encoded=JSON.stringify(response);
+        encoded=JSON.stringify(response).replace(/&/g,"\\u0026");
     }
     MPMBTesting.pendingResult={encoded:encoded,response:response,request:q};
     MPMBTesting.busy=true;
