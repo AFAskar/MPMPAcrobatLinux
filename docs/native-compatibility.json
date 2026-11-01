@@ -2368,5 +2368,42 @@
       "ashnar": "output/testing/rich-format-1793490983375215208/formatting.json"
     },
     "generated": "output/testing/native-generated-1793491083371406806/generated.json"
+  },
+  "calculation_action_lifecycle": {
+    "status": "bounded Calculate registration/resource lifecycle and native/Reader persistence qualified across all3 fixtures; complete class workflows remain incomplete",
+    "problem": "Field.setAction Calculate did not register a new field; original AddFeature remained0 after Wisdom changes. Loading also discarded non-leaf CO slots, changing indices and losing graph references on save.",
+    "implementation": "Automatically append new nonempty C actions, retain position on replacement, remove on clearing, append on re-add. Preserve original non-executable non-leaf CO references in the single authoritative ordered snapshot and project them unchanged. Count executable actions separately from raw order slots. Reject non-leaf executable actions explicitly.",
+    "reader_native_exact": [
+      "output/testing/script-observation-comparison-1793509216538416662/comparison.json",
+      "output/testing/script-observation-comparison-1793509277229233341/comparison.json",
+      "output/testing/script-observation-comparison-1793509421105363217/comparison.json"
+    ],
+    "physical_order": "output/testing/calculation-order-three-fixture-control.json",
+    "negative_old": "output/testing/script-observation-comparison-1793508881240116075/comparison.json",
+    "negative_partial": "output/testing/script-observation-comparison-1793508959850008670/comparison.json",
+    "scope": "Isolated plain-field registration/replacement/removal plus original AddFeature/Wisdom18\u219212/RemoveFeature; actual maxima6\u21923 versus old0\u21920. Complete captured sequence/indices and all saved physical CO slots match Reader; every original non-leaf reference and embedded script is retained. No complete class/table claim.",
+    "pending": [
+      "Original predefined class ability/level-dependent resource progression beyond the isolated AddFeature case",
+      "Action-bearing non-leaf fields, grouped setter semantics and generated group-order cloning remain unqualified",
+      "2024 CurrentEvals.Stringified representation still differs in full canonical comparisons; not normalized into an exact match.",
+      "Bard1 native pilot now calculates inspiration4\u21921; old build kept Cha mod. Actual Reader instrument choices/progression/persistence are next and remain unqualified."
+    ],
+    "checks": "139 Rust tests/build/fmt/strict all-targets Clippy pass; all3 exact runtime and physical CO controls;15 native persistence stages,6 Reader mutations and6 exact native comparisons. Original table6, generated6, lifecycle2, acceptance2 and extended import/Ashnar cases pass.",
+    "persistence": {
+      "2024": "output/testing/calculated-resource-persistence-1793509605926434570/persistence.json",
+      "2014": "output/testing/calculated-resource-persistence-1793509782013290249/persistence.json",
+      "ashnar": "output/testing/calculated-resource-persistence-1793510039500220802/persistence.json"
+    },
+    "persistence_scope": "Original AddFeature installs ability-dependent maximum. Native saves6 then changes/reopens3; Reader changes7, short rest retains used1, long rest resets used to empty; native reopens/removes C/TM/CO entry, Reader re-adds5 and native reopens. Saved physical slot/index/code and every captured character/resource field match. Paid scripts and original inputs unchanged.",
+    "retained_pilot": "output/testing/calculated-resource-persistence-1793509422380013560/persistence.json remains failed because test expected numeric0 used rather than original empty reset; exact completed/closed Reader1793509452745356450 result reused without replay in the passing resumed run.",
+    "full_canonical_control": "output/testing/calculated-resources-full-canonical-control.json",
+    "regressions": {
+      "table": "output/testing/native-table-1793509456610538996/table.json",
+      "generated": "output/testing/native-generated-1793509636669468428/generated.json",
+      "lifecycle": "output/testing/native-lifecycle-1793509820878138306/lifecycle.json",
+      "acceptance": "output/testing/native-acceptance-1793510078815039274/acceptance.json",
+      "extended": "output/testing/native-extended-1793510158285143173/extended.json"
+    },
+    "full_canonical_results": "Both Reader mutations exactly match all3634 canonical fields in2014 and all4241 inAshnar.2024 matches3626/3627 each; CurrentEvals.Stringified remains a raw representation difference, explicitly unnormalized."
   }
 }

@@ -789,6 +789,34 @@ mod tests {
         );
     }
     #[test]
+    fn preserved_non_leaf_calculation_slots_count_without_executing() {
+        host(
+            r#"__host.data.order.splice(1,0,{reference:[99,0]});var a=getField('A'),b=getField('B'),c=getField('C');
+        a.setAction('Validate','');a.setAction('Calculate',"event.value='7'");
+        var indices=b.calcOrderIndex===0&&c.calcOrderIndex===2&&a.calcOrderIndex===3;
+        calculateNow();var executed=a.value===7;
+        b.setAction('Calculate','');var state=JSON.parse(__host.snapshot());
+        indices&&executed&&b.calcOrderIndex===-1&&c.calcOrderIndex===1&&a.calcOrderIndex===2&&state.__order[0].reference[0]===99"#,
+        );
+    }
+    #[test]
+    fn calculate_action_registration_removal_and_readdition_drive_dependencies() {
+        host(
+            r#"var a=getField('A'),b=getField('B'),c=getField('C');
+        a.setAction('Validate','');a.setAction('Calculate',"event.value='7'");
+        var appended=a.calcOrderIndex===2&&b.calcOrderIndex===0&&c.calcOrderIndex===1;
+        b.setAction('Calculate','');a.setAction('Calculate',"event.value='9'");
+        var retained=a.calcOrderIndex===1&&b.calcOrderIndex===-1&&c.calcOrderIndex===0;
+        b.setAction('Calculate',"event.value=Number(getField('A').value)+2");
+        a.setAction('Calculate','');a.setAction('Calculate',"event.value='11'");
+        var readded=c.calcOrderIndex===0&&b.calcOrderIndex===1&&a.calcOrderIndex===2;
+        a.calcOrderIndex=0;calculateNow();
+        var calculated=a.value===11&&b.value===13;
+        a.setAction('Calculate','');var old=a.value;calculateNow();
+        appended&&retained&&readded&&calculated&&a.calcOrderIndex===-1&&a.value===old&&JSON.parse(__host.snapshot()).__order.indexOf('A')===-1"#,
+        );
+    }
+    #[test]
     fn decoration_commits_preserve_default_inheritance_and_raw_event_values() {
         host(
             r#"var f=getField('A');f.richText=true;var base=f.defaultStyle;

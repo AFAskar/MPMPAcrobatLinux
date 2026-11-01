@@ -100,7 +100,7 @@ var __host = (function () {
       insertItemAt(label,exp,i){this.items.splice(i===undefined?this.items.length:i,0,exp===undefined?label:[exp,label])},
       deleteItemAt(i){this.items.splice(i,1)},
       checkThisBox(i,on){this.value=on?(this.exportValues[i]||'Yes'):'Off'},isBoxChecked(i){return String(this.value)===(this.exportValues[i]||'Yes')?1:0},
-      setAction(type,code){const key=({Calculate:'C',Validate:'V',Keystroke:'K',Format:'F',MouseUp:'U',MouseDown:'D',OnFocus:'Fo',OnBlur:'Bl'})[type];if(!key)return unsupported('Field.setAction '+type);code=String(code);if(this._actions[key]!==code){this._actions[key]=code;this._modifiedActions=this._modifiedActions||{};this._modifiedActions[key]=code;revision++;}},
+      setAction(type,code){const key=({Calculate:'C',Validate:'V',Keystroke:'K',Format:'F',MouseUp:'U',MouseDown:'D',OnFocus:'Fo',OnBlur:'Bl'})[type];if(!key)return unsupported('Field.setAction '+type);code=String(code);if(key==='C'){const index=data.order.indexOf(n);if(code&&index<0){data.order.push(n);revision++;}else if(!code&&index>=0){data.order.splice(index,1);revision++;}}if(this._actions[key]!==code){this._actions[key]=code;this._modifiedActions=this._modifiedActions||{};this._modifiedActions[key]=code;revision++;}},
       setFocus(){data.focus=n;const page=Array.isArray(this.page)?this.page.filter(p=>p>=0)[0]:this.page;if(page>=0)globalThis.pageNum=page;},getArray(){return [this]},
       browseForFileToSubmit(){if(this.type!=='text'||!(x.flags&1048576))throw Error('File selection requires a file-select text field');if(typeof __browsePdf!=='function')return unsupported('Field.browseForFileToSubmit');const path=__browsePdf();if(path!==null)this.value=path;},
       buttonGetIcon(face=0){if(face!==0)return unsupported('Field.buttonGetIcon non-normal face');return this._icon||{field:n,face:0}},
@@ -205,7 +205,7 @@ var __host = (function () {
     calculating=true;
     // A setter refreshes its own Format action. Calculation commits defer that
     // refresh until the pass finishes; unchanged fields do not run commit hooks.
-    try {let passes=0; do {pending=false;for(const n of data.order){let f=fields[n];if(!f)throw Error('Missing calculation target '+n);if(f._actions.C){const e=eventRun(f,'C',f.value);if(e.rc)f.value=e.value;}}if(++passes>8)throw Error('calculation did not settle');}while(pending);for(const n of names.slice()){const f=fields[n];if(f&&f._actions.F&&(data.order.includes(n)||(formatDirty.has(n)&&typeof f.value==='number'&&!f.richText)))formatResult(f,eventRun(f,'F',f.value));}formatDirty.clear();}finally{calculating=false}
+    try {let passes=0; do {pending=false;for(const n of data.order){if(n&&typeof n==='object'&&Array.isArray(n.reference))continue;let f=fields[n];if(!f)throw Error('Missing calculation target '+n);if(f._actions.C){const e=eventRun(f,'C',f.value);if(e.rc)f.value=e.value;}}if(++passes>8)throw Error('calculation did not settle');}while(pending);for(const n of names.slice()){const f=fields[n];if(f&&f._actions.F&&(data.order.includes(n)||(formatDirty.has(n)&&typeof f.value==='number'&&!f.richText)))formatResult(f,eventRun(f,'F',f.value));}formatDirty.clear();}finally{calculating=false}
   }
   // XFDF supplies incoming spans to K/V; direct richValue assignments expose
   // the previous spans instead. Validate each input shape before committing,

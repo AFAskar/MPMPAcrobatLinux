@@ -47,11 +47,20 @@ pub struct Field {
     pub export_values: Vec<String>,
     pub caption: String,
 }
+// Non-leaf field entries can occupy real /CO slots without an executable
+// action. Preserve their references and positions; calcOrderIndex counts them.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+#[serde(untagged)]
+pub enum CalculationEntry {
+    Field(String),
+    Preserved { reference: ObjectId },
+}
+
 pub struct Pdf {
     pub doc: Document,
     pub fields: BTreeMap<String, Field>,
     pub scripts: Vec<(String, String)>,
-    pub order: Vec<String>,
+    pub order: Vec<CalculationEntry>,
     pub info: Value,
     pub bookmarks: Value,
     pub path: PathBuf,
@@ -509,19 +518,32 @@ impl Pdf {
                     .chain(f.widgets.iter().map(|w| (w.id, f.name.clone())))
             })
             .collect();
-        let order = form
-            .get(b"CO")
-            .and_then(Object::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(|x| {
-                        x.as_reference()
-                            .ok()
-                            .and_then(|id| id_names.get(&id).cloned())
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let mut order = Vec::new();
+        if let Ok(entries) = form.get(b"CO").and_then(Object::as_array) {
+            for entry in entries {
+                let id = entry
+                    .as_reference()
+                    .context("Non-reference calculation order entry")?;
+                if let Some(name) = id_names.get(&id) {
+                    order.push(CalculationEntry::Field(name.clone()));
+                } else {
+                    let node = doc.get_dictionary(id)?;
+                    if let Ok(code) = node
+                        .get(b"AA")
+                        .and_then(|value| {
+                            resolved(&doc, value).map_err(|_| lopdf::Error::DictKey("AA".into()))
+                        })
+                        .and_then(Object::as_dict)
+                        .and_then(|actions| actions.get(b"C"))
+                    {
+                        if !action(&doc, code).is_empty() {
+                            bail!("Unsupported Calculate action on a non-leaf field")
+                        }
+                    }
+                    order.push(CalculationEntry::Preserved { reference: id });
+                }
+            }
+        }
         let mut info = serde_json::Map::new();
         if let Ok(i) = doc
             .trailer
@@ -576,14 +598,28 @@ impl Pdf {
     pub fn project(&self, state: &Value) -> Result<Vec<u8>> {
         let (mut doc, fields) = self.structure_projection(state)?;
         if let Some(order) = state["__order"].as_array() {
-            let ids: Vec<_> = order
-                .iter()
-                .filter_map(|n| {
-                    n.as_str()
-                        .and_then(|n| fields.get(n))
-                        .map(|f| Object::Reference(f.id))
-                })
-                .collect();
+            let mut ids = Vec::with_capacity(order.len());
+            for entry in order {
+                let entry: CalculationEntry = serde_json::from_value(entry.clone())
+                    .context("Invalid calculation order entry")?;
+                let id = match &entry {
+                    CalculationEntry::Field(name) => {
+                        fields
+                            .get(name)
+                            .with_context(|| format!("Missing calculation field {name}"))?
+                            .id
+                    }
+                    CalculationEntry::Preserved { reference } => {
+                        if !self.order.contains(&entry) {
+                            bail!("Unrecognized preserved calculation reference")
+                        }
+                        doc.get_dictionary(*reference)
+                            .context("Missing preserved calculation object")?;
+                        *reference
+                    }
+                };
+                ids.push(Object::Reference(id));
+            }
             let root = doc.trailer.get(b"Root")?.as_reference()?;
             let form = doc.get_dictionary(root)?.get(b"AcroForm")?.as_reference()?;
             doc.get_dictionary_mut(form)?.set("CO", ids);

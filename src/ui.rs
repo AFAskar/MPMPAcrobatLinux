@@ -30,7 +30,19 @@ pub fn main() -> Result<()> {
         let report_path = args
             .get(3)
             .ok_or_else(|| anyhow::anyhow!("missing report"))?;
-        let mut report = json!({"passed":false,"stages":[],"script_count":pdf.scripts.len(),"field_count":pdf.fields.len(),"calculation_count":pdf.order.len()});
+        let executable_calculations = pdf
+            .order
+            .iter()
+            .filter(|entry| match entry {
+                crate::pdf::CalculationEntry::Field(name) => {
+                    pdf.fields.get(name).is_some_and(|field| {
+                        field.actions.get("C").is_some_and(|code| !code.is_empty())
+                    })
+                }
+                crate::pdf::CalculationEntry::Preserved { .. } => false,
+            })
+            .count();
+        let mut report = json!({"passed":false,"stages":[],"script_count":pdf.scripts.len(),"field_count":pdf.fields.len(),"calculation_count":executable_calculations,"calculation_order_entries":pdf.order.len()});
         let result = (|| -> Result<()> {
             let runtime = Runtime::new(
                 &pdf,
