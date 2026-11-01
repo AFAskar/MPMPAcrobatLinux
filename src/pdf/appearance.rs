@@ -325,8 +325,15 @@ pub(super) fn content_with_fonts(
                             color,
                             spacing,
                             font,
-                            decoration: u8::from(span["underline"] == true)
-                                | (u8::from(span["strikethrough"] == true) << 1),
+                            // Bits 0/2/3 denote single/double/word underline.
+                            // A space ends a word stroke without changing text advance.
+                            decoration: (match span["underline"].as_str() {
+                                Some("underline") => 1,
+                                Some("double") => 4,
+                                Some("word") if c != ' ' => 8,
+                                _ if span["underline"] == true => 1,
+                                _ => 0,
+                            }) | (u8::from(span["strikethrough"] == true) << 1),
                             alignment: match span["alignment"].as_str() {
                                 Some("left") => Some(0),
                                 Some("center") => Some(1),
@@ -464,18 +471,22 @@ pub(super) fn content_with_fonts(
             // does not use the face's post/OS2 suggested stroke metrics here.
             // The proportions are qualified across multiple faces and sizes.
             let ascent = RichFontMetrics::from_face(face, None).ascent;
-            for flag in [1, 2] {
-                if first.decoration & flag == 0 {
-                    continue;
-                }
-                if !(0. ..1.).contains(&ascent) {
-                    bail!("Unsupported decoration ascent in {}", field.name)
-                }
-                let (offset, thickness) = if flag == 1 {
-                    (-(1. - ascent) * 0.44, (1. - ascent) * 0.16)
-                } else {
-                    (ascent * 0.39, ascent * 0.04)
-                };
+            if first.decoration != 0 && !(0. ..1.).contains(&ascent) {
+                bail!("Unsupported decoration ascent in {}", field.name)
+            }
+            let descent = 1. - ascent;
+            let mut strokes = Vec::new();
+            if first.decoration & (1 | 8) != 0 {
+                strokes.push((-descent * 0.44, descent * 0.16));
+            }
+            if first.decoration & 4 != 0 {
+                strokes.push((-descent * 0.42, descent * 0.08));
+                strokes.push((-descent * 0.92, descent * 0.08));
+            }
+            if first.decoration & 2 != 0 {
+                strokes.push((ascent * 0.39, ascent * 0.04));
+            }
+            for (offset, thickness) in strokes {
                 let line_y = y + offset * first.size;
                 let thickness = thickness * first.size;
                 let end_x = x + advance;
@@ -670,6 +681,41 @@ mod tests {
             content(&face, 400., 50., &field(), &state, "decorated", None).unwrap(),
             content(&altered, 400., 50., &field(), &state, "decorated", None).unwrap(),
         );
+    }
+    #[test]
+    fn underline_modes_emit_double_and_word_segments_without_losing_text() {
+        let bytes = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
+        let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
+        for (mode, expected) in [("underline", 1), ("double", 2), ("word", 2), ("", 0)] {
+            let state = json!({"textSize":7,"richRenderActive":true,"richValue":[{"text":"aa bb","underline":mode}]});
+            let output = content(&face, 400., 50., &field(), &state, "aa bb", None).unwrap();
+            let parsed = lopdf::content::Content::decode(&output).unwrap();
+            let strokes: Vec<_> = parsed
+                .operations
+                .iter()
+                .filter(|op| op.operator == "m")
+                .collect();
+            assert_eq!(strokes.len(), expected, "{mode}");
+            let shown: Vec<_> = parsed
+                .operations
+                .iter()
+                .filter(|op| op.operator == "Tj")
+                .flat_map(|op| op.operands[0].as_str().unwrap().to_vec())
+                .collect();
+            assert_eq!(shown, [0, 97, 0, 97, 0, 32, 0, 98, 0, 98], "{mode}");
+            if mode == "double" {
+                assert!(
+                    strokes[0].operands[1].as_float().unwrap()
+                        > strokes[1].operands[1].as_float().unwrap()
+                );
+            }
+            if mode == "word" {
+                assert!(
+                    strokes[0].operands[0].as_float().unwrap()
+                        < strokes[1].operands[0].as_float().unwrap()
+                );
+            }
+        }
     }
     #[test]
     fn decorations_keep_run_colors_and_paint_outside_text_objects() {

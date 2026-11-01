@@ -789,6 +789,23 @@ mod tests {
         );
     }
     #[test]
+    fn decoration_commits_preserve_default_inheritance_and_raw_event_values() {
+        host(
+            r#"var f=getField('A');f.richText=true;var base=f.defaultStyle;
+        f.defaultStyle=Object.assign({},base,{underline:true,strikethrough:true});
+        f.richValue=[{text:'inherited',underline:false,strikethrough:false}];
+        var inherited=f.richValue[0];
+        f.richValue=[{text:'clear',underline:'none'}];var cleared=f.richValue[0];
+        var conversions=true;
+        [true,1,2,-1,0.5,'1','true'].forEach(function(v){f.defaultStyle=Object.assign({},base,{underline:v,strikethrough:v});conversions=conversions&&f.defaultStyle.underline==='underline'&&f.defaultStyle.strikethrough===true;});
+        [false,0,'2','underline','none',null,undefined,[1],{}].forEach(function(v){f.defaultStyle=Object.assign({},base,{underline:v,strikethrough:v});conversions=conversions&&!('underline' in f.defaultStyle)&&!('strikethrough' in f.defaultStyle);});
+        f.defaultStyle=base;var immediate;
+        f.setAction('Validate',"event.richValue=[{text:'event',underline:true,strikethrough:false}];immediate=event.richValue;");
+        f.value='input';
+        conversions&&inherited.underline==='underline'&&inherited.strikethrough===true&&cleared.underline===''&&cleared.strikethrough===false&&immediate[0].underline===true&&immediate[0].strikethrough===false&&f.richValue[0].underline==='underline'&&!('strikethrough' in f.richValue[0])"#,
+        );
+    }
+    #[test]
     fn rich_span_metrics_use_reader_decimal_rounding() {
         host("var f=getField('A');f.richText=true;var sizes=[7.25,7.9,8.05,8.5,8.9,9.5,8.049999999999999];var expected=[7.2,7.9,8.1,8.5,8.9,9.5,8];var good=true;sizes.forEach(function(size,i){f.richValue=[{text:'metric',textSize:size,linespacing:14.75}];good=good&&f.richValue[0].textSize===expected[i]&&f.richValue[0].linespacing===14.8;});f.setAction('Format','event.richValue=[{text:\"formatted\",textSize:8.049999999999999,linespacing:7.25}]');f.value='stored';var span=JSON.parse(__host.snapshot()).A.richValue[0];good&&span.textSize===8&&span.linespacing===7.2");
     }

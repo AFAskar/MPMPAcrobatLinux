@@ -98,11 +98,16 @@ fn css(style: &mut Style, input: &str) -> Result<()> {
                 style.insert("textColor".into(), color(value)?);
             }
             "text-decoration" => {
+                style.remove("underline");
+                style.remove("strikethrough");
                 for decoration in value.split_whitespace() {
                     match decoration {
-                        "none" => {}
-                        "underline" => {
-                            style.insert("underline".into(), json!(true));
+                        "none" => {
+                            style.insert("underline".into(), json!(""));
+                            style.insert("strikethrough".into(), json!(false));
+                        }
+                        "underline" | "double" | "word" => {
+                            style.insert("underline".into(), json!(decoration));
                         }
                         "line-through" => {
                             style.insert("strikethrough".into(), json!(true));
@@ -373,8 +378,10 @@ pub fn style_css(style: &Value) -> Result<String> {
         declarations.push(format!("line-height:{n}pt"));
     }
     let mut decorations = vec![];
-    if style["underline"] == true {
-        decorations.push("underline")
+    match style["underline"].as_str() {
+        Some(mode @ ("underline" | "double" | "word")) => decorations.push(mode),
+        _ if style["underline"] == true => decorations.push("underline"),
+        _ => {}
     }
     if style["strikethrough"] == true {
         decorations.push("line-through")
@@ -525,13 +532,43 @@ mod tests {
         assert_eq!(value["defaultStyle"]["fontStretch"], "normal");
     }
     #[test]
+    fn decoration_modes_roundtrip_and_explicit_none_clears_inherited_strokes() {
+        let defaults =
+            metadata("color:#000000", "", "Helvetica", 7., 0).unwrap()["defaultStyle"].clone();
+        let spans: Vec<_> = ["underline", "double", "word", ""]
+            .into_iter()
+            .map(|mode| {
+                let mut span = defaults.clone();
+                span["text"] = json!(mode.to_owned() + " text");
+                span["underline"] = json!(mode);
+                if mode.is_empty() {
+                    span["strikethrough"] = json!(false);
+                }
+                span
+            })
+            .collect();
+        let xml = serialize(&spans, &defaults).unwrap();
+        let loaded = metadata("", &xml, "Helvetica", 7., 0).unwrap();
+        assert_eq!(loaded["spans"], json!(spans));
+        let inherited = metadata(
+            "text-decoration:double line-through",
+            "<body><p><span style=\"text-decoration:none\">clear</span></p></body>",
+            "Helvetica",
+            7.,
+            0,
+        )
+        .unwrap();
+        assert_eq!(inherited["spans"][0]["underline"], "");
+        assert_eq!(inherited["spans"][0]["strikethrough"], false);
+    }
+    #[test]
     fn edited_xml_roundtrip_preserves_spans_styles_boundaries_and_entities() {
         let defaults =
             metadata("color:#000000", "", "Helvetica", 7., 0).unwrap()["defaultStyle"].clone();
         let mut spans = vec![defaults.clone(), defaults.clone()];
         spans[0]["text"] = json!("  A<&\"\r\n\tB  ");
         spans[0]["endParagraph"] = json!(true);
-        spans[0]["underline"] = json!(true);
+        spans[0]["underline"] = json!("underline");
         spans[0]["strikethrough"] = json!(true);
         spans[0]["fontWeight"] = json!(700);
         spans[1]["text"] = json!("Second");

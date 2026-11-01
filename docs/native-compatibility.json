@@ -2328,6 +2328,45 @@
     ],
     "heldout_persistence": "output/testing/rich-family-persistence-1793490094672178998/persistence.json",
     "heldout_independent": "output/testing/rich-family-persistence-1793490094672178998/independent-appearances.json",
-    "generated": "output/testing/native-generated-1793490095019837920/generated.json"
+    "generated": "output/testing/native-generated-1793490095019837920/generated.json",
+    "subsequent_behavior_qualification": "rich_decoration_modes supersedes the prior enum-gap statement for its measured cases; prior failed full comparisons remain unchanged."
+  },
+  "rich_decoration_modes": {
+    "status": "bounded typed decoration behavior and selected complete-span native/Reader persistence qualified; full typography and MPMB milestones incomplete",
+    "scope": "Separate defaultStyle coercion, immediate raw Event.richValue and committed rich spans. Canonical underline strings, explicit none, default inheritance, XML modes, double strokes and ASCII-space word strokes. Not complete typography/MPMB qualification.",
+    "reader_types": "output/testing/reader-script-observation-1793487188042068742/observation.json",
+    "native_types": "output/testing/script-observation-comparison-1793490722026051894/comparison.json",
+    "reader_boundaries": "output/testing/reader-script-observation-1793490756397506579/observation.json",
+    "api_vertical_matrices": [
+      "output/testing/script-observation-comparison-1793490803102372265/geometry-api-final.json",
+      "output/testing/script-observation-comparison-1793490816342896493/geometry-api-final.json"
+    ],
+    "underline_modes": [
+      "output/testing/script-observation-comparison-1793490828169465823/geometry-api-final.json",
+      "output/testing/script-observation-comparison-1793491016446274971/geometry.json"
+    ],
+    "rendering": "output/testing/field-render-1793491036334819137/render.json",
+    "remaining": [
+      "Horizontal advances and pixels still differ; retained render failure has6762 changed pixels",
+      "Strike topology differs: Reader often segments by character, native uses continuous strokes",
+      "Word whitespace beyond ASCII space and decoration combinations with inherited defaults need wider qualification",
+      "Field.setAction Calculate does not auto-register a previously unordered native field; first boundary comparison has24/32 events and remains failed. Controlled observer explicitly sets calcOrderIndex for subsequent mode qualification.",
+      "Heldout24 API-only runner explicitly does not qualify extracted AP text; initial16 retains the strict text gate. Failed heldout pilots1793491324721066670/1793491431604784859 and stricter baselines-independent.json remain failures.",
+      "Combined none/strike and decorated-default persistence need further coverage.",
+      "User priority: behavior over appearance; next work is Calculate lifecycle and original resource/progression persistence."
+    ],
+    "boundary_exact": "output/testing/script-observation-comparison-1793491181927645009/comparison.json",
+    "persistence": {
+      "initial16": "output/testing/rich-family-persistence-1793491183991853838/persistence.json",
+      "initial_strict_independent": "output/testing/rich-family-persistence-1793491183991853838/strict-original-inspection.json",
+      "heldout24_behavior": "output/testing/rich-family-persistence-1793508638045029129/persistence.json"
+    },
+    "checks": "137 Rust tests/build/formatting/strict all-targets Clippy; exact32 direct properties,16 defaults/10 combinations/32 immediate event observations,38 font rows and40 underline modes. Both edited mixed-engine complete-span persistence runs pass all4 native stages plus Reader edit/save, with font lookup disabled natively. All3 original note strict gates and6 generation cases pass. Full span comparisons retain every property/array order; JSON object-member order alone is irrelevant.",
+    "original_notes": {
+      "2014": "output/testing/rich-format-1793490947174629231/formatting.json",
+      "2024": "output/testing/rich-format-1793490966380419623/formatting.json",
+      "ashnar": "output/testing/rich-format-1793490983375215208/formatting.json"
+    },
+    "generated": "output/testing/native-generated-1793491083371406806/generated.json"
   }
 }

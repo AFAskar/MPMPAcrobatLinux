@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Read-only AP face/text/vertical checks for mixed-font persistence.
 
-Font-property checks are a defined subset. Full span API equality, horizontal
-advance/topology and full pixel compatibility are not claimed.
+Font-property checks are a defined subset unless the runner explicitly enables
+full decoded spans. In that mode also compare actual decoration segment counts.
+This verifier retains its strict extracted appearance-text gate; behavior-only
+runner evidence does not establish complete appearance equality.
 """
 import argparse,hashlib,importlib.util,json,re,sys
 from pathlib import Path
@@ -11,12 +13,13 @@ sys.path.insert(0,str(ROOT/'tools/acrobat'))
 from verify import inspect,script_hashes
 spec=importlib.util.spec_from_file_location('matrix',ROOT/'tools/native/rich-decoration-matrix.py');m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 def face(name):return re.sub('[^a-z0-9]','',re.sub(r'^(?:MPMB|[A-Z]{6}\+)', '',name.lstrip('/')).lower())
-def same(a,b):
+def same(a,b,topology=False):
  if len(a)!=len(b):return False
  for left,right in zip(a,b):
   if len(left['rows'])!=len(right['rows']):return False
   for x,y in zip(left['rows'],right['rows']):
    if face(x['font']['base_font'])!=face(y['font']['base_font']) or abs(x['baseline']['size']-y['baseline']['size'])>.001:return False
+   if topology and any(len([p for p in x['paths'] if p['offset']*kind>0])!=len([p for p in y['paths'] if p['offset']*kind>0]) for kind in [-1,1]):return False
    gx=sorted(x['geometry'],key=lambda g:g['offset']);gy=sorted(y['geometry'],key=lambda g:g['offset'])
    if len(gx)!=len(gy) or any(abs(p['offset']-q['offset'])>.002 or abs(p['thickness']-q['thickness'])>.002 for p,q in zip(gx,gy)):return False
  return True
@@ -26,7 +29,7 @@ def main():
  try:
   native=[(Path(case['path']),case['captured']) for case in data['native']];ref=Path(data['reader']);reader=json.loads(ref.read_text());assert reader['passed'];native.append((ref.parent/'reader.pdf',reader['captured']))
   for pdf,capture in native:
-   before=hashlib.sha256(pdf.read_bytes()).hexdigest();measured=m.measure(pdf,capture);equal=same(reference,measured);checked=inspect(pdf,{'Extra.Notes':capture['field']['value']});assert checked['passed'];assert any(w['visible'] and w['appearance_matches'] for w in checked['widgets']);assert equal and script_hashes(pdf)==scripts;assert hashlib.sha256(pdf.read_bytes()).hexdigest()==before;report['cases'].append({'pdf':str(pdf),'sha256':before,'actual_faces_sizes_vertical_equal':equal,'independent':checked})
+   before=hashlib.sha256(pdf.read_bytes()).hexdigest();measured=m.measure(pdf,capture);equal=same(reference,measured,topology=bool(data.get('full_api_equality_claimed')));checked=inspect(pdf,{'Extra.Notes':capture['field']['value']});assert checked['passed'];assert any(w['visible'] and w['appearance_matches'] for w in checked['widgets']);assert equal and script_hashes(pdf)==scripts;assert hashlib.sha256(pdf.read_bytes()).hexdigest()==before;report['cases'].append({'pdf':str(pdf),'sha256':before,'actual_faces_sizes_vertical_equal':equal,'independent':checked})
   if a.negative_fonts_pdf:
    before=hashlib.sha256(a.negative_fonts_pdf.read_bytes()).hexdigest();negative=m.measure(a.negative_fonts_pdf,first);report['negative_wrong_face_rejected']=not same(reference,negative);assert report['negative_wrong_face_rejected'];assert hashlib.sha256(a.negative_fonts_pdf.read_bytes()).hexdigest()==before
   report['passed']=True

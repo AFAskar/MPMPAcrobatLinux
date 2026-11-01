@@ -67,20 +67,24 @@ def measure(pdf,captured):
    geometry=[]
    for path in selected:
     if not any(abs(p['offset']-path['offset'])<.001 and abs(p['thickness']-path['thickness'])<.001 for p in geometry):geometry.append({'offset':path['offset'],'thickness':path['thickness']})
-   assert any(p['offset']<0 for p in geometry)==case['underline'];assert any(p['offset']>0 for p in geometry)==case['strike'];assert all(math.isfinite(v) for p in geometry for v in p.values())
+   expected_underline=case['underline'] is True or case['underline'] in ['underline','double','word'];assert any(p['offset']<0 for p in geometry)==expected_underline;assert any(p['offset']>0 for p in geometry)==case['strike'];assert all(math.isfinite(v) for p in geometry for v in p.values())
    rows.append({'case':case,'getter_size':getter_size,'requested_size_equal':abs(baseline['size']-case['size'])<.001,'baseline':baseline,'geometry':geometry,'paths':selected,'font':fonts[baseline['font']]})
   result.append({'bbox':list(map(float,ap['/BBox'])),'rows':rows})
  assert result,'No active target appearance';return result
 
 def main():
- p=argparse.ArgumentParser(description=__doc__);p.add_argument('--readiness',type=Path);p.add_argument('--observation',type=Path,help='Measure an already completed Reader/native observation');p.add_argument('--pdf',type=Path,help='Override saved PDF for an existing capture');p.add_argument('--failed-comparison-diagnostic',action='store_true',help='Read completed native data from a failed comparison without qualifying it');p.add_argument('--holdout',action='store_true',help='Additional families and fractional sizes after freezing a hypothesis');a=p.parse_args()
+ p=argparse.ArgumentParser(description=__doc__);p.add_argument('--readiness',type=Path);p.add_argument('--observation',type=Path,help='Measure an already completed Reader/native observation');p.add_argument('--pdf',type=Path,help='Override saved PDF for an existing capture');p.add_argument('--failed-comparison-diagnostic',action='store_true',help='Read completed native data from a failed comparison without qualifying it');p.add_argument('--modes',action='store_true',help='Initial four-mode/two-family/two-size underline profile');p.add_argument('--modes-heldout',action='store_true',help='Held-out underline modes on different faces and fractional sizes');p.add_argument('--holdout',action='store_true',help='Additional families and fractional sizes after freezing a hypothesis');a=p.parse_args()
  folder=ROOT/'output/testing'/('rich-decoration-matrix-'+str(time.time_ns()));folder.mkdir();print(folder,flush=True);report={'measurement_completed':False,'scope':__doc__,'compatibility_pass':False}
  try:
   ref=a.observation
   if ref is None:
    assert a.readiness
    source=next((ROOT/'Testing').glob('*_2024_*.pdf'));observer=ROOT/'tools/native/rich-decoration-observer.js'
-   if a.holdout:
+   if a.modes or a.modes_heldout:
+    families,sizes=(['Georgia','Courier New','Trebuchet MS'],[8.5,17.75]) if a.modes_heldout else (['Segoe UI','Times New Roman'],[7,14])
+    cases=[{'family':family,'weight':400,'style':'normal','size':size,'underline':mode,'strike':False} for family in families for size in sizes for mode in ['underline','double','word','none']]
+    selected=folder/'observer.js';selected.write_text('tDoc.__decorationCases='+json.dumps(cases)+';\n'+observer.read_text());observer=selected;report['profile']='held-out modes/families/fractional sizes' if a.modes_heldout else 'initial16 underline-mode rows'
+   elif a.holdout:
     cases=[{'family':family,'weight':400,'style':'normal','size':size,'underline':True,'strike':True} for family in ['Georgia','Verdana','Tahoma','Trebuchet MS'] for size in [8.5,12.25,17.75]]
     selected=folder/'observer.js';selected.write_text('tDoc.__decorationCases='+json.dumps(cases)+';\n'+observer.read_text());observer=selected;report['profile']='held-out families/fractional sizes'
    else:report['profile']='initial26 rows'
