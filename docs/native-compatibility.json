@@ -2533,5 +2533,31 @@
       "Other spell-slot layouts/pages, other class/fixture spell slots and Warlock pact-slot recovery not qualified by this case",
       "Spell-point conversion, slot-funded Bardic Inspiration, all rests/resources/combat combinations and complete class table use remain incomplete"
     ]
+  },
+  "bard_expertise_choices": {
+    "status": "bounded2024 Lore expertise selection/expansion/removal/downlevel and mixed-engine persistence qualified; full class choices incomplete",
+    "native": "output/testing/native-bard-expertise-1793619182927084627/expertise.json",
+    "reader": "output/testing/reader-bard-expertise-1793619923250631530/expertise.json",
+    "reopens": "output/testing/bard-expertise-reopens-1793621814979822052/reopens.json",
+    "reader_native_edit": "output/testing/reader-script-observation-1793622871539636037/observation.json",
+    "native_interoperability_comparison": "output/testing/script-observation-comparison-1793623161311779369/comparison.json",
+    "final_native_edit": "output/testing/bard-expertise-reopens-1793623260267379264/reopens.json",
+    "native_checkbox_states": "output/testing/native-bard-expertise-1793619182927084627/native-checkbox-appearances.json",
+    "scope": "Four real manual skill-proficiency checkbox activations; original offered Acrobatics/Arcana expertise at5; Perception/Persuasion expansion at9; Arcana removal; downlevel1 removes expertise and retains manual proficiencies. Complete captured fields/choices/offered menus and20 skill displays match Reader. Eight fresh native reopens of both engines outputs retain state and update Acrobatics after original Dexterity14\u219216 edit. Actual native expertise9 output survives Reader reopen/Dex16 edit, exact native API/AP comparison (+11), then fresh native Dex18 edit (+12).",
+    "widget_and_render_checks": "All170 selected visible proficiency/expertise checkbox AS/appearance states across native4,Reader4,reopen8,final1 pass. Native and Reader level9 page1 renders reviewed; no full typography/pixel equality claim.",
+    "retained_failed_tests": [
+      "output/testing/native-bard-expertise-1793619070814809179/expertise.json",
+      "output/testing/bard-expertise-reopens-1793621142264422600/reopens.json",
+      "output/testing/bard-expertise-reopens-1793621483281933256/reopens.json"
+    ],
+    "retained_failure_reasons": [
+      "Read-only User Script diagnostic carrier was incorrectly edited as user input; corrected to match Reader programmatic assignment/original RunUserScript entry.",
+      "Immediate JSON retained the verified Unicode transport sentinel that saved_capture removes; corrected test checks/removes only this diagnostic metadata.",
+      "Expected ability-edit state omitted the legitimate dependent Acrobatics canonical change8\u21929; corrected expectation includes it. No game-state mismatch remained in these failed comparisons."
+    ],
+    "remaining": [
+      "Other expertise/skill combinations and duplicate-proficiency sources, all feats/ASIs, multiclass and other class/fixture choice paths remain incomplete",
+      "Full-sheet serialized-state equivalence and native UI behavior outside the exercised controls remain unproven"
+    ]
   }
 }

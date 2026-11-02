@@ -199,3 +199,8 @@ Concrete old negative and repaired positive native progression/save/reopen, inde
 ### Milestone3h: bounded2024 Bard generated-page slot/rest persistence — qualified
 
 Real Reader five-stage spending/rest/reopen case1793600229677130390, native seven-stage comparison1793617801000337702 and108 exact visible widget states1793618324196188572 pass, with original scripts/selected canonical values and reviewed checked-slot renders. Short rest retains spent slots; long rest clears; actual native and Reader-saved fresh reopens preserve spent state. This completes only the stated generated-page case. Other layouts/classes/fixtures and resource conversions remain open; complete table compatibility remains unproven. Next: original Bard expertise menu choices, expansion/removal/down-leveling and edited Reader/native persistence.
+
+
+### Milestone3i: bounded2024 Bard expertise choices and persistence — qualified
+
+Original offered expertise menus and real manual proficiency inputs pass native1793619182927084627/Reader1793619923250631530 with exact captured state and20 skill displays. Expansion at9, selected-choice removal and downlevel cleanup pass. Eight changed fresh reopens1793621814979822052, actual native→Reader Dex16 edit/exact native API/AP comparison1793622871539636037/1793623161311779369 and final native Dex18 edit1793623260267379264 pass.170 selected checkbox appearance states and reviewed level9 renders support the bounded result. Other expertise/feat/ASI/multiclass/fixture choices remain open. Next repair is native click modifier propagation for original spell-row/formula-entry actions. Full goal remains ACTIVE.

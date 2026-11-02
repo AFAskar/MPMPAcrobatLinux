@@ -26,7 +26,12 @@ def main():
     report['native_dialog_profile']=str(args.dialogs.resolve()) if args.dialogs else None
     report['native_dialog_profile_sha256']=hashlib.sha256(args.dialogs.read_bytes()).hexdigest() if args.dialogs else None
     summary="(function(){var s=getField('PC Name').valueAsString,a=1,b=0;for(var i=0;i<s.length;i++){a=(a+s.charCodeAt(i))%65521;b=(b+a)%65521}return {code_units:s.length,adler32_utf16:String((b*65536+a)>>>0)}})()"
-    output=folder/'native.pdf';scenario={'dialogs':dialogs,'alerts':[1]*20,'steps':[{'op':'advance','ms':4100},{'op':'eval','code':"Value('User Script',"+json.dumps(observer)+")"},{'op':'eval','code':"__host.command('RunUserScript(false)')"},{'op':'eval','code':summary},{'op':'save','path':str(output)}]}
+    preparation=[{'op':'advance','ms':4100}]
+    if reader.get('pre_values'):
+        values=reader['pre_values'];report['pre_values']=values
+        code='(function(){var values='+json.dumps(values)+';Object.keys(values).forEach(function(n){if(!getField(n))throw Error("Missing field: "+n)});Object.keys(values).forEach(function(n){Value(n,values[n])});calculateNow()})()'
+        preparation += [{'op':'eval','code':code},{'op':'advance','ms':1000}]
+    output=folder/'native.pdf';scenario={'dialogs':dialogs,'alerts':[1]*20,'steps':preparation+[{'op':'eval','code':"Value('User Script',"+json.dumps(observer)+")"},{'op':'eval','code':"__host.command('RunUserScript(false)')"},{'op':'eval','code':summary},{'op':'save','path':str(output)}]}
     scenario_path=folder/'scenario.json';scenario_path.write_text(json.dumps(scenario))
     try:
         with (folder/'probe.log').open('w') as log:run=subprocess.run([str(binary),str(source),'--probe',str(scenario_path),str(folder/'probe.json')],stdout=log,stderr=log,timeout=300)
