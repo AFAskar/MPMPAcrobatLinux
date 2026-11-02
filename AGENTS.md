@@ -98,3 +98,5 @@ Read `docs/testing-environment.md` before changing or testing PDF behavior.
 
 - Dialog controls exist before initialize: qualified Reader defaults are empty plain/readonly edits, string zero for editable non-popup SpinEdit controls, static-text labels and false check/radio values. Descriptor name is not an edit initial value. Do not let rendering invent button entries in dialog.store().
 - In the ability-score dialog, distinguish a pending feat bonus from its explicit application. Use observed editable RICHEDIT controls and the paste command's value argument; do not assume the native class is Edit.
+
+- Distinguish programmatic field assignment from a completed desktop edit. Original Constitution Blur recalculates automatic HP; qualify focus transitions and completed edits with nonempty original-event traces, selected HP mode, feat removal/progression and changed mixed-engine reopens. Passing calculation totals alone does not prove the HP field was updated.

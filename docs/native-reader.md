@@ -207,3 +207,26 @@ Actual native applied output→Reader1793645791825540358 edits base13→15, givi
 Retained failed diagnostics: old zero-score1793629206032124808 and repaired extra-dialog-expectation1793630315831084214; invalid OK-only cancel1793628520969896236; Reader edit-class1793630870463829683 and paste-argument1793631059690725587 errors. The latter Reader documents were retained/closed without changing scores. Fresh corrected runs above pass; failed reports were not relabelled.
 
 Reproduce with `tools/native/reader-dialog-defaults.py`, `verify-dialog-defaults.py`, `reader-resilient-feat.py`, `verify-resilient-feat.py`, `verify-resilient-calculations.py`, `reader-ability-reopen.py` and `verify-ability-reopen.py`; each has explicit input/readiness/report arguments. Reference operations must run one suite at a time through cleanup.
+
+### Automatic HP and completed user edits
+
+The desktop **Commit field edit** now delivers original Focus/Blur callbacks as
+part of completing the edit. Programmatic probe `edit` remains a separate setter;
+probe `user-edit` exercises the completed desktop-edit path. Original Constitution
+Blur updates automatic HP; fresh calculation totals alone cannot verify that the
+visible HP field changed.
+
+Bounded 2024 Bard9/10 fixed-HP qualification, including Tough removal, level-up and
+changed native/Reader reopens:
+
+```bash
+python3 tools/native/reader-hp-workflow.py --input <bard9-con12.pdf> --readiness output/testing/readiness-1793598704.json
+python3 tools/native/verify-hp-workflow.py --reader <hp.json>
+python3 tools/native/verify-hp-workflow.py --reader <hp.json> --mode legacy-widget-switch
+python3 tools/native/reader-hp-reopen.py --native <comparison.json> --readiness output/testing/readiness-1793598704.json
+python3 tools/native/verify-hp-reopen.py --reader <reopen.json>
+```
+
+Use a currently qualified reference fingerprint. These cases require their stated
+Bard9 input and actual offered HP menu items. Other classes/modes/fixtures and the
+complete editor focus/validation/buffer lifecycle remain incompletely qualified.

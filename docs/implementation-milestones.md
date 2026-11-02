@@ -230,3 +230,9 @@ Actual native applied output→Reader1793645791825540358 edits base13→15, givi
 Retained failed diagnostics: old zero-score1793629206032124808 and repaired extra-dialog-expectation1793630315831084214; invalid OK-only cancel1793628520969896236; Reader edit-class1793630870463829683 and paste-argument1793631059690725587 errors. The latter Reader documents were retained/closed without changing scores. Fresh corrected runs above pass; failed reports were not relabelled.
 
 Reproduce with `tools/native/reader-dialog-defaults.py`, `verify-dialog-defaults.py`, `reader-resilient-feat.py`, `verify-resilient-feat.py`, `verify-resilient-calculations.py`, `reader-ability-reopen.py` and `verify-ability-reopen.py`; each has explicit input/readiness/report arguments. Reference operations must run one suite at a time through cleanup.
+
+### Milestone3/4: bounded automatic-HP user commits — qualified slice
+
+2024 Bard9/10 fixed HP now follows original Constitution Blur during completed user edits. Old145 negative remains failed; current user-edit/widget-switch comparisons, genuine menu/Tough choices, feat removal, actual native→Reader→coldReader progression and final fresh native changed reopen pass (see automatic_hp_user_commits in the matrix).146 tests/build/fmt/Clippy and current cloud acceptance2/generated6/lifecycle2/table6 pass. Complete selected field/feat/mode/totals and resource-retention evidence includes nonempty original Blur traces and independent changed appearances.
+
+This slice is complete; Milestones3/4 remain in progress. Other HP modes/fixtures/classes, broad feats/ASIs and complete focus/editor behavior remain unqualified.

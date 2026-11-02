@@ -2622,5 +2622,32 @@
       "Other feats, ASI/manual columns, honor/sanity, spinner arrows and all other dialog control/default combinations remain unqualified",
       "Native dialogs are not visually identical to Reader; complete per-class choices, spells/resources/combat and persistence remain incomplete"
     ]
+  },
+  "automatic_hp_user_commits": {
+    "status": "bounded 2024 Bard9/10 qualified; full HP/classes/table milestone incomplete",
+    "binary_sha256": "cfd7609c2ccc266dc0faa16dd5d3d0a6cd10fbf37fa3d3acc4badc661da990a2",
+    "behavior": "Deliver original Focus/Blur when field focus changes. Desktop Commit field edit uses a completed user edit and leaves the field; programmatic edit remains separate. This permits original Constitution Blur to update automatic HP.",
+    "reader": "output/testing/reader-hp-workflow-1793648941914137382/hp.json",
+    "native_user_commit": "output/testing/hp-workflow-comparison-1793650003992869372/comparison.json",
+    "native_widget_switch": "output/testing/hp-workflow-comparison-1793650294896739439/comparison.json",
+    "old_engine_negative": "output/testing/hp-workflow-comparison-1793650003981369559/comparison.json",
+    "reader_mixed_cold_progression": "output/testing/reader-hp-reopen-1793650532300753425/reopen.json",
+    "final_native": "output/testing/hp-final-native-1793651030785841081/reopen.json",
+    "scope": [
+      "Actual offered automatic fixed-HP menu choice; Bard9 Con12 HP57→Con16 HP75→Tough HP93. Three complete selected state comparisons, original Blur trace included.",
+      "Both native user-commit and original activate/edit/activate widget-switch paths; each also passes two fresh native/actual Reader-saved Con18 edits to HP102.",
+      "Actual native output→Reader Con18 HP102; Tough removal HP84; Con20 HP93; cold Reader reopen Con18 HP84; original Bard10 progression HP93. Current30/temp5/hit-dice-used2 and fixed mode retained throughout.",
+      "Final fresh native loads all observed fields/feat/totals/mapping from Reader exactly; only runtime-local trace resets. Con12 edit runs original Blur HP93→63 and rebuilds visible numeric appearances.",
+      "ASCII diagnostic carrier, actual Unicode sentinel, Reader code-unit/checksum, original nonempty Con action restored, original document-script hashes preserved; selected canonical/widgets/AP values independently checked.",
+      "Final Reader/native page1 renders reviewed: updated HP, Constitution and hit-dice values present. This is not pixel or complete appearance equality.",
+      "146 Rust tests, locked build, fmt and strict all-targets Clippy pass. Current-binary cloud acceptance2/generated6/lifecycle2/table6 passed with no diagnostic or original-console errors; base-class regression remains running."
+    ],
+    "counterexample": "Old145 uses existing activate/edit/activate operations and leaves HP57/mapping stale after Con16, despite fresh calculated totals75; original Blur trace absent. It remains failed.",
+    "remaining": [
+      "Other fixture/class combinations, average/max/custom HP modes, multiclass/sidekick HP and all feat/ASI interactions remain unqualified by this case.",
+      "Focus reentry/errors, invalid validation, physical per-keystroke input, all widget indices and native pending editor-buffer/save behavior remain unqualified.",
+      "Native desktop wiring uses the qualified completed-edit primitive; this evidence does not establish complete desktop interaction parity or full class/table compatibility."
+    ],
+    "cloud_regressions": "output/testing/cloud-lab-146-regressions/queue-in-progress.json"
   }
 }

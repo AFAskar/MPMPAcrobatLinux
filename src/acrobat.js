@@ -101,7 +101,7 @@ var __host = (function () {
       deleteItemAt(i){this.items.splice(i,1)},
       checkThisBox(i,on){this.value=on?(this.exportValues[i]||'Yes'):'Off'},isBoxChecked(i){return String(this.value)===(this.exportValues[i]||'Yes')?1:0},
       setAction(type,code){const key=({Calculate:'C',Validate:'V',Keystroke:'K',Format:'F',MouseUp:'U',MouseDown:'D',OnFocus:'Fo',OnBlur:'Bl'})[type];if(!key)return unsupported('Field.setAction '+type);code=String(code);if(key==='C'){const index=data.order.indexOf(n);if(code&&index<0){data.order.push(n);revision++;}else if(!code&&index>=0){data.order.splice(index,1);revision++;}}if(this._actions[key]!==code){this._actions[key]=code;this._modifiedActions=this._modifiedActions||{};this._modifiedActions[key]=code;revision++;}},
-      setFocus(){data.focus=n;const page=Array.isArray(this.page)?this.page.filter(p=>p>=0)[0]:this.page;if(page>=0)globalThis.pageNum=page;},getArray(){return [this]},
+      setFocus(){focusField(n);},getArray(){return [this]},
       browseForFileToSubmit(){if(this.type!=='text'||!(x.flags&1048576))throw Error('File selection requires a file-select text field');if(typeof __browsePdf!=='function')return unsupported('Field.browseForFileToSubmit');const path=__browsePdf();if(path!==null)this.value=path;},
       buttonGetIcon(face=0){if(face!==0)return unsupported('Field.buttonGetIcon non-normal face');return this._icon||{field:n,face:0}},
       buttonSetIcon(icon,face=0){if(face!==0)return unsupported('Field.buttonSetIcon non-normal face');if(!icon||typeof icon.field!=='string')return unsupported('Field.buttonSetIcon external icon');this._icon=Object.assign({},icon);revision++},
@@ -189,7 +189,7 @@ var __host = (function () {
   }
   function eventRun(f,key,value,extra,richInput) {
     let previous=globalThis.event;
-    let e=Object.assign({target:f,targetName:f.name,source:importActive?null:(fields[data.focus]||f),name:({C:'Calculate',V:'Validate',K:'Keystroke',F:'Format',U:'Mouse Up'})[key]||key,type:'Field',value:['K','V','C','F'].includes(key)?String(value):value,rc:true,willCommit:key==='K',change:'',selStart:0,selEnd:0},extra||{});
+    let e=Object.assign({target:f,targetName:f.name,source:importActive?null:(fields[data.focus]||f),name:({C:'Calculate',V:'Validate',K:'Keystroke',F:'Format',U:'Mouse Up',D:'Mouse Down',Fo:'Focus',Bl:'Blur'})[key]||key,type:'Field',value:['K','V','C','F'].includes(key)?String(value):value,rc:true,willCommit:key==='K',change:'',selStart:0,selEnd:0},extra||{});
     let eventValue=e.value,valueWritten=false,richWritten=false;
     let richData=richInput===undefined?((key==='K'||key==='V')?(String(value)?richChanges(value):null):copyData(f._richRaw||[])):copyData(richInput);
     Object.defineProperty(e,'value',{enumerable:true,get(){return eventValue},set(v){if(['K','V','C','F'].includes(key)){if(typeof v!=='string'&&typeof v!=='number'){const error=new Error('Set not possible, invalid or unknown.');error.name='InvalidSetError';throw error;}v=String(v);}eventValue=v;valueWritten=true;}});
@@ -242,10 +242,25 @@ var __host = (function () {
     f.value=v;
     globalThis.dirty=true;return true;
   }
+  function focusField(n,index){
+    const f=n===null?null:fields[n];if(n!==null&&!f)throw Error('Unknown field '+n);
+    if(f&&index===undefined){index=f._widgets.map(w=>w.page>=0).indexOf(true);if(index<0)index=0;}
+    if(data.focus===n&&(!f||(data.focusWidget||0)===index))return;
+    const previous=fields[data.focus];data.focus=null;data.focusWidget=0;
+    if(previous)eventRun(previous,'Bl',previous.value);
+    if(f){data.focus=n;data.focusWidget=index;const page=f._widgets[index]&&f._widgets[index].page;if(page>=0)globalThis.pageNum=page;eventRun(f,'Fo',f.value);}
+  }
+  // Applying the desktop editor completes a user edit, including leaving the
+  // field. Programmatic edit/value assignment remains a separate operation.
+  function userEdit(n,v){
+    const index=data.focus===n?(data.focusWidget||0):undefined;
+    focusField(n,index);edit(n,v);focusField(null);
+    if(globalThis.calculate&&app.calculate)calculateNow();return true;
+  }
   function activate(n,index=0,modifiers={}){
-    const f=fields[n];if(!f)throw Error('Unknown field '+n);data.focus=n;
+    const f=fields[n];if(!f)throw Error('Unknown field '+n);focusField(n,index);
     const mouse={shift:!!modifiers.shift,modifier:!!modifiers.modifier};
-    eventRun(f,'Fo',f.value);eventRun(f,'D',f.value,mouse);
+    eventRun(f,'D',f.value,mouse);
     if(!f.readonly&&(f.type==='checkbox'||f.type==='radiobutton'))f.checkThisBox(index,f.type==='radiobutton'||!f.isBoxChecked(index));
     eventRun(f,'U',f.value,mouse);if(globalThis.calculate&&app.calculate)calculateNow();
   }
@@ -305,7 +320,7 @@ var __host = (function () {
     const repair={id:'mpmb-2024-261023-wildshape-pop-typo',scope:'runtime only',embedded_scripts_modified:false,reason:'Original ApplyWildshape reads pop instead of its local prop variable'};
     repairs.push(repair);__log('Applied qualified runtime repair: '+repair.id);
   }
-  return {activate,pageWidgets,widgetDisplay,setWidgetDisplay,widgetRect,setWidgetRect,menuItems,popup,applyQualifiedRepairs,get revision(){return revision},recordError(e){errors.push(e)},fields,names,data,menus,gaps,errors,source,unsupported,gap,calculateNow,edit,advance,execDialog,invokeMenu,command,spawn,removeField,deletePages,importXFDF,
+  return {activate,focusField,userEdit,pageWidgets,widgetDisplay,setWidgetDisplay,widgetRect,setWidgetRect,menuItems,popup,applyQualifiedRepairs,get revision(){return revision},recordError(e){errors.push(e)},fields,names,data,menus,gaps,errors,source,unsupported,gap,calculateNow,edit,advance,execDialog,invokeMenu,command,spawn,removeField,deletePages,importXFDF,
     consoleView(){return copyData(consoleState)},
     consoleVisible(visible){consoleState.visible=!!visible},
     consolePrint(message){consoleState.messages.push({document:data.file,text:message});__log(message)},
@@ -400,7 +415,7 @@ Object.assign(globalThis,{
   bringToFront(){if(typeof __frontDocument!=='function')return __host.unsupported('Doc.bringToFront');return __frontDocument()},
   info:__docInfo(JSON.parse(__initial).info),documentFileName:JSON.parse(__initial).file,path:JSON.parse(__initial).path,
   numPages:JSON.parse(__initial).pages,numFields:__host.names.length,calculate:true,delay:false,dirty:false,pageNum:0,
-  getField(n){if(globalThis.__nativeDocumentClosed)throw Error('Document is closed');n=String(n).replace(/\.{2,}/g,'.');if(__host.fields[n])return __host.fields[n];const selected=/^(.*)\.(\d+)$/.exec(n);if(selected&&__host.fields[selected[1]]){const base=__host.fields[selected[1]],index=Number(selected[2]);if(!base._widgets[index])return null;return new Proxy(base,{get(target,key){if(key==='page')return target._widgets[index].page;if(key==='display')return __host.widgetDisplay(target,index);if(key==='rect')return __host.widgetRect(target,index);if(key==='setFocus')return function(){__host.data.focus=target.name;__host.data.focusWidget=index;const page=target._widgets[index].page;if(page>=0)globalThis.pageNum=page;};return target[key]},set(target,key,value){if(key==='display')__host.setWidgetDisplay(target,index,value);else if(key==='rect')__host.setWidgetRect(target,index,value);else target[key]=value;return true}})}const prefix=String(n)+'.';let children=__host.names.filter(x=>x.startsWith(prefix));return children.length?new Proxy({name:n,getArray(){return children.map(x=>__host.fields[x])}},{get(o,k){return k in o?o[k]:__host.fields[children[0]][k]},set(o,k,v){for(const child of children)__host.fields[child][k]=v;return true}}):null},
+  getField(n){if(globalThis.__nativeDocumentClosed)throw Error('Document is closed');n=String(n).replace(/\.{2,}/g,'.');if(__host.fields[n])return __host.fields[n];const selected=/^(.*)\.(\d+)$/.exec(n);if(selected&&__host.fields[selected[1]]){const base=__host.fields[selected[1]],index=Number(selected[2]);if(!base._widgets[index])return null;return new Proxy(base,{get(target,key){if(key==='page')return target._widgets[index].page;if(key==='display')return __host.widgetDisplay(target,index);if(key==='rect')return __host.widgetRect(target,index);if(key==='setFocus')return function(){__host.focusField(target.name,index);};return target[key]},set(target,key,value){if(key==='display')__host.setWidgetDisplay(target,index,value);else if(key==='rect')__host.setWidgetRect(target,index,value);else target[key]=value;return true}})}const prefix=String(n)+'.';let children=__host.names.filter(x=>x.startsWith(prefix));return children.length?new Proxy({name:n,getArray(){return children.map(x=>__host.fields[x])}},{get(o,k){return k in o?o[k]:__host.fields[children[0]][k]},set(o,k,v){for(const child of children)__host.fields[child][k]=v;return true}}):null},
   getDataObject(name){const found=__host.dataObjects().filter(d=>d.name===name);if(!found.length)throw Error('Unknown data object '+name);return found[0]},
   exportDataObject:__host.exportDataObject,
   exportAsXFDFStr(options={}){if(globalThis.__nativeDocumentClosed)throw Error('Document is closed');if(!options||typeof options!=='object'||Array.isArray(options))return __host.unsupported('Doc.exportAsXFDFStr positional options');return __xfdfExport(JSON.stringify({options,href:String(path||documentFileName||''),fields:__host.names.map(name=>{const f=__host.fields[name];return {name,type:f.type,flags:f._exportFlags,value:Array.isArray(f.value)?f.value:f.valueAsString,rich:f.richText?f._richRaw:null,defaultStyle:f._defaultStyle}})}))},

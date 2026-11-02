@@ -78,6 +78,9 @@ pub fn main() -> Result<()> {
                         "edit" => runtime
                             .edit(step["field"].as_str().unwrap_or(""), &step["value"])
                             .map(|_| Value::Null),
+                        "user-edit" => runtime
+                            .user_edit(step["field"].as_str().unwrap_or(""), &step["value"])
+                            .map(|_| Value::Null),
                         "eval" => runtime.eval(step["code"].as_str().unwrap_or("")),
                         "advance" => runtime
                             .advance(step["ms"].as_u64().unwrap_or(0))
@@ -715,7 +718,7 @@ impl eframe::App for Reader {
                 ui.label(&self.edit_name);
                 ui.text_edit_multiline(&mut self.edit_value);
                 if ui.button("Commit field edit").clicked() {
-                    let r = self.rt.edit(&self.edit_name, &json!(self.edit_value));
+                    let r = self.rt.user_edit(&self.edit_name, &json!(self.edit_value));
                     self.result(r)
                 }
                 if let Ok(values)=self.rt.eval("['Str','Str Mod','Character Level','Proficiency Bonus'].map(n=>[n,getField(n).valueAsString])"){

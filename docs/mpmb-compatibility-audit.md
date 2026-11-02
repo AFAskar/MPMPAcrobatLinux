@@ -502,3 +502,13 @@ Actual native applied output→Reader1793645791825540358 edits base13→15, givi
 Retained failed diagnostics: old zero-score1793629206032124808 and repaired extra-dialog-expectation1793630315831084214; invalid OK-only cancel1793628520969896236; Reader edit-class1793630870463829683 and paste-argument1793631059690725587 errors. The latter Reader documents were retained/closed without changing scores. Fresh corrected runs above pass; failed reports were not relabelled.
 
 Reproduce with `tools/native/reader-dialog-defaults.py`, `verify-dialog-defaults.py`, `reader-resilient-feat.py`, `verify-resilient-feat.py`, `verify-resilient-calculations.py`, `reader-ability-reopen.py` and `verify-ability-reopen.py`; each has explicit input/readiness/report arguments. Reference operations must run one suite at a time through cleanup.
+
+### Automatic HP after genuine Constitution commits — bounded qualification
+
+The native reader omitted original field Blur actions. In the 2024 Bard9 fixed-HP workflow, a Constitution12→16 edit left HP57 although `calcHPtotals` already returned75. The retained old-engine widget-switch counterexample1793650003981369559 remains failed. Focus transitions now run original Focus/Blur once when changing the focused widget; the desktop Commit field edit completes the user-edit/leave-field sequence. Programmatic assignments remain separate.
+
+Reader1793648941914137382 and native user-commit1793650003992869372/widget-switch1793650294896739439 pass all three observed states: fixed57, Constitution16→75, Tough→93. Each native path also passes fresh native and actual Reader-saved edits to Constitution18→102. Original nonempty Con Blur is observed, then restored before normal saves. Original document scripts remain unchanged.
+
+Actual native output passes Reader1793650532300753425: Constitution18→102; Tough removal→84; Constitution20→93; cold Reader Constitution18→84; original Bard10 progression→93. Current30, temporary5, spent hit dice2 and fixed mode survive. Final fresh native1793651030785841081 matches complete selected loaded state except the explicitly reset runtime trace, then Constitution12 runs original Blur93→63. ASCII/Unicode checksum, selected canonical/widgets/changed AP text and final page1 render checks pass.146 Rust tests/build/fmt/strict all-targets Clippy pass; cloud current-binary acceptance2/generated6/lifecycle2/table6 pass without original-console or diagnostic errors.
+
+This qualifies one automatic-HP mode and one class profile. Other fixtures/classes/modes, invalid-validation/reentry/per-keystroke and editor-buffer lifecycle remain open. Full HP/table/persistence milestones and overall goal remain incomplete.

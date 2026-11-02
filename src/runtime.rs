@@ -604,6 +604,14 @@ impl Runtime {
         self.eval(&format!("__host.edit({},{})", serde_json::to_string(n)?, v))?;
         Ok(())
     }
+    pub fn user_edit(&self, n: &str, v: &Value) -> Result<()> {
+        self.eval(&format!(
+            "__host.userEdit({},{})",
+            serde_json::to_string(n)?,
+            v
+        ))?;
+        Ok(())
+    }
     pub fn advance(&self, ms: u64) -> Result<()> {
         self.eval(&format!("__host.advance({ms})"))?;
         Ok(())
@@ -1086,6 +1094,12 @@ mod tests {
     fn widget_activation_delivers_original_target_and_updates_checkbox() {
         host(
             r#"var f=getField('A');f.type='checkbox';f.exportValues=['True'];f.setAction('MouseDown',"globalThis.down=event.target.name");f.setAction('MouseUp',"globalThis.up=event.target.valueAsString");__host.activate('A');down==='A'&&up==='True'&&f.isBoxChecked(0)===1"#,
+        );
+    }
+    #[test]
+    fn field_focus_changes_and_user_commits_deliver_original_blur_actions() {
+        host(
+            r#"var trace=[],a=getField('A'),b=getField('B');b.setAction('Calculate','');a.setAction('OnFocus','trace.push(event.name+":"+event.target.name)');a.setAction('OnBlur','trace.push(event.name+":"+event.target.name);getField("B").value=Number(event.target.value)+10');a.setFocus();a.setFocus();getField('C').setFocus();var switched=b.value===12;__host.userEdit('A','18');switched&&b.value===28&&__host.data.focus===null&&JSON.stringify(trace)==='["Focus:A","Blur:A","Focus:A","Blur:A"]'"#,
         );
     }
     #[test]
