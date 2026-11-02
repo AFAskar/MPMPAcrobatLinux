@@ -30,6 +30,9 @@ def main():
     assert reference['passed'] and len(reference['phases']) == 5
     source = Path(reference['final_save']['pdf'])
     expected = reference['phases'][-1]['state']
+    level = expected['fields']['Character Level']
+    hp_before = expected['fields']['HP Max']
+    hp_after = str(int(hp_before) + (12 // 2 - int(expected['fields']['Con']) // 2) * int(level))
     profile = module('profile', 'reader-hp-workflow.py')
     style = module('style', 'default-style-persistence.py')
     field_state = module('field_state', 'field-state-comparison.py')
@@ -67,10 +70,10 @@ def main():
         loaded = style.saved_capture(folder / 'loaded-diagnostic.pdf', data['stages'][3]['result'], source)
         assert loaded['trace'] == [] and loaded == dict(expected, trace=[]), (loaded, expected)
         after = style.saved_capture(folder / 'edited-diagnostic.pdf', data['stages'][8]['result'], source)
-        assert after['fields']['HP Max'] == '63' and after['fields']['Con'] == '12'
-        assert after['fields']['Character Level'] == '10' and after['fields']['HD1 Level'] == '10'
+        assert after['fields']['HP Max'] == hp_after and after['fields']['Con'] == '12'
+        assert after['fields']['Character Level'] == level and after['fields']['HD1 Level'] == level
         assert after['mapping'].split(',')[3] == 'fixed' and after['feats'] == loaded['feats']
-        assert after['trace'] == [{'name': 'Blur', 'type': 'Field', 'target': 'Con', 'before': '93', 'after': '63'}]
+        assert after['trace'] == [{'name': 'Blur', 'type': 'Field', 'target': 'Con', 'before': hp_before, 'after': hp_after}]
         assert not after['errors']
         assert tuple(after['fields'][n] for n in ['HP Current', 'HP Temp', 'HD1 Used']) == ('30', '5', '2')
         field_state.compare(saved, after['fields'])

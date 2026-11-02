@@ -2624,7 +2624,7 @@
     ]
   },
   "automatic_hp_user_commits": {
-    "status": "bounded 2024 Bard9/10 qualified; full HP/classes/table milestone incomplete",
+    "status": "bounded fixed-HP workflows in all three fixtures qualified; full HP/classes/table milestone incomplete",
     "binary_sha256": "cfd7609c2ccc266dc0faa16dd5d3d0a6cd10fbf37fa3d3acc4badc661da990a2",
     "behavior": "Deliver original Focus/Blur when field focus changes. Desktop Commit field edit uses a completed user edit and leaves the field; programmatic edit remains separate. This permits original Constitution Blur to update automatic HP.",
     "reader": "output/testing/reader-hp-workflow-1793648941914137382/hp.json",
@@ -2640,14 +2640,33 @@
       "Final fresh native loads all observed fields/feat/totals/mapping from Reader exactly; only runtime-local trace resets. Con12 edit runs original Blur HP93→63 and rebuilds visible numeric appearances.",
       "ASCII diagnostic carrier, actual Unicode sentinel, Reader code-unit/checksum, original nonempty Con action restored, original document-script hashes preserved; selected canonical/widgets/AP values independently checked.",
       "Final Reader/native page1 renders reviewed: updated HP, Constitution and hit-dice values present. This is not pixel or complete appearance equality.",
-      "146 Rust tests, locked build, fmt and strict all-targets Clippy pass. Current-binary cloud acceptance2/generated6/lifecycle2/table6 passed with no diagnostic or original-console errors; base-class regression remains running."
+      "146 Rust tests, locked build, fmt and strict all-targets Clippy pass. Current-binary cloud acceptance2/generated6/lifecycle2/table6/base-class38 at six levels (228 checkpoints) passed; all diagnostic and original-console reports are empty. Default progression does not qualify full class choices.",
+      "Legacy actual native→Reader/coldReader progression and final changed native reopen pass: Fighter5→6 HP74/64/69/64/76, finalCon12 HP46; AshnarMonk12→13 HP123/99/111/99/107, finalCon12 HP81. Existing Ashnar feat choices remain intact; Tough is removed only from slot5."
     ],
-    "counterexample": "Old145 uses existing activate/edit/activate operations and leaves HP57/mapping stale after Con16, despite fresh calculated totals75; original Blur trace absent. It remains failed.",
+    "counterexample": "Old145 uses existing activate/edit/activate operations and leaves HP57/mapping stale after Con16, despite fresh calculated totals75; original Blur trace absent. It remains failed. Additional failed parameterization tests1793651351388519681 and Reader1793651261327127406 incorrectly equated raw calcHPtotals.fixed with effective Tough HP; both remain failed. Corrected fresh runs qualify the effective mapping plus independent Con/feat deltas. Ashnar inventory1793651632479309207 failed because an optional displayError logger was absent; guarded inventory1793651698274079102 passes.",
     "remaining": [
-      "Other fixture/class combinations, average/max/custom HP modes, multiclass/sidekick HP and all feat/ASI interactions remain unqualified by this case.",
+      "Other classes, average/max/custom HP modes, multiclass/sidekick HP and all feat/ASI interactions remain unqualified by these three profiles.",
       "Focus reentry/errors, invalid validation, physical per-keystroke input, all widget indices and native pending editor-buffer/save behavior remain unqualified.",
       "Native desktop wiring uses the qualified completed-edit primitive; this evidence does not establish complete desktop interaction parity or full class/table compatibility."
     ],
-    "cloud_regressions": "output/testing/cloud-lab-146-regressions/queue-in-progress.json"
+    "cloud_regressions": "output/testing/cloud-lab-146-regressions/queue.json",
+    "legacy_workflows": {
+      "2014_reader": "output/testing/reader-hp-workflow-1793651689674197098/hp.json",
+      "2014_native": "output/testing/hp-workflow-comparison-1793652111189098853/comparison.json",
+      "ashnar_reader": "output/testing/reader-hp-workflow-1793652113295902797/hp.json",
+      "ashnar_native": "output/testing/hp-workflow-comparison-1793652517531431656/comparison.json",
+      "scope": "Four complete selected states per legacy profile, two fresh native/Reader-saved native edits each; actual fixed-HP menus, original Con Blur and Tough in an empty slot. Existing Ashnar feats remain intact (Tough slot5). 2014 Fighter54→59→69; Ashnar Monk75→87→111. Independent HP/Con/current/temp/hit-dice/AP/scripts checks and page1 renders reviewed; no full appearance equality."
+    },
+    "reader_2014_mixed": "output/testing/reader-hp-reopen-1793652625032739068/reopen.json",
+    "final_2014_native": "output/testing/hp-final-native-1793653219423406621/reopen.json",
+    "full_2024_native_progression": "output/testing/hp-progression-comparison-1793652867312863594/comparison.json",
+    "full_native_progression": {
+      "2024": "output/testing/hp-progression-comparison-1793652867312863594/comparison.json",
+      "2014": "output/testing/hp-progression-comparison-1793653317817631868/comparison.json",
+      "ashnar": "output/testing/hp-progression-comparison-1793653903826517415/comparison.json",
+      "scope": "Each profile executes the complete five-stage Reader sequence natively, including original Tough removal, a fresh runtime and original class progression. All15 complete selected HP/feat/mode states match;64 actual limited-feature fields at each stage match canonical values and visible appearances (960 comparisons). String coercion for PDF field values is explicit; raw PDF value types and pixels are not exact claims."
+    },
+    "reader_ashnar_mixed": "output/testing/reader-hp-reopen-1793653220843510396/reopen.json",
+    "final_ashnar_native": "output/testing/hp-final-native-1793653875561026808/reopen.json"
   }
 }

@@ -230,3 +230,18 @@ python3 tools/native/verify-hp-reopen.py --reader <reopen.json>
 Use a currently qualified reference fingerprint. These cases require their stated
 Bard9 input and actual offered HP menu items. Other classes/modes/fixtures and the
 complete editor focus/validation/buffer lifecycle remain incompletely qualified.
+
+The HP profile runner also accepts the qualified2014 Fighter5 and Ashnar Monk12
+inputs. It observes fixed HP before choosing the actual menu item, selects an
+empty feat control, and raises Constitution by2 (overrides: `--constitution` and
+`--feat-field`). The mixed-reopen runner is deliberately limited to single-class
+Bard/Fighter/Monk profiles with Tough as the only extra HP contribution.
+
+```bash
+python3 tools/native/verify-hp-progression.py --reader <mixed-reopen.json>
+```
+
+This runs the complete original removal/cold-reopen/progression sequence in
+native runtimes and checks every actual limited-feature field against each saved
+Reader phase, including visible values. Do not equate `calcHPtotals.fixed` with
+effective HP: original callbacks add Tough afterward.

@@ -100,3 +100,4 @@ Read `docs/testing-environment.md` before changing or testing PDF behavior.
 - In the ability-score dialog, distinguish a pending feat bonus from its explicit application. Use observed editable RICHEDIT controls and the paste command's value argument; do not assume the native class is Edit.
 
 - Distinguish programmatic field assignment from a completed desktop edit. Original Constitution Blur recalculates automatic HP; qualify focus transitions and completed edits with nonempty original-event traces, selected HP mode, feat removal/progression and changed mixed-engine reopens. Passing calculation totals alone does not prove the HP field was updated.
+- `calcHPtotals` can report base HP while original HP callbacks add feat contributions afterward (Tough is a qualified example). Compare automatic HP with its original effective mapping/menu state and independent feat/Constitution deltas; do not assume the raw totals object's fixed member includes every feature.

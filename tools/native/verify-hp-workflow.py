@@ -55,7 +55,6 @@ def main():
         return {'op': 'eval', 'code': "Value('User Script'," + json.dumps(text) + ");__host.command('RunUserScript(false)')"}
     steps = [{'op': 'advance', 'ms': 4100}, script(profile.setup(code))]
     steps += [{'op': 'edit', 'field': n, 'value': v} for n, v in {'HP Current': '30', 'HP Temp': '5', 'HD1 Used': '2'}.items()]
-    steps.append(script(profile.MENU))
     captures = []
     def capture(label):
         steps.append(script(observer))
@@ -63,22 +62,29 @@ def main():
         diagnostic = folder / (label + '-diagnostic.pdf')
         steps.extend([{'op': 'eval', 'code': summary}, {'op': 'save', 'path': str(diagnostic)}])
         captures.append((label, index, diagnostic))
+    if any(p['label'] == 'initial' for p in reference['phases']):
+        capture('initial')
+    fixed = reference.get('fixed_menu_value', 57)
+    constitution = str(reference.get('constitution', 16))
+    reopen_constitution = str(reference.get('reopen_constitution', 18))
+    feat_field = reference.get('feat_field', 'Feat Name 1')
+    steps.append(script(profile.MENU))
     capture('auto-fixed')
     if a.mode == 'legacy-widget-switch':
-        steps.extend([{'op': 'eval', 'code': "__host.activate('Con')"}, {'op': 'edit', 'field': 'Con', 'value': '16'},
+        steps.extend([{'op': 'eval', 'code': "__host.activate('Con')"}, {'op': 'edit', 'field': 'Con', 'value': constitution},
                       {'op': 'eval', 'code': "__host.activate('Int')"}])
     else:
-        steps.append({'op': 'user-edit', 'field': 'Con', 'value': '16'})
+        steps.append({'op': 'user-edit', 'field': 'Con', 'value': constitution})
     steps.append({'op': 'advance', 'ms': 1000})
     capture('constitution-user-commit')
-    steps.extend([{'op': 'edit', 'field': 'Feat Name 1', 'value': 'Tough'}, {'op': 'advance', 'ms': 1000}])
+    steps.extend([{'op': 'edit', 'field': feat_field, 'value': 'Tough'}, {'op': 'advance', 'ms': 1000}])
     capture('tough')
     output = folder / 'native.pdf'
     restore = "var iFileName='Restore HP action.js';tDoc.getField('Con').setAction('OnBlur'," + json.dumps(code) + ');'
     steps.extend([script(restore), {'op': 'eval', 'code': "Value('User Script','');Value('PC Name','HP compatibility')"}, {'op': 'save', 'path': str(output)}])
     scenario = folder / 'scenario.json'
     scenario.write_text(json.dumps({'steps': steps, 'dialogs': [
-        {'title': 'MPMB menu', 'button_path': ['Set the Max HP to automatically assume', 'The total HP using fixed values (57)']},
+        {'title': 'MPMB menu', 'button_path': ['Set the Max HP to automatically assume', 'The total HP using fixed values (' + str(fixed) + ')']},
         {'title': 'CHANGES ALERT DIALOG', 'result': 'ok'}]}))
     try:
         with (folder / 'probe.log').open('w') as log:
@@ -96,16 +102,19 @@ def main():
         state = report['phases'][-1]['state']
         report['canonical'] = field_state.compare(output, state['fields'])
         report['visible'] = inspect(output, {n: state['fields'][n] for n in ['HP Max', 'HP Current', 'HP Temp', 'Con', 'Con Mod']})
+        report['feat_visible'] = inspect(output, {feat_field: 'Tough'})
+        assert report['feat_visible']['passed']
         assert report['visible']['passed'] and script_hashes(output) == script_hashes(source)
         assert profile.original_blur(output) == code
         report['output'] = str(output)
+        expected_reopen_hp = int(state['fields']['HP Max']) + (int(reopen_constitution) // 2 - int(state['fields']['Con']) // 2) * state['totals']['count']
         # Both saved engines must retain automatic mode and the Tough callback.
         for engine, input_pdf in [('native', output), ('reader', Path(reference['pdf']))]:
             diagnostic = folder / (engine + '-reopened-diagnostic.pdf')
             saved = folder / (engine + '-reopened-edited.pdf')
             spec = folder / (engine + '-reopen-scenario.json')
             spec.write_text(json.dumps({'steps': [{'op': 'advance', 'ms': 4100}, script(profile.setup(code)),
-                {'op': 'user-edit', 'field': 'Con', 'value': '18'}, {'op': 'advance', 'ms': 1000}, script(observer),
+                {'op': 'user-edit', 'field': 'Con', 'value': reopen_constitution}, {'op': 'advance', 'ms': 1000}, script(observer),
                 {'op': 'eval', 'code': summary}, {'op': 'save', 'path': str(diagnostic)}, script(restore),
                 {'op': 'eval', 'code': "Value('User Script','');Value('PC Name','HP compatibility')"},
                 {'op': 'save', 'path': str(saved)}]}))
@@ -114,8 +123,9 @@ def main():
                 result = subprocess.run([str(binary), str(input_pdf), '--probe', str(spec), str(probe)], stdout=log, stderr=log, timeout=300)
             reopened = json.loads(probe.read_text())
             assert result.returncode == 0 and reopened['passed'] and not reopened['diagnostics']['errors']
+            assert not reopened['diagnostics']['console']['messages']
             after = style.saved_capture(diagnostic, reopened['stages'][5]['result'], source)
-            assert not after['errors'] and after['fields']['HP Max'] == '102' and after['fields']['Con'] == '18'
+            assert not after['errors'] and after['fields']['HP Max'] == str(expected_reopen_hp) == after['mapping'].split(',')[1] and after['fields']['Con'] == reopen_constitution
             assert after['mapping'].split(',')[3] == 'fixed' and after['feats'] == state['feats']
             assert after['trace'] and all(e['name'] == 'Blur' and e['target'] == 'Con' for e in after['trace'])
             assert profile.original_blur(saved) == code and script_hashes(saved) == script_hashes(source)
