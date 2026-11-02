@@ -140,3 +140,10 @@ Only receipt presentation is deferred on a retained0ms timer; original commands 
 ## Ampersand-safe result delivery
 
 Reader's native alert Static text doubles literal ampersands, so the application adapter now emits them as JSON Unicode escapes before displaying its response. Numeric Reader code-unit/checksum evidence and saved PDFs exposed the earlier doubled direct reads; source field values were not doubled. Protocol tests include repeated ampersands, keys, Unicode and escaped-size overflow. Real rich/plain transport cases pass in reader-field-transport1793513675541045398, following retained negative1793513159788503697. Fresh preflight passes29 checks (continuation-ampersand-preflight.json); full readiness1793513831 passes24/24 with unchanged fingerprint and no new crash/resource exhaustion. Use readiness1793513831 for current harness inputs. Older direct reads containing ampersands require explicit recovery evidence; their original failed reports remain failed.
+
+
+## Current resumed reference — 2026-11-02
+
+The next-day preflight found CBS RebootPending, so continuation-nov02-up.log stays FAILED. No document was open; Windows was restarted cleanly. continuation-nov02-up-after-restart.log passes29 checks, and readiness-1793598704.json passes all24 cases with unchanged harness fingerprints and no new crash/resource-exhaustion events. This is the current local qualification for subsequent Reader suites. It does not qualify the separate cloud guest.
+
+The user authorizes cloud-lab and its Windows guest for parallel work, including resetting/replacing that lab guest and using its host as needed. Parallel native regression uses private .cache/mpmb-compat workspaces, exact binary/fixture manifests and separate outputs. Serialize operations within each Reader instance, and independently preflight/readiness-qualify each reference before claiming an oracle pass. Never share application queues, bridge sessions, output state or lock/multiplex paths between references; keep the originals and pinned submodule immutable.

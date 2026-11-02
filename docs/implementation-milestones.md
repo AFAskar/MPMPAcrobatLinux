@@ -189,3 +189,8 @@ Required concrete gates now pass: real Reader five-phase progression179351511597
 ### Milestone3f: bounded2024 Bard selected-spell generation/persistence — qualified
 
 Concrete gates: original offered3 cantrips/9 spells in both engines; exact four-phase full selected-field comparison1793516059373168701; eight fresh native/Reader snapshot reopens/regeneration1793516065410729219; actual native-generated→Reader edit1793516066619912110→fresh-native edit/regeneration1793598490625664621. All pass, with scripts/canonical/widgets/AP presence and reviewed page7 renders. Original healing descriptions require explicit regeneration in both engines; no native repair is needed for that behavior. This completes only the selected-list case. Slot spending/rests and broader spell/class/table coverage remain open; no full compatibility or typography claim.
+
+
+### Milestone3g: Ubuntu save portability — bounded repair qualified
+
+Concrete old negative and repaired positive native progression/save/reopen, independent Fedora PDF verification, actual Ubuntu→Reader edit/save and fresh native loaded-state/edit/resave all pass.140 tests/build/fmt/strict all-targets Clippy pass. The change repairs a save failure, without changing class logic or requested-font priority. Other discovery installations, comprehensive choices and full compatibility remain incomplete.

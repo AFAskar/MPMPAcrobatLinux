@@ -2500,5 +2500,24 @@
       "Other spells, bonus/Magical Secrets selections, spell swaps/removal, feats/multiclass lists and other fixture/class profiles unqualified",
       "Broader class combat/progression/source and serialized-state equality remain incomplete"
     ]
+  },
+  "fallback_font_discovery": {
+    "status": "Fedora/Ubuntu native save and edited real Reader interoperability qualified; other discovery paths unqualified",
+    "failure": "Hardcoded Fedora DejaVuSans path prevented every Ubuntu save even with the font installed in its standard Debian directory.",
+    "behavior": "Explicit MPMB_FONT remains authoritative. Default lookup checks known Linux paths, then Fontconfig, accepting only an actual DejaVuSans TrueType face. Missing or unrelated default faces still fail explicitly. Embedded requested-face priority unchanged.",
+    "binary_sha256": "151271d8c316b7e169daca96a5dd708c0b41961b2f201b57084ee976fc98c5f7",
+    "negative_cloud": "cloud-lab:.cache/mpmb-compat/nov02-1793598696136937066/output/testing/native-subclasses-1793598877064533034/subclasses.json",
+    "positive_cloud": "cloud-lab:.cache/mpmb-compat/nov02-1793598696136937066-font-discovery/output/testing/native-subclasses-1793599234314917331/subclasses.json",
+    "independent_linux": "output/testing/cloud-lab-1793598696136937066/positive-pilot/linux-independent.json",
+    "reader": "output/testing/reader-script-observation-1793600077843739069/observation.json",
+    "comparison": "output/testing/script-observation-comparison-1793600226581013829/comparison.json",
+    "final_native_reopen": "output/testing/fallback-native-reopen-1793617840375963308/reopen.json",
+    "checks": "140 Rust tests, build, fmt and strict all-targets Clippy pass. Same Ubuntu original source/class/progression/save/reopen pilot now passes with MPMB_FONT unset. Linux independently checks fields/widgets/scripts; actual Ubuntu output opens/edits/saves in Reader; native exact original-entry observation and fresh Reader-saved reopen/edit/resave pass.",
+    "failed_reopen_comparison": "output/testing/script-observation-comparison-1793600283523275410/comparison.json",
+    "failed_reopen_reason": "Incorrectly compared an edited saved input with the earlier pre-edit snapshot. Retained failed; separate loaded-state proof compares Reader post-edit state, then makes a further original edit.",
+    "remaining": [
+      "Arch path and final Fontconfig-discovery branch not independently qualified on those installations",
+      "Complete typography and broader class/choice/table compatibility remain incomplete"
+    ]
   }
 }

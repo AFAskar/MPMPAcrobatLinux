@@ -80,3 +80,6 @@ Only receipt presentation is deferred on a retained0ms timer; original commands 
 
 
 Ampersand-safe adapter revision qualifies with29-check preflight continuation-ampersand-preflight.json, two real rich/plain checksum+saved-PDF transport controls1793513675541045398 and readiness1793513831 (24/24, fingerprint unchanged, no new Reader crash/resource exhaustion). Negative1793513159788503697 proves old direct alert reads doubled ampersands. Native MPMB compatibility is not established by transport readiness.
+
+
+2026-11-02: initial current preflight continuation-nov02-up.log FAILED the pending Windows restart gate. Clean restart with no document open resolved it; continuation-nov02-up-after-restart.log PASSES29 checks. Fresh output/testing/readiness-1793598704.json PASSES24/24 with unchanged harness fingerprints and no new Reader crashes/resource exhaustion. The cloud Windows guest remains unqualified.

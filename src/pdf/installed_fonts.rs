@@ -2,10 +2,49 @@
 //! Fontconfig may return a substitute for any query, so inspect the actual face
 //! identity before allowing its bytes into a requested-font resource.
 use super::{appearance::RichFontMetrics, EmbeddedFont};
+use anyhow::Context;
 use std::{
     collections::{BTreeMap, BTreeSet},
+    path::Path,
     process::Command,
 };
+
+/// Preserve explicit overrides, but find the same default face on other Linux
+/// distributions. Fontconfig's successful exit alone does not identify a face.
+pub(super) fn fallback_bytes() -> anyhow::Result<Vec<u8>> {
+    if let Some(path) = std::env::var_os("MPMB_FONT") {
+        return std::fs::read(path).context("read Unicode appearance font (MPMB_FONT)");
+    }
+    for path in [
+        "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    ] {
+        if let Some(bytes) = default_font_at(Path::new(path)) {
+            return Ok(bytes);
+        }
+    }
+    if let Ok(output) = Command::new("fc-match")
+        .args(["-f", "%{file}", "--", ":postscriptname=DejaVuSans"])
+        .output()
+    {
+        if output.status.success() {
+            if let Ok(path) = std::str::from_utf8(&output.stdout) {
+                if let Some(bytes) = default_font_at(Path::new(path)) {
+                    return Ok(bytes);
+                }
+            }
+        }
+    }
+    anyhow::bail!("DejaVu Sans TrueType font unavailable; install it or set MPMB_FONT")
+}
+
+fn default_font_at(path: &Path) -> Option<Vec<u8>> {
+    let bytes = std::fs::read(path).ok()?;
+    let face = ttf_parser::Face::parse(&bytes, 0).ok()?;
+    matching_name(&face, "DejaVuSans")?;
+    Some(bytes)
+}
 
 #[derive(Default)]
 pub(super) struct Resolver {
@@ -211,6 +250,16 @@ mod tests {
     #[test]
     fn installed_substitutes_cannot_masquerade_as_requested_faces() {
         let bytes = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
+        assert_eq!(
+            default_font_at(Path::new(
+                "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf"
+            )),
+            Some(bytes.clone())
+        );
+        assert!(default_font_at(Path::new(
+            "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf"
+        ))
+        .is_none());
         let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
         assert_eq!(
             matching_name(&face, "DejaVuSans").as_deref(),

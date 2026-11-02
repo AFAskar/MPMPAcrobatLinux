@@ -628,10 +628,7 @@ impl Pdf {
         let mut embedded = embedded_fonts::collect(&doc)?;
         let mut installed_fonts = installed_fonts::Resolver::default();
         let mut font_cache = BTreeMap::new();
-        let fallback_path = std::env::var("MPMB_FONT")
-            .unwrap_or_else(|_| "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf".into());
-        let fallback_bytes =
-            std::fs::read(fallback_path).context("read Unicode appearance font (MPMB_FONT)")?;
+        let fallback_bytes = installed_fonts::fallback_bytes()?;
         let (font, font_bytes) = unicode_font(&mut doc, fallback_bytes, "MPMBDejaVuSans")?;
         let face = ttf_parser::Face::parse(&font_bytes, 0)?;
         for (name, f) in &fields {
