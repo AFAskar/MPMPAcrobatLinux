@@ -977,7 +977,16 @@ impl Dialog {
             let name = e["name"].as_str().unwrap_or("");
             let focus_requested = &mut self.focus_requested;
             let wants_focus = self.focus.as_deref() == Some(id) && !*focus_requested;
-            let value = self.values.entry(id.into()).or_insert(json!(""));
+            // Rendering a button must not invent a value in dialog.store().
+            // Explicit dialog.load() captions remain available for display.
+            let mut unstored = Value::Null;
+            let value = if id.is_empty()
+                || matches!(kind, "button" | "ok" | "ok_cancel" | "ok_cancel_other")
+            {
+                self.values.get_mut(id).unwrap_or(&mut unstored)
+            } else {
+                self.values.entry(id.into()).or_insert(json!(""))
+            };
             match kind {
                 "static_text" => {
                     let s = value.as_str().filter(|s| !s.is_empty()).unwrap_or(name);
@@ -1037,7 +1046,8 @@ impl Dialog {
                             .password(e["password"].as_bool().unwrap_or(false))
                             .desired_width(width)
                     };
-                    let response = ui.add(edit);
+                    let response =
+                        ui.add(edit.interactive(!e["readonly"].as_bool().unwrap_or(false)));
                     if wants_focus {
                         response.request_focus();
                         *focus_requested = true;
@@ -1253,6 +1263,49 @@ pub fn alert(value: &Value) -> Result<Value> {
 #[cfg(test)]
 mod dialog_tests {
     use super::*;
+
+    #[test]
+    fn dialog_readonly_edits_and_unstored_buttons_preserve_values() {
+        let ctx = egui::Context::default();
+        let mut dialog = Dialog {
+            description: json!({}),
+            values: BTreeMap::from([("read".into(), json!("locked"))]),
+            enabled: json!({}),
+            visible: json!({}),
+            result: Arc::new(Mutex::new(json!({}))),
+            images: BTreeMap::new(),
+            capture_requested: false,
+            focus: Some("read".into()),
+            focus_requested: false,
+            edited_controls: BTreeSet::new(),
+        };
+        for events in [vec![], vec![egui::Event::Text("changed".into())]] {
+            let _ = ctx.run(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        dialog.element(
+                            ui,
+                            &json!({"type":"edit_text","item_id":"read","readonly":true}),
+                        );
+                        dialog.element(
+                            ui,
+                            &json!({"type":"button","item_id":"butn","name":"Unused"}),
+                        );
+                        dialog.element(ui, &json!({"type":"ok"}));
+                    });
+                },
+            );
+        }
+        assert_eq!(
+            dialog.values,
+            BTreeMap::from([("read".into(), json!("locked"))])
+        );
+        assert!(dialog.edited_controls.is_empty());
+    }
 
     #[test]
     fn page_activation_uses_release_position_and_keys_despite_later_input() {

@@ -2589,5 +2589,38 @@
     "native_2014": "output/testing/spell-modifiers-comparison-1793628416835781493/comparison.json",
     "native_output_reader_workflow": "output/testing/reader-spell-modifiers-1793628429918219097/modifiers.json",
     "mixed_native_reopens": "output/testing/spell-modifiers-comparison-1793628927570679215/comparison.json"
+  },
+  "dialog_control_defaults": {
+    "status": "bounded qualified; complete dialogs/classes remain incomplete",
+    "binary_sha256": "07afd8904339ce87fa519c3150b017a07360580148db5a87c4f5b362fb6d9f83",
+    "behavior": "Construct text/spin/static/checkbox/radio values before original initialize callbacks. Editable non-popup spin controls start at string0 regardless of name; plain/readonly edits start empty. Static labels and unchecked booleans are present. Rendering buttons does not invent stored values; readonly text edits reject typing.",
+    "reader_control": "output/testing/reader-dialog-defaults-1793629554688451625/defaults.json",
+    "native_control": "output/testing/dialog-defaults-comparison-1793630196297729529/comparison.json",
+    "negative_control": "output/testing/dialog-defaults-comparison-1793629694994421642/comparison.json",
+    "comparison": "Complete captured defaults before initialize load, after partial load and at commit; JSON object-member order ignored, all properties/types retained. Ten stored controls and absent default button values are measured; not raw enumeration equality.",
+    "original_workflow": "2024 Bard9 Resilient/Wisdom selection, explicit original score-dialog application and removal; old native control gaps calculated zero scores.",
+    "reader_workflow": "output/testing/reader-resilient-feat-1793630172235228594/feat.json",
+    "native_workflow": "output/testing/resilient-feat-comparison-1793630645010997206/comparison.json",
+    "calculation_vector": "output/testing/resilient-calculations-1793646505148700969/calculations.json",
+    "reader_interoperability": "output/testing/reader-ability-reopen-1793645791825540358/ability.json",
+    "final_native": "output/testing/ability-final-native-1793646209286396833/reopen.json",
+    "scope": [
+      "Actual offered Wisdom radio/OK; original Apply/Cancel score dialog; matched RunUserScript entry and installed-addon side effects",
+      "Four exact complete CurrentStats/feat/selected-field states;72 independent canonical score/modifier/save values across all six abilities",
+      "Eight fresh native and Reader-saved reopen edits through original base-score dialog controls; both feat-present/removed states",
+      "Actual native applied output opens in Reader, base13→15 yieldsWis16/save7/Perception11; cold Reader base15→17 yields18/8/12; final fresh native base17→19 yields20/9/13, with exact complete loaded state first",
+      "Original scripts, canonical fields and changed numeric appearances retained; selected checkbox appearances verified in final native output",
+      "145 Rust tests, locked build, fmt and strict all-targets Clippy pass"
+    ],
+    "retained_failed_probes": [
+      "native-resilient-wisdom1793629206032124808 captured zero scores before its later dialog-queue mismatch; whole run remains failed",
+      "native-resilient-wisdom-fixed1793630315831084214 used an extra expected Changes dialog after the repaired application; original caught/alert errors retained",
+      "feat-choice-inventory1793628520969896236 used cancel on an OK-only radio dialog; invalid test, not qualified cancellation behavior",
+      "reader-ability-reopen1793630870463829683 assumed Edit rather than observed RICHEDIT50W; reader-ability-reopen1793631059690725587 used wrong paste argument; both retained/closed without score mutation"
+    ],
+    "remaining": [
+      "Other feats, ASI/manual columns, honor/sanity, spinner arrows and all other dialog control/default combinations remain unqualified",
+      "Native dialogs are not visually identical to Reader; complete per-class choices, spells/resources/combat and persistence remain incomplete"
+    ]
   }
 }

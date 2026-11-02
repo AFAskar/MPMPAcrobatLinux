@@ -1061,6 +1061,12 @@ mod tests {
         host("var rows=[];globalThis.__dialog=()=>JSON.stringify({result:'ok'});__host.execDialog({description:{elements:[{type:'edit_text',item_id:'ed01',PopupEdit:true},{type:'edit_text',item_id:'ed02',PopupEdit:true,SpinEdit:true},{type:'edit_text',item_id:'ed03',PopupEdit:true,SpinEdit:true},{type:'popup',item_id:'pop1'},{type:'list_box',item_id:'list'}]},initialize(d){d.load({ed01:{Alpha:-1,Beta:2},ed02:{Alpha:-1,Beta:2},ed03:'Beta',pop1:{Alpha:-1,Beta:2},list:{Alpha:-1,Beta:2}});var copy=d.store();copy.list.Beta=99;rows.push(d.store())},commit(d){rows.push(d.store())}});rows.length===2&&rows.every(r=>r.ed01===''&&r.ed02==='Beta'&&r.ed03===''&&r.pop1.Beta===2&&r.list.Beta===2)");
     }
     #[test]
+    fn dialog_defaults_exist_before_initialize_and_preserve_reader_types() {
+        host(
+            r#"var seen;globalThis.__dialog=function(){return JSON.stringify({result:'ok'})};__host.execDialog({description:{elements:[{type:'edit_text',item_id:'text',name:'7'},{type:'edit_text',item_id:'spin',name:'7',SpinEdit:true},{type:'edit_text',item_id:'none',SpinEdit:true},{type:'edit_text',item_id:'read',name:'9',SpinEdit:true,readonly:true},{type:'edit_text',item_id:'comb',name:'8',SpinEdit:true,PopupEdit:true},{type:'static_text',item_id:'stat',name:'Label'},{type:'check_box',item_id:'chek',name:'Check'},{type:'radio',item_id:'radi',name:'Radio'},{type:'button',item_id:'butn',name:'Button'}]},initialize(d){seen=d.store();d.load({text:'11'})},commit(d){var r=d.store();seen.loaded=r.text}});seen.text===''&&seen.spin==='0'&&seen.none==='0'&&seen.read===''&&seen.comb===''&&seen.stat==='Label'&&seen.chek===false&&seen.radi===false&&seen.loaded==='11'&&!Object.prototype.hasOwnProperty.call(seen,'butn')"#,
+        );
+    }
+    #[test]
     fn dialog_destroy_runs_after_commit_cancel_and_custom_end() {
         host("var trace=[],reply={result:'ok'};globalThis.__dialog=()=>JSON.stringify(reply);var def={description:{elements:[]},commit(){trace.push('commit')},cancel(){trace.push('cancel')},destroy(){trace.push('destroy')},other(d){d.end('save')}};__host.execDialog(def);reply={result:'cancel'};__host.execDialog(def);reply={result:'other'};var result=__host.execDialog(def);result==='save'&&JSON.stringify(trace)==='[\"commit\",\"destroy\",\"cancel\",\"destroy\",\"destroy\"]'");
     }

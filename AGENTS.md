@@ -95,3 +95,6 @@ Read `docs/testing-environment.md` before changing or testing PDF behavior.
 
 - Page activation must use the pointer release's coordinates/modifiers, not the frame's final key/pointer state. MPMB uses Shift/Ctrl/Cmd for spell options; cancelled popups return `null`, which original `getMenu` explicitly requires.
 - In spell-row move tests, reverse from the spell's actual new row. Observe prepared-mark migration separately rather than assuming it follows the moved spell.
+
+- Dialog controls exist before initialize: qualified Reader defaults are empty plain/readonly edits, string zero for editable non-popup SpinEdit controls, static-text labels and false check/radio values. Descriptor name is not an edit initial value. Do not let rendering invent button entries in dialog.store().
+- In the ability-score dialog, distinguish a pending feat bonus from its explicit application. Use observed editable RICHEDIT controls and the paste command's value argument; do not assume the native class is Edit.

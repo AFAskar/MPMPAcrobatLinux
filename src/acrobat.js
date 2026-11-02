@@ -266,7 +266,9 @@ var __host = (function () {
     const dialog={load(x){for(const key of Object.keys(x)){const c=controls.filter(c=>c.item_id===key)[0],v=x[key];if(c&&c.type==='edit_text'&&c.PopupEdit&&((c.SpinEdit&&typeof v==='string')||(!c.SpinEdit&&v&&typeof v==='object'))){if(store[key]===undefined)store[key]='';continue;}store[key]=v;}},store:storedValues,enable(x){Object.assign(enabled,x)},visible(x){Object.assign(visible,x)},end(x){ended=x},
       setForeColorRed(id){gap('Dialog.setForeColorRed visual')},focus(id){focus=id},setFocus(id){focus=id},insertEntryInList(o){for(const id of Object.keys(o))store[id]=Object.assign(store[id]||{},o[id])},removeAllEntriesFromList(id){store[id]={}},
     };
-    function collect(e){if(e.item_id)controls.push(e);(e.elements||[]).forEach(collect)}collect(def.description||{});
+    // Reader constructs control values before initialize runs. Spin edits have
+    // an intrinsic zero; plain/readonly edits ignore the descriptor's name.
+    function collect(e){if(e.item_id){controls.push(e);if(e.type==='edit_text')store[e.item_id]=e.SpinEdit&&!e.PopupEdit&&!e.readonly?'0':'';else if(e.type==='static_text')store[e.item_id]=e.name===undefined?'':String(e.name);else if(e.type==='radio'||e.type==='check_box')store[e.item_id]=false;}(e.elements||[]).forEach(collect)}collect(def.description||{});
     if(def.initialize)def.initialize(dialog);
     function finish(result){if(def.destroy)def.destroy(dialog);return result;}
     for(let i=0;i<1000;i++) {
