@@ -2519,5 +2519,19 @@
       "Arch path and final Fontconfig-discovery branch not independently qualified on those installations",
       "Complete typography and broader class/choice/table compatibility remain incomplete"
     ]
+  },
+  "bard_slot_spending_rests": {
+    "status": "bounded2024 Bard5 generated-page slot spending/rest/persistence qualified; complete resource management incomplete",
+    "reader": "output/testing/reader-bard-slots-1793600229677130390/slots.json",
+    "native": "output/testing/bard-slot-comparison-1793617801000337702/comparison.json",
+    "widget_states": "output/testing/bard-slot-widget-comparison-1793618324196188572/widgets.json",
+    "scope": "Nine visible generated spell-slot controls (4/3/2). Reader activates one named checkbox at each spell level with focus/Space and verifies exact target values. Short rest retains spent slots, fresh Reader reopen retains them, long rest resets Off. Native matches five workflow phases and two additional actual Reader-saved reopen/long-rest states. Original scripts and selected canonical/widgets pass.",
+    "appearance_evidence": "All108 visible widget states across12 output snapshots have exact expected /AS and a real checked appearance. Reader omits the Off AP stream on these controls; absence is recorded separately as no appearance. Explicit off/on streams must differ. Both spent page7 renders reviewed and show the same three checked slots. No cosmetic/pixel equality claim.",
+    "retained_failed_widget_probe": "output/testing/bard-slot-widget-comparison-1793618283842600830/widgets.json",
+    "retained_failure_reason": "Test incorrectly required an explicit Off stream, absent in valid Reader-saved controls. Original failed report retained; corrected probe records actual representation.",
+    "remaining": [
+      "Other spell-slot layouts/pages, other class/fixture spell slots and Warlock pact-slot recovery not qualified by this case",
+      "Spell-point conversion, slot-funded Bardic Inspiration, all rests/resources/combat combinations and complete class table use remain incomplete"
+    ]
   }
 }

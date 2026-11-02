@@ -194,3 +194,8 @@ Concrete gates: original offered3 cantrips/9 spells in both engines; exact four-
 ### Milestone3g: Ubuntu save portability — bounded repair qualified
 
 Concrete old negative and repaired positive native progression/save/reopen, independent Fedora PDF verification, actual Ubuntu→Reader edit/save and fresh native loaded-state/edit/resave all pass.140 tests/build/fmt/strict all-targets Clippy pass. The change repairs a save failure, without changing class logic or requested-font priority. Other discovery installations, comprehensive choices and full compatibility remain incomplete.
+
+
+### Milestone3h: bounded2024 Bard generated-page slot/rest persistence — qualified
+
+Real Reader five-stage spending/rest/reopen case1793600229677130390, native seven-stage comparison1793617801000337702 and108 exact visible widget states1793618324196188572 pass, with original scripts/selected canonical values and reviewed checked-slot renders. Short rest retains spent slots; long rest clears; actual native and Reader-saved fresh reopens preserve spent state. This completes only the stated generated-page case. Other layouts/classes/fixtures and resource conversions remain open; complete table compatibility remains unproven. Next: original Bard expertise menu choices, expansion/removal/down-leveling and edited Reader/native persistence.
