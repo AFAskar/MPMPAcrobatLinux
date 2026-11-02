@@ -184,3 +184,8 @@ Require real three-control instrument entry, retained proficiencies, ability-dep
 ### Milestone3e: bounded2024 Bard/Lore progression and removal — qualified
 
 Required concrete gates now pass: real Reader five-phase progression1793515115978320932, native exact selected-state/display comparison1793515380656717696 and all10 fresh native/Reader phase reopen/edit cases1793515461595140486. Original class actions, resources, slot totals, tool retention/removal, short-rest recovery, dependent Charisma maxima and removed calculation/visible state are checked. This completes only the stated progression case. ASI/feat/skill/expertise choices, full combat/HP and other class/subclass/source combinations remain open. Milestone3f spell choices/regeneration/persistence is in progress; full goal remains ACTIVE.
+
+
+### Milestone3f: bounded2024 Bard selected-spell generation/persistence — qualified
+
+Concrete gates: original offered3 cantrips/9 spells in both engines; exact four-phase full selected-field comparison1793516059373168701; eight fresh native/Reader snapshot reopens/regeneration1793516065410729219; actual native-generated→Reader edit1793516066619912110→fresh-native edit/regeneration1793598490625664621. All pass, with scripts/canonical/widgets/AP presence and reviewed page7 renders. Original healing descriptions require explicit regeneration in both engines; no native repair is needed for that behavior. This completes only the selected-list case. Slot spending/rests and broader spell/class/table coverage remain open; no full compatibility or typography claim.

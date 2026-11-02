@@ -10,8 +10,10 @@ CANTRIPS = ['eldritch blast', 'mage hand', 'minor illusion']
 SPELLS = ['hex', 'armor of agathys', 'misty step', 'counterspell', 'fly', 'hunger of hadar']
 
 
-def type_selection(c, owner, elements, offered):
+def type_selection(c, owner, elements, offered, cantrips=None, spells=None):
     """Locate columns by fresh headings and owned edit relationships, not pixels."""
+    cantrips = CANTRIPS if cantrips is None else cantrips
+    spells = SPELLS if spells is None else spells
     headings = {}
     for label in ['Cantrips', 'Spells', 'Bonus Spells']:
         matches = [e for e in elements if e.get('owner') == owner
@@ -21,8 +23,8 @@ def type_selection(c, owner, elements, offered):
     assert headings['Cantrips']['rect'][0] < headings['Spells']['rect'][0] < headings['Bonus Spells']['rect'][0]
     evidence = []
     for label, next_label, keys, map_key in [
-        ('Cantrips', 'Spells', CANTRIPS, 'cantrips'),
-        ('Spells', 'Bonus Spells', SPELLS, 'spells'),
+        ('Cantrips', 'Spells', cantrips, 'cantrips'),
+        ('Spells', 'Bonus Spells', spells, 'spells'),
     ]:
         left = headings[label]['rect'][0]
         right = headings[next_label]['rect'][0]
