@@ -2561,7 +2561,7 @@
     ]
   },
   "spell_button_modifiers": {
-    "status": "bounded-2024-qualified; remaining fixtures/workflows incomplete",
+    "status": "bounded-2014/2024 and mixed-engine-qualified; Ashnar/other workflows incomplete",
     "runtime": "Native page activation passes release-event Shift and Ctrl/Cmd to original MouseDown/MouseUp actions. Cancelled popups return null, matching Reader and original getMenu.",
     "native_binary_sha256": "d560008d9384c4946a32118ea8b22805217e633c08f0da6697174f3d71011e6a",
     "reader": "output/testing/reader-spell-modifiers-1793627309768736001/modifiers.json",
@@ -2572,7 +2572,8 @@
       "Six Reader snapshots; four native phase comparisons; fresh native and actual Reader-saved reopen/ordinary edit/resave",
       "Exact selected check/remember values and four visible name/description values; exact extracted spell-name appearances, nonempty description appearances; unchanged original document scripts",
       "Both prepared page8 renders reviewed: mark/text present; native attack display5 versus Reader+5 remains a known cosmetic difference",
-      "143 Rust tests, locked build, formatting and strict all-targets Clippy pass"
+      "143 Rust tests, locked build, formatting and strict all-targets Clippy pass",
+      "Same six Reader states/four native comparisons/two fresh native reopens pass for2014 Druid2. Actual2024 native-prepared output also passes the complete Reader sequence, exact native comparisons and both fresh reopens; initial prepared mark toggles in the opposite direction. Both2014 page8 renders show the mark and spell text."
     ],
     "retained_failures": {
       "old": "output/testing/spell-modifier-regression-1793627178786882579/old.json: original old engine ignores Shift and toggles preparation instead",
@@ -2580,9 +2581,13 @@
       "reader_test_error": "output/testing/reader-spell-modifiers-1793626969706194308/modifiers.json: attempted moving back using old row; retained/closed original failed document, corrected in fresh run"
     },
     "remaining": [
-      "2014 Reader workflow is running; Ashnar modified spell activation unqualified",
+      "Ashnar modified spell activation unqualified",
       "Other option selections, formula controls, mixed down/up modifier timing and keyboard access in native UI remain unqualified",
       "Description appearance text/pixels are not claimed exact; complete class/table compatibility remains incomplete"
-    ]
+    ],
+    "reader_2014": "output/testing/reader-spell-modifiers-1793627863927651047/modifiers.json",
+    "native_2014": "output/testing/spell-modifiers-comparison-1793628416835781493/comparison.json",
+    "native_output_reader_workflow": "output/testing/reader-spell-modifiers-1793628429918219097/modifiers.json",
+    "mixed_native_reopens": "output/testing/spell-modifiers-comparison-1793628927570679215/comparison.json"
   }
 }

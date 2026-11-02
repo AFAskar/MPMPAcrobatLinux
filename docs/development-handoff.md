@@ -1,5 +1,14 @@
 # Implementation handoff
 
+## Current2014/mixed extension and next feat choice — 2026-11-02
+
+HEAD3811112 commits143-test modified-click/cancellation repair. 2014 Reader1793627863927651047/native1793628416835781493 PASS all six Reader states/four native comparisons/two fresh edited reopens; page8 renders reviewed. Actual native2024 prepared output→Reader1793628429918219097→native1793628927570679215 also PASSES entire sequence and both reopens. All local Reader suites are terminal/closed now. Goal ACTIVE; no broad milestone complete.
+
+NEXT functional choice: 2024 Bard9 original Resilient feat. Bounded native Con pilot1793628757235146418 passes actual offered Constitution radio r002 +OK, original CHANGES dialog, feat identity/choice and save proficiency. Con field remains12 immediately; ability bonus must be reviewed/applied in original ABILITY SCORES DIALOG before assuming automatic field update. Prefer Wisdom choice r004 from same actual Select Resilient Type dialog: inputWis13 can cross to14, changing save and Perception expertise. Original AbilityScores_Button is not adapter-whitelisted; invoke through a shared User Script wrapper and original RunUserScript in both engines, preserving all installed-addon side effects. AbilityScores dialog offers Apply (ok_name) and Cancel. Native source input native-bard-expertise1793619182927084627/expertise9.pdf. Ability dialog inventory1793628228010738418 records actual controls;00base labels, current fields and columns differ. Invalid feat-choice inventory1793628520969896236 deliberately remains FAILED/unqualified: it used cancel even though ASK USER DIALOG offered onlyOK, provoking an original error. Do not infer a runtime failure from that invalid probe or count it as valid cancellation coverage.
+
+Cloud still UNQUALIFIED. preflightv7 exposed a stale invalid parse-response modal (idinvalid, stageparse request JSON); no mutation executed. Inspect recorded cloud-invalid-response-inspect.json and collect/close only that actualOK. Earlier first-run default-viewer prompt was dismissed via observed focused dialog/keyboard, pin notification through existing purpose-built dismiss_pin (guarded ShellExperienceHost actualNoThanks). Reader home quit cleanly; backgroundProcessesStopped0—no force kill occurred. No copied harness source changed since initial deployment. Need clean preflight/readiness; keep failed gates. cloud-boot-diagnostic.json records an additional WMI restart byjot after requested initialrestart; current OS reachable. Local reference/harness unchanged.
+
+
 ## Current modified-click repair — 2026-11-02
 
 Goal ACTIVE. HEAD5a63f14 commits Bard expertise qualification. Candidate d560008d9384c4946a32118ea8b22805217e633c08f0da6697174f3d71011e6a has143 passing Rust tests/build/fmt/strict all-targets Clippy. Fix: release-event pointer position/Shift/Ctrl/Cmd reach original D/U actions; cancelled popup returnsnull. Original scripts/submodule unchanged. No broad milestone complete.
