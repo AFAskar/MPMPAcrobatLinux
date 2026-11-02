@@ -1170,7 +1170,7 @@
     "reader_scope": "Reader starts from each original fixture, receives user inputs only, runs original ApplyClasses/resetLimFeaUsed/HealItNow through the application menu and saves/closes before comparison.",
     "reader": "output/testing/native-table-1793104929774042202/reader-table-1793106341581663938/reader-table.json",
     "reader_cases": 6,
-    "limits": "Only Fighter/Champion and Monk/Shadow at level 5. Monk tool prompts retain verified original defaults; tool-choice coverage is unqualified. Full canonical comparisons retain 6\u201311 differences outside asserted phase fields; do not claim whole-state equivalence."
+    "limits": "Only Fighter/Champion and Monk/Shadow at level 5. Monk tool prompts retain verified original defaults; tool-choice coverage is unqualified. Full canonical comparisons retain 6–11 differences outside asserted phase fields; do not claim whole-state equivalence."
   },
   "widget_visibility": {
     "status": "defined two-edition native and Reader save/reopen passes; generated-state breadth incomplete",
@@ -1342,7 +1342,7 @@
       "output/testing/native-pact-multiclass-1793163703651543396/pact-multiclass.json",
       "output/testing/native-pact-multiclass-1793163896370283178/pact-multiclass.json"
     ],
-    "scope": "Original source-selection controls and ApplyClasses; Wizard/Abjuration 5 plus Fiend Warlock 0/1/2/3/5/7/9/11/15/1/0/3. Assert exact edition-specific class/subclass keys, levels/proficiency, shared + Pact slot totals, Mystic Arcanum not added to levels 6\u20139 ordinary slots, both hit dice pools, removal/readdition, saved field/appearance/script checks and fresh native reopen.",
+    "scope": "Original source-selection controls and ApplyClasses; Wizard/Abjuration 5 plus Fiend Warlock 0/1/2/3/5/7/9/11/15/1/0/3. Assert exact edition-specific class/subclass keys, levels/proficiency, shared + Pact slot totals, Mystic Arcanum not added to levels 6–9 ordinary slots, both hit dice pools, removal/readdition, saved field/appearance/script checks and fresh native reopen.",
     "failed_probe_inputs": [
       "output/testing/native-pact-multiclass-1793163666974721232/pact-multiclass.json",
       "output/testing/native-pact-multiclass-1793163790375710377/pact-multiclass.json"
@@ -1354,7 +1354,7 @@
     "status": "two native original-menu combat/progression/persistence cases pass; Reader parity pending",
     "native": "output/testing/native-eldritch-blast-1793164303039769816/eldritch-blast.json",
     "cases": 2,
-    "scope": "2014/Ashnar Fiend Warlock: original enabled feature menu adds/removes/reselects Agonizing Blast; assert exact invocation key, hit/damage before/after, Charisma 18\u219220, beam scaling at levels 5/11/20 and down to 5, independent saved field/appearance/script checks, fresh native reopen and further menu removal/readdition.",
+    "scope": "2014/Ashnar Fiend Warlock: original enabled feature menu adds/removes/reselects Agonizing Blast; assert exact invocation key, hit/damage before/after, Charisma 18→20, beam scaling at levels 5/11/20 and down to 5, independent saved field/appearance/script checks, fresh native reopen and further menu removal/readdition.",
     "remaining": "2024 cantrip-specific invocation model, other invocations, spell-page effects, complete feature choices and independent Reader parity remain unqualified.",
     "failed_probe": "First full probe expected unsigned hit text; source canonical +7 was preserved and the assertion was corrected. No product runtime change."
   },
@@ -1395,7 +1395,7 @@
     "native_full_edited_reopen_comparisons": {
       "selected": "output/testing/warlock-selected-edit-render-1793402100000000000.json",
       "invocation": "output/testing/warlock-invocation-edit-canonical-1793402100000000000.json",
-      "scope": "Default-source native before/after fresh reopen, actual weapon edit/restore and resave. All4520 canonical /V values match with declared string coercion and CR/CRLF\u2192LF normalization,2402 active widgets geometry/flags/states equal, original scripts equal. All1001 selected/1002 invocation populated normal AP contents match. Selected-state front page Poppler72dpi pixels identical and inspected. Raw rich spans, resource equivalence on other pages and independent Reader parity remain separate."
+      "scope": "Default-source native before/after fresh reopen, actual weapon edit/restore and resave. All4520 canonical /V values match with declared string coercion and CR/CRLF→LF normalization,2402 active widgets geometry/flags/states equal, original scripts equal. All1001 selected/1002 invocation populated normal AP contents match. Selected-state front page Poppler72dpi pixels identical and inspected. Raw rich spans, resource equivalence on other pages and independent Reader parity remain separate."
     },
     "reader_initial_selection": "output/testing/reader-warlock-discovery-1793401830310415656/discovery.json",
     "reader_initial_scope": "Actual original PopupEdit text entry through nine observed enabled controls with exact offered labels, clipboard/live-text readback and Tab, offered generation buttons, original-script ASCII observer with Unicode sentinel and Reader checksum7035/963743635, independent canonical derived/generated fields and embedded script hashes, verified Reader process termination. Default source exclusions as sets, spell sets, invocation state, exact attack fields and generated EB description with declared line-ending normalization equal native initial phase.",
@@ -1778,7 +1778,7 @@
     "reader": "output/testing/reader-warlock-invocations-1793440252388681168/invocations.json",
     "native": "output/testing/native-warlock-spells-1793439627146471600/warlock-spells.json",
     "readiness": "output/testing/readiness-1793439251.json",
-    "scope": "Actual guarded pointer gestures through exact offered Warlock/category/cantrip-specific Agonizing Blast items, then original spell-generation dialog buttons. Four independently saved Reader phases: initial, added, removed, readded. All28 comparisons pass: identity, exact invocation list, cantrip/spell sets, excluded-source sets, exact attacks, generated description with explicit CR/CRLF-to-LF normalization. Damage2\u00d71d10 ->2\u00d71d10+4 ->2\u00d71d10 ->2\u00d71d10+4. Saved ASCII observers independently verify Reader code-unit/checksum and Unicode sentinel, canonical fields/appearances and unchanged original scripts. Reader termination checked. No expected derived values or selected arrays are injected into Reader.",
+    "scope": "Actual guarded pointer gestures through exact offered Warlock/category/cantrip-specific Agonizing Blast items, then original spell-generation dialog buttons. Four independently saved Reader phases: initial, added, removed, readded. All28 comparisons pass: identity, exact invocation list, cantrip/spell sets, excluded-source sets, exact attacks, generated description with explicit CR/CRLF-to-LF normalization. Damage2×1d10 ->2×1d10+4 ->2×1d10 ->2×1d10+4. Saved ASCII observers independently verify Reader code-unit/checksum and Unicode sentinel, canonical fields/appearances and unchanged original scripts. Reader termination checked. No expected derived values or selected arrays are injected into Reader.",
     "remaining": "One invocation on one class/subclass at one level; rest/resource expenditure, other choices/classes/versions and complete field/style/render equivalence remain unqualified. This actual readded state now has subsequent edited native/Reader/native reopen evidence, not universal persistence coverage.",
     "edited_roundtrip": "output/testing/warlock-selected-roundtrip-1793440596465637860/roundtrip.json"
   },
@@ -2209,7 +2209,7 @@
     "comparison": "output/testing/script-observation-comparison-1793483564713710389/comparison.json",
     "comparison_scope": "Exact captured original before/after generation state and canonical/decoded visible Player Name AP agree with real Reader. Initial native/Reader page7 Poppler renders reviewed; full pixels/layout are not equal and are not claimed.",
     "edited_persistence": "output/testing/mirror-reentry-persistence-1793483565872630337/persistence.json",
-    "checks": "129 Rust tests/build/formatting and strict all-targets Clippy pass. Six original companion/wild-shape/spell-generation cases and two lifecycle cases pass. Generated-page changed edits across native \u2192 Reader \u2192 native and final fresh reopen pass, with visible AP text and original generated C/V actions preserved.",
+    "checks": "129 Rust tests/build/formatting and strict all-targets Clippy pass. Six original companion/wild-shape/spell-generation cases and two lifecycle cases pass. Generated-page changed edits across native → Reader → native and final fresh reopen pass, with visible AP text and original generated C/V actions preserved.",
     "remaining": "Other templates and full rich/display/typography controls remain incompletely qualified. Inactive APs can still be retained; generated widgets now rebuild current values. Full rendered pixels are not equal. No broad milestone or overall goal complete.",
     "reproduce": [
       "tools/native/reader-script-observation.py --input <saved-changed-mirror.pdf> --observer tools/native/generated-mirror-observer.js --readiness output/testing/readiness-1793480531.json",
@@ -2242,7 +2242,7 @@
       "python3 tools/native/xfdf-picker.py --select",
       "python3 tools/native/xfdf-picker.py",
       "tools/native/reader-script-observation.py --input <picker-native.pdf> --observer tools/native/xfdf-picker-state-observer.js --readiness output/testing/readiness-1793480531.json",
-      "tools/native/verify-script-observation.py --reader <observation.json> --reader-saved --field \"Player Name\" --canonical-value \"Picked \u03a9\" --display-value \"Picked \u03a9\""
+      "tools/native/verify-script-observation.py --reader <observation.json> --reader-saved --field \"Player Name\" --canonical-value \"Picked Ω\" --display-value \"Picked Ω\""
     ]
   },
   "document_info_type_overlay": {
@@ -2277,7 +2277,7 @@
     "reader_initial_matrix": "output/testing/rich-decoration-matrix-1793486147658507600/matrix.json",
     "reader_heldout_matrix": "output/testing/rich-decoration-matrix-1793487039472637412/matrix.json",
     "frozen_rule_control": "output/testing/decoration-ascent-heldout-control.json",
-    "measurement_scope": "Initial26 and12 additional Reader rows validate the frozen font-independent hypothesis within0.002pt. Raw fractional requests are retained; geometry is measured using actual getter/AP sizes (12.25\u219212.2 and17.75\u219217.8). The original heldout requested-size meter1793486765757797180 remains failed; same completed Reader output was remeasured read-only.",
+    "measurement_scope": "Initial26 and12 additional Reader rows validate the frozen font-independent hypothesis within0.002pt. Raw fractional requests are retained; geometry is measured using actual getter/AP sizes (12.25→12.2 and17.75→17.8). The original heldout requested-size meter1793486765757797180 remains failed; same completed Reader output was remeasured read-only.",
     "original_native": {
       "2014": "output/testing/rich-format-1793488545903865295/formatting.json",
       "2024": "output/testing/rich-format-1793488566264775200/formatting.json",
@@ -2381,12 +2381,12 @@
     "physical_order": "output/testing/calculation-order-three-fixture-control.json",
     "negative_old": "output/testing/script-observation-comparison-1793508881240116075/comparison.json",
     "negative_partial": "output/testing/script-observation-comparison-1793508959850008670/comparison.json",
-    "scope": "Isolated plain-field registration/replacement/removal plus original AddFeature/Wisdom18\u219212/RemoveFeature; actual maxima6\u21923 versus old0\u21920. Complete captured sequence/indices and all saved physical CO slots match Reader; every original non-leaf reference and embedded script is retained. No complete class/table claim.",
+    "scope": "Isolated plain-field registration/replacement/removal plus original AddFeature/Wisdom18→12/RemoveFeature; actual maxima6→3 versus old0→0. Complete captured sequence/indices and all saved physical CO slots match Reader; every original non-leaf reference and embedded script is retained. No complete class/table claim.",
     "pending": [
       "Original predefined class ability/level-dependent resource progression beyond the isolated AddFeature case",
       "Action-bearing non-leaf fields, grouped setter semantics and generated group-order cloning remain unqualified",
       "2024 CurrentEvals.Stringified representation still differs in full canonical comparisons; not normalized into an exact match.",
-      "Bard1 native pilot now calculates inspiration4\u21921; old build kept Cha mod. Actual Reader instrument choices/progression/persistence are next and remain unqualified."
+      "Bard1 native pilot now calculates inspiration4→1; old build kept Cha mod. Actual Reader instrument choices/progression/persistence are next and remain unqualified."
     ],
     "checks": "139 Rust tests/build/fmt/strict all-targets Clippy pass; all3 exact runtime and physical CO controls;15 native persistence stages,6 Reader mutations and6 exact native comparisons. Original table6, generated6, lifecycle2, acceptance2 and extended import/Ashnar cases pass.",
     "persistence": {
@@ -2431,7 +2431,7 @@
     "reader_native_saved_edit": "output/testing/reader-bard-resources-1793511667629411564/observation.json",
     "native_reader_edit_comparison": "output/testing/script-observation-comparison-1793511819702343596/comparison.json",
     "final_native_reopen": "output/testing/bard-reader-native-reopen-1793512078345253083/reopen.json",
-    "scope": "Three original owned Bard Tools edits receive Flute/Lute/Drum with actual focus/paste/readback/OK. Scripted native input uses those same observed controls. Both immediate class submission and five separately ready action states match: class1/proficiency2, inspiration4\u21921\u21925, short rest retains used1, long rest resets empty, level1 spell-slot selectors2/0. Native changed/fresh reopen reaches3; Reader reopens/edits native output3; final fresh native edit reaches1 while retaining tools and original scripts.",
+    "scope": "Three original owned Bard Tools edits receive Flute/Lute/Drum with actual focus/paste/readback/OK. Scripted native input uses those same observed controls. Both immediate class submission and five separately ready action states match: class1/proficiency2, inspiration4→1→5, short rest retains used1, long rest resets empty, level1 spell-slot selectors2/0. Native changed/fresh reopen reaches3; Reader reopens/edits native output3; final fresh native edit reaches1 while retaining tools and original scripts.",
     "full_canonical_control": "output/testing/bard-ready-full-canonical-control.json",
     "full_canonical_limits": "Creation differs in7 serialized state fields (ChangesDialogSkip,CurrentProfs,CurrentEvals,CurrentSpells,CurrentVars,CurrentStats,CurrentSources); semantic equality beyond tested behavior is unproven. After Reader edit only CurrentEvals.Stringified differs. Exact complete canonical equality is not claimed.",
     "remaining": [
@@ -2456,7 +2456,7 @@
     "reader": "output/testing/reader-bard-progression-1793515115978320932/progression.json",
     "native": "output/testing/bard-progression-comparison-1793515380656717696/comparison.json",
     "reopens": "output/testing/bard-progression-reopens-1793515461595140486/reopens.json",
-    "scope": "Original ApplyClasses progression1\u2192Lore5\u2192short rest\u21921\u2192removed. All selected feature/resource/tool/slot fields and original displayed Acr/Arc totals agree. Every native and Reader phase reopens natively and supports a fresh Charisma edit. Removed resource calculation and visible label/max remain absent. Original embedded scripts retained.",
+    "scope": "Original ApplyClasses progression1→Lore5→short rest→1→removed. All selected feature/resource/tool/slot fields and original displayed Acr/Arc totals agree. Every native and Reader phase reopens natively and supports a fresh Charisma edit. Removed resource calculation and visible label/max remain absent. Original embedded scripts retained.",
     "comparison_rules": "Complete selected API strings exact. Raw checkbox PDF Name/empty versus API export/Off is recorded explicitly; full-sheet canonical equivalence is not claimed. Skill API raw bonuses are separate from displayed calculated totals.",
     "retained_failed_reference": "output/testing/reader-bard-progression-1793512594766403159/progression.json",
     "remaining": [
@@ -2492,7 +2492,7 @@
       ]
     },
     "checks": "Real Reader-offered exact labels and owned PopupEdit controls; native original callbacks. Four complete selected-field snapshots match, including12 spell rows, descriptions, generated page count/prefix and headers. Eight fresh native reopens of native/Reader phases retain choices and regenerate after Cha12. Reader opens actual native regenerated output, edits Cha12, saves; final native reopen/editCha14/regeneration retains choices and recalculates healing+2,attack+5/DC13. Original scripts, selected canonical/widgets/AP presence checked; page7 renders reviewed.",
-    "description_update_behavior": "Both engines retain healing+5 after Cha20\u219218 until explicit regeneration, then+4; restored/regeneratedCha20 returns+5. This is measured original behavior, not a native-only stale-description bug.",
+    "description_update_behavior": "Both engines retain healing+5 after Cha20→18 until explicit regeneration, then+4; restored/regeneratedCha20 returns+5. This is measured original behavior, not a native-only stale-description bug.",
     "comparison_boundaries": "Selection arrays and row enumeration order sorted explicitly; complete fields/values and labels exact. No full-sheet state or full AP/pixel equality. Native AP shows attack8 while Reader shows+8 although both API values are+8; typography/cosmetic differences remain.",
     "retained_failed_native": "output/testing/native-bard-spells-1793514740902317507/spells.json",
     "remaining": [
@@ -2543,7 +2543,7 @@
     "native_interoperability_comparison": "output/testing/script-observation-comparison-1793623161311779369/comparison.json",
     "final_native_edit": "output/testing/bard-expertise-reopens-1793623260267379264/reopens.json",
     "native_checkbox_states": "output/testing/native-bard-expertise-1793619182927084627/native-checkbox-appearances.json",
-    "scope": "Four real manual skill-proficiency checkbox activations; original offered Acrobatics/Arcana expertise at5; Perception/Persuasion expansion at9; Arcana removal; downlevel1 removes expertise and retains manual proficiencies. Complete captured fields/choices/offered menus and20 skill displays match Reader. Eight fresh native reopens of both engines outputs retain state and update Acrobatics after original Dexterity14\u219216 edit. Actual native expertise9 output survives Reader reopen/Dex16 edit, exact native API/AP comparison (+11), then fresh native Dex18 edit (+12).",
+    "scope": "Four real manual skill-proficiency checkbox activations; original offered Acrobatics/Arcana expertise at5; Perception/Persuasion expansion at9; Arcana removal; downlevel1 removes expertise and retains manual proficiencies. Complete captured fields/choices/offered menus and20 skill displays match Reader. Eight fresh native reopens of both engines outputs retain state and update Acrobatics after original Dexterity14→16 edit. Actual native expertise9 output survives Reader reopen/Dex16 edit, exact native API/AP comparison (+11), then fresh native Dex18 edit (+12).",
     "widget_and_render_checks": "All170 selected visible proficiency/expertise checkbox AS/appearance states across native4,Reader4,reopen8,final1 pass. Native and Reader level9 page1 renders reviewed; no full typography/pixel equality claim.",
     "retained_failed_tests": [
       "output/testing/native-bard-expertise-1793619070814809179/expertise.json",
@@ -2553,11 +2553,36 @@
     "retained_failure_reasons": [
       "Read-only User Script diagnostic carrier was incorrectly edited as user input; corrected to match Reader programmatic assignment/original RunUserScript entry.",
       "Immediate JSON retained the verified Unicode transport sentinel that saved_capture removes; corrected test checks/removes only this diagnostic metadata.",
-      "Expected ability-edit state omitted the legitimate dependent Acrobatics canonical change8\u21929; corrected expectation includes it. No game-state mismatch remained in these failed comparisons."
+      "Expected ability-edit state omitted the legitimate dependent Acrobatics canonical change8→9; corrected expectation includes it. No game-state mismatch remained in these failed comparisons."
     ],
     "remaining": [
       "Other expertise/skill combinations and duplicate-proficiency sources, all feats/ASIs, multiclass and other class/fixture choice paths remain incomplete",
       "Full-sheet serialized-state equivalence and native UI behavior outside the exercised controls remain unproven"
+    ]
+  },
+  "spell_button_modifiers": {
+    "status": "bounded-2024-qualified; remaining fixtures/workflows incomplete",
+    "runtime": "Native page activation passes release-event Shift and Ctrl/Cmd to original MouseDown/MouseUp actions. Cancelled popups return null, matching Reader and original getMenu.",
+    "native_binary_sha256": "d560008d9384c4946a32118ea8b22805217e633c08f0da6697174f3d71011e6a",
+    "reader": "output/testing/reader-spell-modifiers-1793627309768736001/modifiers.json",
+    "native_comparison": "output/testing/spell-modifiers-comparison-1793627738615863525/comparison.json",
+    "reader_cancel_api": "output/testing/reader-popup-cancel-1793627739780182451/cancellation.json",
+    "scope": [
+      "2024 existing Druid2 generated Cure Wounds control: ordinary preparation, Shift/Ctrl options, two real popup cancellations, offered Move row down/up selections",
+      "Six Reader snapshots; four native phase comparisons; fresh native and actual Reader-saved reopen/ordinary edit/resave",
+      "Exact selected check/remember values and four visible name/description values; exact extracted spell-name appearances, nonempty description appearances; unchanged original document scripts",
+      "Both prepared page8 renders reviewed: mark/text present; native attack display5 versus Reader+5 remains a known cosmetic difference",
+      "143 Rust tests, locked build, formatting and strict all-targets Clippy pass"
+    ],
+    "retained_failures": {
+      "old": "output/testing/spell-modifier-regression-1793627178786882579/old.json: original old engine ignores Shift and toggles preparation instead",
+      "partial_candidate": "output/testing/spell-modifier-regression-1793627178786882579/candidate.json: modifier branch reached but undefined cancellation return throws in original getMenu",
+      "reader_test_error": "output/testing/reader-spell-modifiers-1793626969706194308/modifiers.json: attempted moving back using old row; retained/closed original failed document, corrected in fresh run"
+    },
+    "remaining": [
+      "2014 Reader workflow is running; Ashnar modified spell activation unqualified",
+      "Other option selections, formula controls, mixed down/up modifier timing and keyboard access in native UI remain unqualified",
+      "Description appearance text/pixels are not claimed exact; complete class/table compatibility remains incomplete"
     ]
   }
 }

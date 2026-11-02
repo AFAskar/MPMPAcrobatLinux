@@ -9,6 +9,23 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+// Use the release's position and keys: later movement/key releases in the
+// same frame can already have changed InputState's final pointer/key state.
+fn activation_input(events: &[egui::Event], rect: egui::Rect) -> Option<(egui::Pos2, Value)> {
+    events.iter().rev().find_map(|event| match event {
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers,
+        } if rect.contains(*pos) => Some((
+            *pos,
+            json!({"shift":modifiers.shift,"modifier":modifiers.ctrl || modifiers.mac_cmd}),
+        )),
+        _ => None,
+    })
+}
+
 pub fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("--dialog") {
@@ -732,7 +749,9 @@ impl eframe::App for Reader {
                 if let Some(t) = &self.texture {
                     let response = ui.add(egui::Image::new(t).sense(egui::Sense::click()));
                     if response.clicked() {
-                        if let Some(pos) = response.interact_pointer_pos() {
+                        if let Some((pos, modifiers)) =
+                            ctx.input(|input| activation_input(&input.events, response.rect))
+                        {
                             let (width, height) = self.renderer.page_size.get();
                             let x = (pos.x - response.rect.left()) / response.rect.width() * width;
                             let y = height
@@ -760,7 +779,10 @@ impl eframe::App for Reader {
                                     let name = serde_json::to_string(&self.edit_name).unwrap();
                                     let r = self
                                         .rt
-                                        .eval(&format!("__host.activate({name},{})", w["index"]))
+                                        .eval(&format!(
+                                            "__host.activate({name},{},{modifiers})",
+                                            w["index"]
+                                        ))
                                         .map(|_| ());
                                     self.result(r);
                                     if let Ok(value) =
@@ -1231,6 +1253,67 @@ pub fn alert(value: &Value) -> Result<Value> {
 #[cfg(test)]
 mod dialog_tests {
     use super::*;
+
+    #[test]
+    fn page_activation_uses_release_position_and_keys_despite_later_input() {
+        let pos = egui::pos2(10., 20.);
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(100., 100.));
+        let release = |button, modifiers| egui::Event::PointerButton {
+            pos,
+            button,
+            pressed: false,
+            modifiers,
+        };
+        let events = vec![
+            release(
+                egui::PointerButton::Primary,
+                egui::Modifiers {
+                    shift: true,
+                    ctrl: true,
+                    ..Default::default()
+                },
+            ),
+            egui::Event::PointerMoved(egui::pos2(30., 40.)),
+            egui::Event::Key {
+                key: egui::Key::A,
+                physical_key: None,
+                pressed: false,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ];
+        assert_eq!(
+            activation_input(&events, rect),
+            Some((pos, json!({"shift":true,"modifier":true})))
+        );
+        assert_eq!(activation_input(&events, egui::Rect::NOTHING), None);
+        assert_eq!(activation_input(&[], rect), None);
+        for (modifiers, expected) in [
+            (
+                egui::Modifiers {
+                    alt: true,
+                    ..Default::default()
+                },
+                false,
+            ),
+            (
+                egui::Modifiers {
+                    mac_cmd: true,
+                    ..Default::default()
+                },
+                true,
+            ),
+        ] {
+            assert_eq!(
+                activation_input(&[release(egui::PointerButton::Primary, modifiers)], rect),
+                Some((pos, json!({"shift":false,"modifier":expected})))
+            );
+            assert_eq!(
+                activation_input(&[release(egui::PointerButton::Secondary, modifiers)], rect),
+                None
+            );
+        }
+    }
 
     #[test]
     fn dialog_typing_survives_frames_and_dispatches_after_focus_leaves() {

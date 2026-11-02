@@ -92,3 +92,6 @@ Read `docs/testing-environment.md` before changing or testing PDF behavior.
 - The user authorizes cloud-lab (existing SSH alias) and its Windows lab for parallel compatibility work, including resetting/replacing the lab guest and using the host as needed. Keep native jobs and outputs isolated; serialize each Reader instance and independently qualify its environment. Do not share bridge state/queues/locks across references or infer cloud readiness from the local VM. No parallel agents are required. Preserve original fixtures and keep every private snapshot/result out of Git.
 
 - In the qualified Bard slot controls, Reader saves checked AP entries but can omit Off entirely. Verify actual widget AS and checked appearance, recording absent Off as no appearance; an explicit Off stream is not a universal requirement. Keep raw representations and real checked/unchecked render evidence separate from canonical values.
+
+- Page activation must use the pointer release's coordinates/modifiers, not the frame's final key/pointer state. MPMB uses Shift/Ctrl/Cmd for spell options; cancelled popups return `null`, which original `getMenu` explicitly requires.
+- In spell-row move tests, reverse from the spell's actual new row. Observe prepared-mark migration separately rather than assuming it follows the moved spell.

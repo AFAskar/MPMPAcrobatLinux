@@ -1,5 +1,16 @@
 # Implementation handoff
 
+## Current modified-click repair — 2026-11-02
+
+Goal ACTIVE. HEAD5a63f14 commits Bard expertise qualification. Candidate d560008d9384c4946a32118ea8b22805217e633c08f0da6697174f3d71011e6a has143 passing Rust tests/build/fmt/strict all-targets Clippy. Fix: release-event pointer position/Shift/Ctrl/Cmd reach original D/U actions; cancelled popup returnsnull. Original scripts/submodule unchanged. No broad milestone complete.
+
+2024 Reader1793627309768736001/native comparison1793627738615863525 PASS preparation, modifier options, both real cancels, selected down/up row moves, six Reader saves/four native saves, fresh native+Reader-saved edits and visible spell names/descriptions. Rendered page8 reviewed, mark and text present; known attack5 vs+5 cosmetic debt. Reader direct API cancel1793627739780182451 PASS null/object with ASCII+sentinel/saved checksum. Failed old and partial engine1793627178786882579 retained; partial engine reached menu but threw on undefined cancellation. First Reader1793626969706194308 failed because test reversed using old row; retained/closed, fresh corrected run passes.
+
+NEXT: finish active2014 reference run in continuation-spell-modifiers-reader-2014.log (session55221); no second local suite until terminal/cleanup. Compare via verify-spell-modifiers.py. Extend actual native prepared output→Reader edited reopens, then Ashnar/other original choices. Formula helper SetThisFldVal exists in source but no direct installed action found in bounded fixture inventory; do not claim it qualified.
+
+Cloud native original151 engine15 explicit sidekicks PASS, fetched JSONs output/testing/cloud-lab-1793598696136937066/sidekicks; scope manual Bandit base/HD/class identity/progression/reopen only. Current regular2014/Ashnar regression still progressing; shadowed queue remains. Separate copied cloud harness output/testing/cloud-reference-nov02 deployed with port2223/separateMUX/fingerprint/state; helper source unchanged, VM-running query uses cloud-lab system windows-vm. Passwordless jot console logged in after clean reboot, helper scheduled task active, original16GiB/4vCPU cloud config observed. Cloud OS subsequently restarted again and is intermittently unavailable; initial3 preflight attempts FAILED transport/timeout and cloud is still UNQUALIFIED. cloud-boot-diagnostic.py session70310 polls read-only System boot/restart events. Inspect that report/live VM before more gating; don't blindly replay mutations. Local VM/reference untouched. Old RDP client74808 stopped; temporary8870 HTTP90420 and exact MPMB-bootstrap-temp firewall rule removed after dedicated key auth worked. SSH tunnel1310116 remains; key stays local. No credentials needed.
+
+
 ## Current expertise qualification and cloud bootstrap — 2026-11-02
 
 HEADdf88db6 commits slot/rest/AS proof;8711976 commits cross-distribution save repair. Goal ACTIVE, no broad milestone complete. Current engine151271d8c316b7e169daca96a5dd708c0b41961b2f201b57084ee976fc98c5f7 has140 passing Rust tests/build/fmt/strict all-targets Clippy. Original/pinned fixtures unchanged. Native class/choice behavior remains priority over pixels.

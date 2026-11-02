@@ -1069,6 +1069,10 @@ mod tests {
         host("globalThis.__dialog=function(){return JSON.stringify({event:'menu1'})};app.popUpMenuEx({cName:'Pages',oSubMenu:[{cName:'Companion',cReturn:'template#AScomp#add'}]})==='template#AScomp#add'");
     }
     #[test]
+    fn cancelled_popup_returns_null_for_original_mpmb_get_menu() {
+        host("globalThis.__dialog=function(){return JSON.stringify({result:'cancel'})};var value=app.popUpMenuEx({cName:'Spell options',cReturn:'move#down'});value===null&&(value===null?['nothing','toreport']:value.toLowerCase().split('#'))[0]==='nothing'");
+    }
+    #[test]
     fn copied_button_icon_survives_source_reassignment() {
         host("var a=getField('A'),b=getField('B');b.buttonSetIcon(a.buttonGetIcon());a.buttonSetIcon(getField('C').buttonGetIcon());b.buttonSetCaption('>',0);b.buttonSetCaption('>',1);b.buttonSetCaption('>',2);var s=JSON.parse(__host.snapshot());s.B.icon.field==='A'&&s.A.icon.field==='C'&&s.B.captions[2]==='>'&&b.buttonGetCaption(1)==='>'");
     }
@@ -1076,6 +1080,12 @@ mod tests {
     fn widget_activation_delivers_original_target_and_updates_checkbox() {
         host(
             r#"var f=getField('A');f.type='checkbox';f.exportValues=['True'];f.setAction('MouseDown',"globalThis.down=event.target.name");f.setAction('MouseUp',"globalThis.up=event.target.valueAsString");__host.activate('A');down==='A'&&up==='True'&&f.isBoxChecked(0)===1"#,
+        );
+    }
+    #[test]
+    fn mouse_modifiers_reach_original_actions_without_leaking_to_next_click() {
+        host(
+            r#"var f=getField('A'),trace=[];getField('B').setAction('Calculate','');f.setAction('MouseDown','trace.push([event.shift,event.modifier])');f.setAction('MouseUp','trace.push([event.shift,event.modifier]);if(event.shift||event.modifier)getField("B").value="options";else getField("B").value="prepare"');__host.activate('A',0,{shift:true});var shifted=getField('B').value==='options';__host.activate('A',0,{modifier:true});__host.activate('A');shifted&&getField('B').value==='prepare'&&JSON.stringify(trace)==='[[true,false],[true,false],[false,true],[false,true],[false,false],[false,false]]'"#,
         );
     }
     #[test]

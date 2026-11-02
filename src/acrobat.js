@@ -242,11 +242,12 @@ var __host = (function () {
     f.value=v;
     globalThis.dirty=true;return true;
   }
-  function activate(n,index=0){
+  function activate(n,index=0,modifiers={}){
     const f=fields[n];if(!f)throw Error('Unknown field '+n);data.focus=n;
-    eventRun(f,'Fo',f.value);eventRun(f,'D',f.value);
+    const mouse={shift:!!modifiers.shift,modifier:!!modifiers.modifier};
+    eventRun(f,'Fo',f.value);eventRun(f,'D',f.value,mouse);
     if(!f.readonly&&(f.type==='checkbox'||f.type==='radiobutton'))f.checkThisBox(index,f.type==='radiobutton'||!f.isBoxChecked(index));
-    eventRun(f,'U',f.value);if(globalThis.calculate&&app.calculate)calculateNow();
+    eventRun(f,'U',f.value,mouse);if(globalThis.calculate&&app.calculate)calculateNow();
   }
   function pageWidgets(page){const result=[];for(const n of names){const f=fields[n];f._widgets.forEach((w,index)=>{const display=widgetDisplay(f,index);if(w.page===page&&display!==1&&display!==3)result.push({name:n,index,rect:w.rect,type:f.type,readonly:f.readonly})})}return result;}
   function advance(ms) {
@@ -291,7 +292,7 @@ var __host = (function () {
       choices[id]=item.cReturn===undefined?item.cName:item.cReturn;def[id]=function(dialog){dialog.end(id)};
       return {type:'button',item_id:id,name:(item.bMarked?'✓ ':'')+item.cName};
     }
-    def.description.elements=items.map(build).filter(Boolean);const result=execDialog(def);return Object.prototype.hasOwnProperty.call(choices,result)?choices[result]:undefined;
+    def.description.elements=items.map(build).filter(Boolean);const result=execDialog(def);return Object.prototype.hasOwnProperty.call(choices,result)?choices[result]:null;
   }
   function applyQualifiedRepairs(){
     if(!data.repair_allowed)return;
