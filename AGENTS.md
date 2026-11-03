@@ -22,7 +22,7 @@ Read `docs/testing-environment.md` before changing or testing PDF behavior.
 
 # Native reader implementation
 
-- Keep Cargo builds at one job and serialize Acrobat operations. The Windows VM has 4 GiB RAM; do not spawn parallel agents for this work.
+- Keep Cargo builds at one job. The local Windows VM has 4 GiB RAM. The user authorizes parallel cloud workers and Acrobat operations on independent Windows desktops when measured memory headroom permits; serialize all operations and suites within each Reader desktop. Use isolated workspaces, explicit worker memory/CPU limits and a host memory reserve. Never run competing suites on one desktop or parallel Cargo builds. The cloud Windows VM currently has 4 vCPUs/16 GiB RAM on a 4-CPU/33-GiB host; remeasure before increasing concurrency. Avoid host OOM above throughput.
 - Keep QuickJS as the single authoritative form state. PDFium renders disposable projections; its built-in execDialog is a successful no-op and is not an alternative MPMB runtime.
 - Compatibility means all reachable MPMB workflows in all three authorized fixtures. Base-class level/proficiency checks, default dialog replies and passing smoke tests do not establish full compatibility. Record unsupported behavior and coverage gaps explicitly.
 - Separate implementation into milestones with concrete native and real Acrobat evidence before marking each milestone complete. Maintain docs/native-compatibility.json, docs/mpmb-compatibility-audit.md and docs/development-handoff.md.
@@ -30,7 +30,7 @@ Read `docs/testing-environment.md` before changing or testing PDF behavior.
 - Printing tests must use controlled file destinations or cancel the printer dialog; never automatically send test jobs to a physical printer.
 - Original MPMB scripts redefine `Array.prototype.find` as a regex/index lookup. Preserve that behavior. Native host code and probes must avoid assuming standard `find(predicate)` semantics after document scripts load.
 - Freeze the fingerprinted reference-harness inputs while qualification runs; see `docs/testing-environment.md`. Editing `tools/acrobat` source during readiness invalidates the entire suite, even when workflow cases passed.
-- Run reference suites one at a time through completion and cleanup; do not queue multiple desktop suites. Each suite must reject a pre-existing document before opening its disposable copy. A failed suite must retain/close its own document before another suite starts.
+- Run reference suites one at a time per independent desktop through completion and cleanup; do not queue multiple suites on the same desktop. Each suite must reject a pre-existing document before opening its disposable copy. A failed suite must retain/close its own document before another suite starts.
 - Scripted test replies must be valid controls/buttons offered by the actual dialog. Alert code 1 is OK, not Yes; Yes/No uses 4/3. Sidekick conversion requires explicit confirmation and base-creature hit dice; generic defaults do not exercise that class.
 
 - Diagnostics transported through a PDF text field must use ASCII-escaped JSON (or independently prove equivalent encoding). Include a Unicode sentinel and verify the saved field against a Reader code-unit/checksum summary; unescaped Unicode can be altered by the transport field itself.
