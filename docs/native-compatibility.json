@@ -502,6 +502,24 @@
     }
   ],
   "evidence": {
+    "persistent_cloud_reference": {
+      "status": "qualified_reference_environment_only",
+      "preflight": "output/testing/cloud-tmux-results/qualified-preflight.json",
+      "preflight_checks": 29,
+      "readiness": "output/testing/cloud-tmux-results/qualified-readiness-1793701721.json",
+      "readiness_cases": 24,
+      "frozen_harness_matches_current_remote_source": true,
+      "remote_root": "~/.cache/mpmb-reference/reader-1793688790884081293",
+      "session": "mpmb-reader-remote",
+      "host_oom_kills": 0,
+      "host_available_mib_at_final_audit": 16137.5,
+      "guest_available_mib_at_final_audit": 12786,
+      "reader_crash_and_resource_events": [],
+      "limits": "Cloud overlay is a frozen copied harness, not a change to local tools/acrobat. Older failed suites remain failed; full MPMB compatibility is not established.",
+      "guarded_native_regressions": "output/testing/guard-regressions-summary.json",
+      "guarded_native_cases": 16,
+      "guarded_native_clean_probes": 32
+    },
     "champion_additional_style_qualification": {
       "status": "in_progress_not_qualified",
       "fixture": "2014",
