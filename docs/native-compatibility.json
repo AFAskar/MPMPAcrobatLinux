@@ -502,6 +502,22 @@
     }
   ],
   "evidence": {
+    "champion_additional_style_qualification": {
+      "status": "in_progress_not_qualified",
+      "fixture": "2014",
+      "profile": "Champion17 primary Archery and additional Defense/Dueling, compound effects, 17\u21929 removal and cold17 reselection",
+      "native": "output/testing/native-fighter-additional-1793699739162266582/additional.json",
+      "native_states": 12,
+      "native_changed_save_pilot": "output/testing/fighter-additional-persistence-1793700274994057380/persistence.json",
+      "native_pilot_states": 4,
+      "reader_failures": [
+        "output/testing/reader-fighter-additional-1793695991891869058/additional.json",
+        "output/testing/reader-fighter-additional-1793699074935670754/additional.json"
+      ],
+      "reader_failure": "Both partial runs failed exact Shield input verification after five states and retained/closed their documents. They are not complete passes. Fresh/warm isolated Shield controls pass; root cause is unproven.",
+      "reader_retry": "output/testing/reader-fighter-additional-1793699963662881531",
+      "remaining": "Entire Reader profile, native\u2192Reader edited progression/compound persistence and final fresh native edits remain required. Old style observer additional getter used a display name and did not measure the real key subclassfeature10."
+    },
     "dialog_control_integrity": {
       "status": "qualified_test_integrity_guard",
       "rust_tests": 148,
