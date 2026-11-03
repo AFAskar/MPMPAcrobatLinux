@@ -78,10 +78,11 @@ def main():
             if args.resume_report:
                 assert args.isolate_shadowed, 'Resume is limited to the explicit shadowed-profile suite'
                 previous = json.loads(args.resume_report.read_text())
+                assert previous.get('binary_sha256') == report['binary_sha256'], 'Resume requires the same runtime binary; changed engines need fresh qualification'
                 for prior in previous['fixtures']:
                     if prior['fixture'] == fixture:
                         assert prior.get('profile_mode') == 'isolated-shadowed' or prior['profile'].startswith('All sourcebooks; only the target')
-                        prior_passed |= {(c['class'], c['subclass']) for c in prior['cases'] if c['passed']}
+                        prior_passed |= {(c['class'], c['subclass']) for c in prior['cases'] if c['passed'] and c.get('diagnostics_checked') and not c.get('diagnostic_errors') and not c.get('console_messages') and not c.get('reopen_diagnostic_errors') and not c.get('reopen_console_messages')}
                 item['resumed_from'] = str(args.resume_report.resolve())
                 item['previous_report_sha256'] = hashlib.sha256(args.resume_report.read_bytes()).hexdigest()
                 item['previous_passing_cases'] = len(prior_passed)
@@ -99,6 +100,9 @@ def main():
                     if len(offered) > len(source_paths): source_paths = offered
             candidates = []
             for cl in inventory:
+                if 'sidekick' in cl['key']:
+                    item['not_exercised'].append({'class': cl['key'], 'reason': 'Requires explicit base-creature conversion/HD qualification; generic dialog defaults are invalid. Use the dedicated sidekick suite.'})
+                    continue
                 if cl['excluded'] or (not args.isolate_shadowed and (not cl['parsed'] or cl['parsed'][0] != cl['key'])):
                     item['not_exercised'].append({'class': cl['key'], 'reason': 'Excluded or shadowed by another class with this source profile', 'parsed': cl['parsed']}); continue
                 for sub in cl['subs']:
@@ -171,19 +175,36 @@ def main():
                     steps += [{'op': 'eval', 'code': code}, {'op': 'advance', 'ms': 1000}, {'op': 'eval', 'code': verify_class}, {'op': 'assert', 'values': {'Character Level': str(level), 'Proficiency Bonus': str(2 + (level - 1) // 4)}}]
                 steps += [{'op': 'save', 'path': str(output)}]
                 rc, data, evidence = run(source, label, dialogs, steps)
-                case = {'class': cl['key'], 'subclass': sub['key'], 'passed': rc == 0 and data['passed'], 'probe': evidence, 'error': data.get('error'), 'source_exclusions': excluded_books, 'feature_choices': 'Default responses only; unqualified', 'reader': 'not run'}; item['cases'].append(case)
+                execution_passed = rc == 0 and data['passed']
+                diagnostic_errors = data['diagnostics']['errors']
+                console_messages = data['diagnostics']['console']['messages']
+                case = {'class': cl['key'], 'subclass': sub['key'], 'execution_passed': execution_passed,
+                        'passed': execution_passed and not diagnostic_errors and not console_messages,
+                        'diagnostics_checked': True, 'diagnostic_errors': diagnostic_errors, 'console_messages': console_messages,
+                        'probe': evidence, 'error': data.get('error'), 'source_exclusions': excluded_books,
+                        'feature_choices': 'Default responses only; unqualified', 'reader': 'not run'}
+                if execution_passed and (diagnostic_errors or console_messages):
+                    case['error'] = 'Original caught errors or console messages require qualification; execution/level assertions alone are not a clean pass'
+                item['cases'].append(case)
                 if case['passed']:
                     expected = {'Class and Levels': canonical_fields(PdfReader(output))['Class and Levels']['/V'], 'Character Level': '3', 'Proficiency Bonus': '2'}
                     independent = inspect(output, expected); assert independent['passed'], independent
                     assert script_hashes(output) == script_hashes(source)
                     rc, reopened, reopen_evidence = run(output, label + '-reopen', [{'result': 'ok'}] * 20, [{'op': 'advance', 'ms': 4100}, {'op': 'assert', 'values': expected}, {'op': 'eval', 'code': verify_class}])
-                    case.update({'passed': rc == 0 and reopened['passed'], 'reopen': reopen_evidence, 'expected': expected, 'output': str(output), 'error': reopened.get('error')})
+                    reopen_errors = reopened['diagnostics']['errors']
+                    reopen_console = reopened['diagnostics']['console']['messages']
+                    case.update({'passed': rc == 0 and reopened['passed'] and not reopen_errors and not reopen_console,
+                                 'reopen_diagnostic_errors': reopen_errors, 'reopen_console_messages': reopen_console,
+                                 'reopen': reopen_evidence, 'expected': expected, 'output': str(output), 'error': reopened.get('error')})
+                    if reopen_errors or reopen_console:
+                        case['error'] = 'Reopened original caught errors or console messages require qualification'
                 print(fixture, sub['key'], 'PASS' if case['passed'] else 'FAIL', case.get('error') or '', flush=True)
                 (folder / 'subclasses.json').write_text(json.dumps(report, indent=2))
                 # Stop at concrete failures rather than generating hundreds of identical errors.
-                assert case['passed'], case
+                assert case['passed'], {k: case.get(k) for k in ['class', 'subclass', 'probe', 'error']}
             assert hashlib.sha256(source.read_bytes()).hexdigest() == original_hash
         report['passed'] = all(f['cases'] and all(c['passed'] for c in f['cases']) for f in report['fixtures'])
+        assert report['passed'], 'No complete clean subclass case set; inspect excluded and unattempted candidates'
     except Exception as error:
         report['error'] = str(error); raise
     finally:

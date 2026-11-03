@@ -1106,7 +1106,7 @@
   ],
   "historical_print_counterexamples_status": "Missing dependencies implemented; historical failures retained. Current native print evidence above; broader milestone remains in progress.",
   "subclass_dropdown_audit": {
-    "status": "All 597 registered fixture/class/subclass pairs have bounded default-choice progression/native reopen evidence across separate frozen runs; Reader source equivalence and full table coverage remain incomplete",
+    "status": "597 historical structural/default-profile attempts recorded; clean-compatibility claim invalidated by caught console warnings and invalid generic sidekick setup. Full choices/Reader/table qualification remains incomplete.",
     "pilot": "output/testing/native-subclasses-1793074776109531946/subclasses.json",
     "broad_run": "output/testing/native-subclasses-1793074818475225818/subclasses.json",
     "scope": "Original source-selection buttons and offered class/subclass dropdowns; levels 3,5,11,20,3; independent saved output/script checks and native reopen. All-source profile only; default feature choices only. Reader equivalence and full table workflows unqualified.",
@@ -1145,7 +1145,22 @@
     "shadowed_remaining_2014_cases": 32,
     "ashnar_shadowed_failed": "output/testing/native-subclasses-1793129497504843511/subclasses.json",
     "ashnar_shadowed_remaining": "output/testing/native-subclasses-1793158468877370067/subclasses.json",
-    "ashnar_shadowed_remaining_cases": 4
+    "ashnar_shadowed_remaining_cases": 4,
+    "historical_reaudit": {
+      "report": "output/testing/cloud-lab-146-regressions/coverage-audit-native143.json",
+      "attempts": 597,
+      "cases_with_console_messages": 11,
+      "invalid_generic_sidekick_cases": 9,
+      "missing_probe_evidence": 0,
+      "note": "Raw historical reports remain untouched. Warnings include2024 Swords Bard,2014 Theurgy UA Wizard and nine default sidekick cases. Separate explicit15 sidekick profiles remain valid within their bounded scope."
+    },
+    "strict_audit": {
+      "negative": "output/testing/native-subclasses-1793678676780207214/subclasses.json",
+      "zero_case_negative": "output/testing/native-subclasses-1793678721498942388/subclasses.json",
+      "positive": "output/testing/native-subclasses-1793678806458231672/subclasses.json",
+      "behavior": "Require clean original errors/console for both creation and reopen; reject zero-case completion and cross-binary/unchecked resume claims. Generic sidekicks are explicitly not exercised; use explicit conversion/HD profiles."
+    },
+    "remaining": "Class table/feature choices, original warning parity, dependent source profiles and comprehensive Reader behavior remain incomplete. No597-clean-pass or universal compatibility claim."
   },
   "bookmarks": {
     "status": "defined native workflow and native desktop cases passed; Reader qualification pending",

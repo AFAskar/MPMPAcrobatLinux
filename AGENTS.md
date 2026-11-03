@@ -101,3 +101,5 @@ Read `docs/testing-environment.md` before changing or testing PDF behavior.
 
 - Distinguish programmatic field assignment from a completed desktop edit. Original Constitution Blur recalculates automatic HP; qualify focus transitions and completed edits with nonempty original-event traces, selected HP mode, feat removal/progression and changed mixed-engine reopens. Passing calculation totals alone does not prove the HP field was updated.
 - `calcHPtotals` can report base HP while original HP callbacks add feat contributions afterward (Tough is a qualified example). Compare automatic HP with its original effective mapping/menu state and independent feat/Constitution deltas; do not assume the raw totals object's fixed member includes every feature.
+
+- Subclass audit success requires inspecting original caught errors and console messages in both execution and reopen, not just level/assertion success. Do not resume unchecked historical cases or across changed runtime binaries. Generic sidekick default dialogs are invalid qualification; keep explicit conversion/base-HD profiles separate. Preserve raw invalidated reports and publish the correction alongside them.
