@@ -245,3 +245,10 @@ Milestone3/4 fixed-HP slice extension is qualified in all three fixtures for2024
 Concrete gates pass: original native/Reader offered-menu choices and7 exact conditional gear states;6 fresh native runtimes/22 persistence states; actual native→Reader→coldReader6 processes/9 states; final Reader→native6 runtimes/12 changed/restored states. Dueling melee damage, Defense armor condition and Archery ranged condition disappear and return through changed saved reopens, with canonical/widgets/AP text, original scripts and diagnostic Unicode transport verified. See fighter_styles_2014 in the matrix for reproducible evidence.
 
 This completes the stated2014 Champion6/3-style slice only. Other8 styles, additional style, broader combat/classes/source profiles and overall Milestones3/4 remain incomplete. Next active slice: Fighter resource progression/spending/rests; native1793683797045160950 passes8 states, Reader1793684128816641774 is still running. No resource/complete-class milestone is qualified yet.
+
+
+### Milestone3n: bounded2014 Champion resource progression/reset persistence — qualified
+
+Concrete gates: native/Reader same8 states at6/9/11/17 and spending/rest resets; native-partially-spent17→Reader/coldReader5 states; final Reader outputs→native6 fresh runtimes/12 states. Original callbacks discriminate short/long recovery and retain/recalculate selected class/HP/attack/style state. Full64 actual resource fields, selected canonical/widgets/AP text and original scripts pass. See fighter_resources_2014 for reproducible evidence.
+
+Only this counter/reset/persistence slice is complete. Extra style, feats/ASIs, middle13 maximum, full healing/hit-dice rest UI and other class/source/multiclass profiles remain open. Broad Milestones3/4 and full goal stay in progress. Continue with genuine additional-style/class feature/source-selection workflows rather than treating these level checks as complete class compatibility.

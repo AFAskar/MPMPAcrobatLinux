@@ -2734,5 +2734,28 @@
       "Full pixel/font fidelity"
     ],
     "full_mpmb_compatibility": false
+  },
+  "fighter_resources_2014": {
+    "status": "bounded resource progression/spending/reset/persistence qualified",
+    "profile": "2014 Champion6→9→11→17; fixed HP, primary Archery; extra style and feats/ASIs intentionally unselected",
+    "native": "output/testing/native-fighter-resources-1793683797045160950/resources.json",
+    "native_scope": "8 states across2 fresh runtimes, including native partially spent save/reopen",
+    "reader": "output/testing/reader-fighter-resources-1793684128816641774/resources.json",
+    "reader_scope": "Same8 states, physical counter input, original target-context ApplyClasses/resetLimFeaUsed calls and cold spent-state reopen",
+    "native_to_reader": "output/testing/reader-fighter-resource-reopen-1793685040399978409/reopen.json",
+    "native_to_reader_scope": "5 states/2 Reader processes from actual native17 partially spent output: load, long reset, physical spend, cold short reset, long reset",
+    "final_native": "output/testing/fighter-resource-final-native-1793685929747360070/reopen.json",
+    "final_native_scope": "6 fresh runtimes/12 loaded/changed counter states from both actual Reader output paths",
+    "behavior": "Second Wind1d10+level, Action Surge1→2, Indomitable1→3 at measured levels; spend1/2/2 at17; short reset clears Second Wind/Action Surge and retains Indomitable2, long reset clears it. Ability/HP/attack/style state retained and compared.",
+    "comparison": "Complete30 selected identity/gear/HP/attack fields plus64 enumerated actual resource fields and style metadata; exact strings, explicit PDF button export representation only. Canonical/widgets/AP text, ASCII JSON+real Unicode sentinel/Reader checksum, unchanged embedded scripts and input hashes checked; no original caught errors or console messages in native probes.",
+    "remaining": [
+      "Level13 Indomitable2 maximum",
+      "Champion additional style",
+      "Feats/ASIs and complete class progression",
+      "Full short/long rest healing and hit dice UI workflows",
+      "Other class/subclass/source/multiclass profiles and fixtures",
+      "Complete state/API/pixel equality"
+    ],
+    "full_mpmb_compatibility": false
   }
 }
