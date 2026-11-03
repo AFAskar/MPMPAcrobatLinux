@@ -2695,5 +2695,15 @@
     "native_negative_scope": "Swords still reports40 original console messages despite successful level assertions; correctly rejected and retained as failure",
     "guard_scope": "Reject malformed/missing errors/console streams, failed execution, creation/reopen errors and zero completed cases. Preserve diagnostic objects and provenance.",
     "remaining": "Swords source/feature workflow warning comparison and Theurgy dependencies remain unqualified; historical597 default cases are not a clean compatibility corpus."
+  },
+  "swords_definition_observation": {
+    "status": "exact native/Reader metadata parity only; feature workflow unqualified",
+    "fixture": "2024",
+    "observer": "tools/native/swords-definition-observer.js",
+    "reader": "output/testing/reader-script-observation-1793679217866038755/observation.json",
+    "native": "output/testing/script-observation-comparison-1793681831603083164/comparison.json",
+    "observed": "Ten listed style names; only Dueling and Two-Weapon Fighting objects; include filter contains those two; Swords excluded in measured default source profile",
+    "transport": "ASCII-escaped JSON with real Unicode sentinel, Reader UTF16 summary and independent saved PDF/scripts check",
+    "limitation": "Does not qualify warnings during original class application or genuine Swords choices. Do not enable missing forbidden styles or silently patch original source."
   }
 }

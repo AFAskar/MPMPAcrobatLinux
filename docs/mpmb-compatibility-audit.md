@@ -533,3 +533,8 @@ Swords metadata investigation shows40 messages in both145 and146 and in the hist
 ### Subclass report qualification hardening — 2026-11-03
 
 The requested OpenCode/DeepSeek V4.1 Flash1017 cloud worker produced a pure report-qualification helper and24 stdlib positive/negative tests. Primary review and local rerun pass; real current-native Bard/Lore source/dialog/progression/reopen1793682944049628820 passes with clean diagnostics. Current Swords1793682998676681324 still emits40 original console messages and is correctly rejected despite passing execution/level assertions. Missing/malformed diagnostic streams and empty case sets cannot establish a pass. Raw diagnostic objects and report provenance remain intact. This completes a test-infrastructure change only; it adds no Reader or comprehensive class-feature coverage. Historical warning-bearing597 default attempts remain invalid as a clean compatibility claim.
+
+
+### Swords definition control — metadata only
+
+2024 original default-profile Reader observation1793679217866038755 and native exact comparison1793681831603083164 agree on all recorded keys, style names/objects, include filter, source and exclusion state. Ten names are listed but only Dueling/Two-Weapon objects exist. Original public processChoicesFightingStyles appends names before filtering added objects; this metadata inconsistency is shared with Reader. The diagnostic uses the same original RunUserScript entry, ASCII JSON, real Unicode sentinel, Reader code-unit/checksum and independently read saved fields/scripts. The earlier bad-sentinel observation remains failed. This control does not establish Reader-equivalent warnings during class application, valid source selection, or Swords table use; those gates remain open.
