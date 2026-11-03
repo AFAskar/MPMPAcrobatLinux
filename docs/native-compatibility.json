@@ -2705,5 +2705,34 @@
     "observed": "Ten listed style names; only Dueling and Two-Weapon Fighting objects; include filter contains those two; Swords excluded in measured default source profile",
     "transport": "ASCII-escaped JSON with real Unicode sentinel, Reader UTF16 summary and independent saved PDF/scripts check",
     "limitation": "Does not qualify warnings during original class application or genuine Swords choices. Do not enable missing forbidden styles or silently patch original source."
+  },
+  "fighter_styles_2014": {
+    "status": "bounded original choices and changed native/Reader/cold persistence qualified",
+    "fixture_profile": "2014 Fighter6/Champion, Str18 Dex18 Con12, original fixed HP46; previously qualified original class/progression source",
+    "native": "output/testing/native-fighter-styles-1793655301970004130/styles.json",
+    "reader": "output/testing/reader-fighter-styles-1793655507724192514/styles.json",
+    "initial_states": 7,
+    "native_persistence": "output/testing/fighter-style-persistence-1793656327837653244/persistence.json",
+    "native_persistence_scope": "6 fresh runtimes/22 states from native and actual Reader origins",
+    "reader_persistence": "output/testing/reader-fighter-style-reopen-1793682717647856576/reopen.json",
+    "reader_persistence_scope": "3 native-saved styles,6 fresh Reader processes,9 loaded/negative/cold-positive states",
+    "final_native": "output/testing/fighter-style-final-native-1793684127619459735/reopen.json",
+    "final_native_scope": "6 fresh runtimes/12 states after actual Reader outputs, changed saves then fresh restores",
+    "behavior": "Actual offered Champion → Fighting Style menus select Dueling/Defense/Archery. Dueling sword+shield damage1d8+6 and bow1d8+4; Defense Plate AC19/unarmored14; Archery bow hit+9/melee+7. Style removal/reapplication and original gear actions survive all measured save/reopen boundaries.",
+    "comparison": "Complete observer identity/style choices,30 selected field values and64 enumerated actual resource fields; exact text values, explicit button-name conversion only. Saved canonical values/widgets/AP text, ASCII+real Unicode sentinel/Reader checksum, original scripts and immutable inputs checked.",
+    "expected_control": "Initial Archery-melee expectation combined measured baseline and no-shield gear; the later actual Reader negative state independently matches it exactly.",
+    "retained_negatives": [
+      "Reader inventory1793653966414402272 used wrong assumed Fighter(Champion) root; canceled/closed",
+      "Native1793655085619883650 had invalid escaped diagnostic regex; retained failure"
+    ],
+    "remaining": [
+      "Other8 offered styles",
+      "Champion additional style",
+      "Offhand/two-handed combat combinations and all gear",
+      "2014/Ashnar/2024 other class/subclass profiles",
+      "Full resource spending/rest workflows and class progression",
+      "Full pixel/font fidelity"
+    ],
+    "full_mpmb_compatibility": false
   }
 }

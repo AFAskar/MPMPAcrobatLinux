@@ -538,3 +538,12 @@ The requested OpenCode/DeepSeek V4.1 Flash1017 cloud worker produced a pure repo
 ### Swords definition control — metadata only
 
 2024 original default-profile Reader observation1793679217866038755 and native exact comparison1793681831603083164 agree on all recorded keys, style names/objects, include filter, source and exclusion state. Ten names are listed but only Dueling/Two-Weapon objects exist. Original public processChoicesFightingStyles appends names before filtering added objects; this metadata inconsistency is shared with Reader. The diagnostic uses the same original RunUserScript entry, ASCII JSON, real Unicode sentinel, Reader code-unit/checksum and independently read saved fields/scripts. The earlier bad-sentinel observation remains failed. This control does not establish Reader-equivalent warnings during class application, valid source selection, or Swords table use; those gates remain open.
+
+
+### 2014 Champion6 fighting-style choices and conditional persistence — bounded slice qualified
+
+Actual original Champion/Fighting Style offered menus select Dueling, Defense and Archery in native1793655301970004130 and real Reader1793655507724192514. All7 measured states match: sword+shield Dueling damage1d8+6, ranged1d8+4; armored Defense AC19 versus unarmored14; Archery ranged hit+9 versus melee+7. Original field actions remove and reapply conditional effects. The initial wrong-root inventory and malformed diagnostic-regex run remain failed.
+
+Fresh native persistence1793656327837653244 passes6 runtimes/22 states from native and Reader origins. Actual native→Reader→coldReader1793682717647856576 passes9 loaded/negative/positive states across6 Reader processes. Each style is changed, saved, reopened and positively reapplied; an unchanged resave cannot satisfy these controls. Final fresh native1793684127619459735 passes6 runtimes/12 changed/restored states from the Reader outputs. Exact complete observer state, actual64 resource fields, canonical/widget values and changed AP text pass, with original scripts/input hashes retained and ASCII JSON/real Unicode sentinel/Reader checksum verification. The initially composite Archery-melee expectation is independently confirmed by the later real Reader state.
+
+This qualifies only2014 Fighter6/Champion and these3 styles. Other8 offered styles, additional style, offhand/other combat gear, other classes/fixtures and full progression/resources remain open. No full pixel/font equality claim. Goal and broad milestones remain ACTIVE/in progress.

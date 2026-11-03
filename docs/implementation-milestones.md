@@ -238,3 +238,10 @@ Reproduce with `tools/native/reader-dialog-defaults.py`, `verify-dialog-defaults
 This slice is complete; Milestones3/4 remain in progress. Other HP modes/fixtures/classes, broad feats/ASIs and complete focus/editor behavior remain unqualified.
 
 Milestone3/4 fixed-HP slice extension is qualified in all three fixtures for2024 Bard9→10,2014 Fighter5→6 and Ashnar Monk12→13. Each has real original menu/feat choices, native/Reader/coldReader progression and final changed native reopen evidence. Complete same-sequence native comparisons include15 observed states and960 actual limited-feature field/AP comparisons. Final Con12 HP values are63/46/81. All five146 native regression suites pass (including228 base-class checkpoints); current597 subclass/source rerun remains in progress. This completes this bounded slice only. Other HP modes/classes/choices and the broad milestones/goal remain incomplete.
+
+
+### Milestone3m: bounded2014 Champion fighting-style choices/persistence — qualified
+
+Concrete gates pass: original native/Reader offered-menu choices and7 exact conditional gear states;6 fresh native runtimes/22 persistence states; actual native→Reader→coldReader6 processes/9 states; final Reader→native6 runtimes/12 changed/restored states. Dueling melee damage, Defense armor condition and Archery ranged condition disappear and return through changed saved reopens, with canonical/widgets/AP text, original scripts and diagnostic Unicode transport verified. See fighter_styles_2014 in the matrix for reproducible evidence.
+
+This completes the stated2014 Champion6/3-style slice only. Other8 styles, additional style, broader combat/classes/source profiles and overall Milestones3/4 remain incomplete. Next active slice: Fighter resource progression/spending/rests; native1793683797045160950 passes8 states, Reader1793684128816641774 is still running. No resource/complete-class milestone is qualified yet.
