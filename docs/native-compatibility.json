@@ -502,6 +502,16 @@
     }
   ],
   "evidence": {
+    "dialog_control_integrity": {
+      "status": "qualified_test_integrity_guard",
+      "rust_tests": 148,
+      "binary_sha256": "16d50c045b71c153c6930ff4b974f8d1d51ac14c11fdca423026b3d20a8f77cb",
+      "evidence": "output/testing/dialog-control-proof-1793699765747049765/proof.json",
+      "negative_workflow_passed": false,
+      "positive_workflow_passed": true,
+      "scope": "Caught scripted-dialog title/header/selection/button failures and unanswered noninteractive dialogs remain errors outside document JavaScript. No additional MPMB workflow claim. Interactive API semantics unchanged.",
+      "remaining": "Champion additional-style compound progression and edited native/Reader persistence remain under qualification; broad compatibility incomplete."
+    },
     "fresh_reference_qualification": {
       "path": "output/testing/readiness-1793046363.json",
       "passed": true

@@ -20,6 +20,9 @@ struct DocumentServices {
     trace_dir: Option<PathBuf>,
     dialog_count: Arc<Mutex<usize>>,
     alert_count: Arc<Mutex<usize>>,
+    // Original scripts can catch a rejected test reply. Keep control failures
+    // outside their JavaScript state so a probe cannot silently pass afterward.
+    control_errors: Arc<Mutex<Vec<Value>>>,
 }
 pub struct Runtime {
     pub js: Context,
@@ -254,6 +257,7 @@ impl Runtime {
             trace_dir: std::env::var_os("MPMB_DIALOG_TRACE_DIR").map(PathBuf::from),
             dialog_count: Arc::new(Mutex::new(0)),
             alert_count: Arc::new(Mutex::new(0)),
+            control_errors: Arc::new(Mutex::new(Vec::new())),
         };
         let documents = documents::Documents::new(js.clone(), Arc::clone(pdf), services)?;
         let loaded = js.with(|ctx| Self::initialize_document(ctx, pdf, &documents))?;
@@ -374,11 +378,14 @@ impl Runtime {
         let queue = Arc::clone(&services.dialogs);
         let trace_dir = services.trace_dir.clone();
         let trace_count = Arc::clone(&services.dialog_count);
+        let control_errors = Arc::clone(&services.control_errors);
+        let dialog_document = pdf.path.clone();
         ctx.globals().set(
             "__dialog",
             Function::new(
                 ctx.clone(),
                 move |ctx: Ctx, s: String| -> rquickjs::Result<String> {
+                    let mut scripted = false;
                     (|| -> std::result::Result<String, String> {
                         let request: Value = serde_json::from_str(&s).map_err(|e| e.to_string())?;
                         if let Some(dir) = &trace_dir {
@@ -389,6 +396,7 @@ impl Runtime {
                                 .map_err(|e| e.to_string())?;
                         }
                         if let Some(mut reply) = queue.lock().unwrap().pop_front() {
+                            scripted = true;
                             if let Some(title) = reply["title"].as_str() {
                                 if request["description"]["name"].as_str() != Some(title) {
                                     return Err(format!(
@@ -430,7 +438,16 @@ impl Runtime {
                             .map(|v| v.to_string())
                             .map_err(|e| e.to_string())
                     })()
-                    .map_err(|e| Exception::throw_message(&ctx, &e))
+                    .map_err(|e| {
+                        if scripted || !interactive {
+                            control_errors.lock().unwrap().push(json!({
+                                "kind": "dialog_control",
+                                "error": e,
+                                "source_document": dialog_document,
+                            }));
+                        }
+                        Exception::throw_message(&ctx, &e)
+                    })
                 },
             )?,
         )?;
@@ -598,6 +615,18 @@ impl Runtime {
             }
         }
         diagnostics["documents"] = documents;
+        diagnostics["errors"]
+            .as_array_mut()
+            .context("Invalid diagnostic array")?
+            .extend(
+                self.documents
+                    .services
+                    .control_errors
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .cloned(),
+            );
         Ok(diagnostics)
     }
     pub fn edit(&self, n: &str, v: &Value) -> Result<()> {

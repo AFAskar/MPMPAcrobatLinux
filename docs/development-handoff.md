@@ -1,3 +1,13 @@
+## Current continuation — 2026-11-03, dialog control guard
+
+Goal remains ACTIVE. Runtime build16d50c045b71c153c6930ff4b974f8d1d51ac14c11fdca423026b3d20a8f77cb passes148 Rust tests, locked build and strict all-targets clippy. Scripted/noninteractive dialog control failures are retained outside JavaScript in diagnostics.errors, even if original code catches the rejection. Native real-input negative/positive proof: output/testing/dialog-control-proof-1793699765747049765/proof.json. No new Reader API compatibility claim.
+
+Local Reader additional attempts1793695991891869058 and1793699074935670754 both FAILED at Shield entry after5 passing phases; both retained/closed. Do not count their partial phases as a complete workflow. A fresh-open physical Shield typing control1793698178727796878 PASSED exact canonical/AP/script checks; warm-focus difference is being investigated in tmux mpmb-shield-warm-focus, log continuation-shield-warm-focus.log. Native12-state additional profile is rerunning with the guarded binary in tmux mpmb-additional-native-guard. Additional tools remain uncommitted until qualification. Actual feature key is subclassfeature10/min10; prior display-name getter was not an additional-choice measurement.
+
+Cloud failed readiness1793691610 stays FAILED after21 passes. Its original pending Druid spell request was completed once, saved/cold-reopened/independently verified and closed: remote output/testing/readiness-spells-2014-recovery.json PASS. The copied cloud spells.py now gives each observed dialog a separate240s budget instead of sharing90s; no generation replay/assertion weakening. Fresh preflight29 PASS; entire24-case readiness LIVE in cloud-lab tmux mpmb-reader-remote:qualification-retry, root ~/.cache/mpmb-reference/reader-1793688790884081293. See output/testing/tmux-status.json and readiness.log there. Frozen copied harness; main local tools/acrobat unchanged and readiness1793598704 remains valid. Remote root sleep inhibitor and reconnecting laptop tmux link remain active. Cloud host measured~16GiB available; no additional worker launched.
+
+Earlier entries below are historical snapshots; use live process/report state before submitting desktop actions.
+
 ## Active tmux runs and additional-style continuation — 2026-11-03
 
 Goal ACTIVE. HEADab3cb42 qualifies the bounded Fighter resource slice;2577c01 qualifies initial3 fighting styles. Rust remains146 tests/cfd760...; no runtime change accepted from the second DeepSeek report.

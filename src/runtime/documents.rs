@@ -325,6 +325,86 @@ mod tests {
     }
 
     #[test]
+    fn caught_scripted_dialog_failures_remain_probe_failures() {
+        let files = Fixture::new();
+        let path = files.pdf("dialog-controls.pdf", "target");
+        let replies = vec![
+            json!({"title":"Wrong dialog","result":"ok"}),
+            json!({"header":"Wrong header","result":"ok"}),
+            json!({"button_path":["Missing"]}),
+            json!({"select":{"list":"Missing"},"result":"ok"}),
+            json!({"title":"Actual dialog","result":"ok"}),
+        ];
+        let runtime = Runtime::new(
+            &Arc::new(Pdf::open(&path).unwrap()),
+            replies,
+            vec![],
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+        runtime.eval("var caught=0,committed=0;function ask(){return app.execDialog({description:{name:'Actual dialog',elements:[{type:'static_text',item_id:'head',name:'Actual header'},{type:'list_box',item_id:'list'},{type:'ok_cancel'}]},initialize:function(d){d.load({list:{Offered:-1}})},commit:function(){committed++}})}").unwrap();
+        for expected in 1..=4 {
+            assert_eq!(
+                runtime.eval("try{ask()}catch(e){caught++}caught").unwrap(),
+                json!(expected)
+            );
+            let errors = runtime.diagnostics().unwrap()["errors"]
+                .as_array()
+                .unwrap()
+                .clone();
+            assert_eq!(errors.len(), expected);
+            assert!(errors.iter().all(|e| e["kind"] == "dialog_control"
+                && e["source_document"] == path.to_string_lossy().as_ref()));
+        }
+        // A valid offered reply still runs commit, but cannot erase earlier
+        // failures. Repeated diagnostic reads must not duplicate records.
+        assert_eq!(runtime.eval("ask();committed").unwrap(), json!(1));
+        assert_eq!(
+            runtime.diagnostics().unwrap()["errors"]
+                .as_array()
+                .unwrap()
+                .len(),
+            4
+        );
+        assert_eq!(
+            runtime.diagnostics().unwrap()["errors"]
+                .as_array()
+                .unwrap()
+                .len(),
+            4
+        );
+        assert_eq!(
+            runtime.eval("try{ask()}catch(e){caught++}caught").unwrap(),
+            json!(5)
+        );
+        let errors = runtime.diagnostics().unwrap();
+        assert_eq!(errors["errors"].as_array().unwrap().len(), 5);
+        assert!(errors["errors"][4]["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("Unanswered dialog:"));
+    }
+
+    #[test]
+    fn valid_scripted_dialog_has_clean_control_diagnostics() {
+        let files = Fixture::new();
+        let path = files.pdf("valid-dialog.pdf", "target");
+        let runtime = Runtime::new(
+            &Arc::new(Pdf::open(&path).unwrap()),
+            vec![json!({"title":"Actual dialog","result":"ok"})],
+            vec![],
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(runtime.eval("var committed=0;app.execDialog({description:{name:'Actual dialog',elements:[{type:'ok_cancel'}]},commit:function(){committed++}});committed").unwrap(), json!(1));
+        assert_eq!(runtime.diagnostics().unwrap()["errors"], json!([]));
+    }
+
+    #[test]
     fn source_documents_reuse_live_state_and_discard_without_writing_inputs() {
         let files = Fixture::new();
         let target = files.pdf("target.pdf", "target");
