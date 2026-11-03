@@ -10,6 +10,7 @@ from pypdf import PdfReader
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tools/acrobat'))
 from verify import canonical_fields, inspect, script_hashes
+import subclass_audit_qualification as qualification
 
 SOURCE = 'SOURCE SELECTION DIALOG'
 ELEMENTS = 'CLASSES OR ARCHETYPES SOURCE SELECTION DIALOG'
@@ -175,36 +176,34 @@ def main():
                     steps += [{'op': 'eval', 'code': code}, {'op': 'advance', 'ms': 1000}, {'op': 'eval', 'code': verify_class}, {'op': 'assert', 'values': {'Character Level': str(level), 'Proficiency Bonus': str(2 + (level - 1) // 4)}}]
                 steps += [{'op': 'save', 'path': str(output)}]
                 rc, data, evidence = run(source, label, dialogs, steps)
-                execution_passed = rc == 0 and data['passed']
-                diagnostic_errors = data['diagnostics']['errors']
-                console_messages = data['diagnostics']['console']['messages']
-                case = {'class': cl['key'], 'subclass': sub['key'], 'execution_passed': execution_passed,
-                        'passed': execution_passed and not diagnostic_errors and not console_messages,
-                        'diagnostics_checked': True, 'diagnostic_errors': diagnostic_errors, 'console_messages': console_messages,
-                        'probe': evidence, 'error': data.get('error'), 'source_exclusions': excluded_books,
+                probe = qualification.qualify_probe(rc, data)
+                case = {'class': cl['key'], 'subclass': sub['key'],
+                        'execution_passed': probe['execution_passed'],
+                        'passed': probe['passed'],
+                        'diagnostics_checked': probe['diagnostics_checked'],
+                        'diagnostic_errors': probe['diagnostic_errors'],
+                        'console_messages': probe['console_messages'],
+                        'diagnostic_structure_errors': probe['diagnostic_structure_errors'],
+                        'probe': evidence, 'probe_error': data.get('error') if isinstance(data, dict) else None,
+                        'error': probe['error'], 'source_exclusions': excluded_books,
                         'feature_choices': 'Default responses only; unqualified', 'reader': 'not run'}
-                if execution_passed and (diagnostic_errors or console_messages):
-                    case['error'] = 'Original caught errors or console messages require qualification; execution/level assertions alone are not a clean pass'
                 item['cases'].append(case)
                 if case['passed']:
                     expected = {'Class and Levels': canonical_fields(PdfReader(output))['Class and Levels']['/V'], 'Character Level': '3', 'Proficiency Bonus': '2'}
                     independent = inspect(output, expected); assert independent['passed'], independent
                     assert script_hashes(output) == script_hashes(source)
                     rc, reopened, reopen_evidence = run(output, label + '-reopen', [{'result': 'ok'}] * 20, [{'op': 'advance', 'ms': 4100}, {'op': 'assert', 'values': expected}, {'op': 'eval', 'code': verify_class}])
-                    reopen_errors = reopened['diagnostics']['errors']
-                    reopen_console = reopened['diagnostics']['console']['messages']
-                    case.update({'passed': rc == 0 and reopened['passed'] and not reopen_errors and not reopen_console,
-                                 'reopen_diagnostic_errors': reopen_errors, 'reopen_console_messages': reopen_console,
-                                 'reopen': reopen_evidence, 'expected': expected, 'output': str(output), 'error': reopened.get('error')})
-                    if reopen_errors or reopen_console:
-                        case['error'] = 'Reopened original caught errors or console messages require qualification'
+                    case = qualification.reopen_qualification(case, rc, reopened)
+                    case.update({'reopen': reopen_evidence, 'expected': expected, 'output': str(output),
+                                 'reopen_probe_error': reopened.get('error') if isinstance(reopened, dict) else None})
+                    item['cases'][-1] = case
                 print(fixture, sub['key'], 'PASS' if case['passed'] else 'FAIL', case.get('error') or '', flush=True)
                 (folder / 'subclasses.json').write_text(json.dumps(report, indent=2))
                 # Stop at concrete failures rather than generating hundreds of identical errors.
                 assert case['passed'], {k: case.get(k) for k in ['class', 'subclass', 'probe', 'error']}
             assert hashlib.sha256(source.read_bytes()).hexdigest() == original_hash
-        report['passed'] = all(f['cases'] and all(c['passed'] for c in f['cases']) for f in report['fixtures'])
-        assert report['passed'], 'No complete clean subclass case set; inspect excluded and unattempted candidates'
+        report['passed'], reason = qualification.case_set_complete(report['fixtures'])
+        assert report['passed'], 'No complete clean subclass case set: ' + str(reason) + '; inspect excluded and unattempted candidates'
     except Exception as error:
         report['error'] = str(error); raise
     finally:

@@ -2683,5 +2683,17 @@
     },
     "reader_ashnar_mixed": "output/testing/reader-hp-reopen-1793653220843510396/reopen.json",
     "final_ashnar_native": "output/testing/hp-final-native-1793653875561026808/reopen.json"
+  },
+  "subclass_audit_qualification_guards": {
+    "status": "qualification infrastructure verified; no new class/Reader coverage",
+    "delegation": "OpenCode2.2.0 / DeepSeek V4.1 Flash1017, isolated cloud source snapshot, primary reviewed",
+    "tests": "python3 -m unittest discover -s tools/native -p test_subclass_audit_qualification.py -v",
+    "unit_cases": 24,
+    "native_positive": "output/testing/native-subclasses-1793682944049628820/subclasses.json",
+    "native_negative": "output/testing/native-subclasses-1793682998676681324/subclasses.json",
+    "native_positive_scope": "One2024 Bard/Lore original source/class dialogs, structural progression and fresh reopen; feature choices default/unqualified; no Reader comparison",
+    "native_negative_scope": "Swords still reports40 original console messages despite successful level assertions; correctly rejected and retained as failure",
+    "guard_scope": "Reject malformed/missing errors/console streams, failed execution, creation/reopen errors and zero completed cases. Preserve diagnostic objects and provenance.",
+    "remaining": "Swords source/feature workflow warning comparison and Theurgy dependencies remain unqualified; historical597 default cases are not a clean compatibility corpus."
   }
 }
