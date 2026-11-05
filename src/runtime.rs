@@ -454,11 +454,14 @@ impl Runtime {
         let aq = Arc::clone(&services.alerts);
         let alert_trace_dir = services.trace_dir.clone();
         let alert_count = Arc::clone(&services.alert_count);
+        let alert_control_errors = Arc::clone(&services.control_errors);
+        let alert_document = pdf.path.clone();
         ctx.globals().set(
             "__alert",
             Function::new(
                 ctx.clone(),
                 move |ctx: Ctx, s: String| -> rquickjs::Result<String> {
+                    let mut scripted = false;
                     (|| -> std::result::Result<String, String> {
                         let v: Value = serde_json::from_str(&s).map_err(|e| e.to_string())?;
                         if let Some(dir) = &alert_trace_dir {
@@ -469,6 +472,7 @@ impl Runtime {
                                 .map_err(|e| e.to_string())?;
                         }
                         if let Some(reply) = aq.lock().unwrap().pop_front() {
+                            scripted = true;
                             eprintln!("Alert [scripted response]: {}", v["cTitle"]);
                             return scripted_alert_response(&v, &reply)
                                 .map(|v| v.to_string())
@@ -481,7 +485,16 @@ impl Runtime {
                             .map(|v| v.to_string())
                             .map_err(|e| e.to_string())
                     })()
-                    .map_err(|e| Exception::throw_message(&ctx, &e))
+                    .map_err(|e| {
+                        if scripted || !interactive {
+                            alert_control_errors.lock().unwrap().push(json!({
+                                "kind": "alert_control",
+                                "error": e,
+                                "source_document": alert_document,
+                            }));
+                        }
+                        Exception::throw_message(&ctx, &e)
+                    })
                 },
             )?,
         )?;

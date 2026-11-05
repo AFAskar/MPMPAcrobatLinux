@@ -405,6 +405,93 @@ mod tests {
     }
 
     #[test]
+    fn caught_alert_control_failures_cannot_be_hidden_by_original_code() {
+        let files = Fixture::new();
+        let path = files.pdf("alert-controls.pdf", "target");
+        let runtime = Runtime::new(
+            &Arc::new(Pdf::open(&path).unwrap()),
+            vec![],
+            vec![
+                json!(1),
+                json!({"title":"Wrong confirmation","button":4}),
+                json!(4),
+            ],
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+        runtime.eval("var caught=0;function confirm(){if(app.alert({cTitle:'Actual confirmation',cMsg:'Continue?',nType:2})===4)Value('A','confirmed')}").unwrap();
+        for expected in 1..=2 {
+            assert_eq!(
+                runtime
+                    .eval("try{confirm()}catch(e){caught++}caught")
+                    .unwrap(),
+                json!(expected)
+            );
+            assert_eq!(runtime.snapshot().unwrap()["A"]["value"], json!("target"));
+            let errors = runtime.diagnostics().unwrap();
+            let errors = errors["errors"].as_array().unwrap();
+            assert_eq!(errors.len(), expected);
+            assert!(errors.iter().all(|e| e["kind"] == "alert_control"
+                && e["source_document"] == path.to_string_lossy().as_ref()));
+        }
+        runtime.eval("confirm()").unwrap();
+        assert_eq!(
+            runtime.snapshot().unwrap()["A"]["value"],
+            json!("confirmed")
+        );
+        assert_eq!(
+            runtime.diagnostics().unwrap()["errors"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        // No reply is not an offered user decision, even if the sheet catches it.
+        assert_eq!(
+            runtime
+                .eval("try{confirm()}catch(e){caught++}caught")
+                .unwrap(),
+            json!(3)
+        );
+        let errors = runtime.diagnostics().unwrap();
+        assert_eq!(errors["errors"].as_array().unwrap().len(), 3);
+        assert!(errors["errors"][2]["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("Unanswered alert:"));
+        assert_eq!(runtime.diagnostics().unwrap()["errors"], errors["errors"]);
+    }
+
+    #[test]
+    fn valid_no_and_yes_alerts_keep_clean_control_diagnostics() {
+        let files = Fixture::new();
+        let path = files.pdf("valid-alerts.pdf", "target");
+        let runtime = Runtime::new(
+            &Arc::new(Pdf::open(&path).unwrap()),
+            vec![],
+            vec![
+                json!(3),
+                json!({"title":"Actual confirmation","button":4,"checked":true}),
+            ],
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+        runtime.eval("var box={cMsg:'Remember',bInitialValue:false};function confirm(){if(app.alert({cTitle:'Actual confirmation',cMsg:'Continue?',nType:2,oCheckbox:box})===4)Value('A','confirmed')};confirm()").unwrap();
+        assert_eq!(runtime.snapshot().unwrap()["A"]["value"], json!("target"));
+        runtime.eval("confirm()").unwrap();
+        assert_eq!(
+            runtime.snapshot().unwrap()["A"]["value"],
+            json!("confirmed")
+        );
+        assert_eq!(runtime.eval("box.bAfterValue").unwrap(), json!(true));
+        assert_eq!(runtime.diagnostics().unwrap()["errors"], json!([]));
+    }
+
+    #[test]
     fn source_documents_reuse_live_state_and_discard_without_writing_inputs() {
         let files = Fixture::new();
         let target = files.pdf("target.pdf", "target");
