@@ -1,5 +1,9 @@
 # MPMB compatibility audit — 2026-10-26
 
+## Actual alert dismissal repair — 2026-11-05
+
+The native reader previously returnedCancel2 for every alert window close. Real Reader returns1/2/4/2 for the four alert types, includingYes4 for Yes/No. Eight actual Native/Reader cases now match Escape and window-close behavior, with original RunUserScript, full saved Unicode/checksum diagnostics and unchanged original scripts.152 tests/build/strict lint checks pass; the original negative and failed automation controls remain retained. This completes bounded milestone3p, while default Enter, other dialog controls and full class/table compatibility remain incomplete. See native-compatibility.json alert_ui_dismissal.
+
 ## Champion additional-style progress — 2026-11-05
 
 The bounded2014 Champion comparison passes12 states in each engine, including actual additional Defense/Dueling choices independent of the primary style, conditional AC/damage, level9 removal, cold reopen, restoration to17 with an empty slot and explicit re-selection. Native and Reader-created origins also pass four fresh native runtimes/eight changed-save and cold-edit states. Evidence and scope are recorded in native-compatibility.json under fighter_additional_styles_2014. Original scripts remain unchanged.

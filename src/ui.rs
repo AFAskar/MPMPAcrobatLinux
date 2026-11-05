@@ -847,6 +847,7 @@ fn dialog_process() -> Result<()> {
         focus: data["focus"].as_str().map(str::to_owned),
         focus_requested: false,
         edited_controls: BTreeSet::new(),
+        alert_type: data["alert_type"].as_i64(),
     };
     let title = data["description"]["name"]
         .as_str()
@@ -868,6 +869,7 @@ struct Dialog {
     focus: Option<String>,
     focus_requested: bool,
     edited_controls: BTreeSet<String>,
+    alert_type: Option<i64>,
 }
 fn argb_image(value: &Value) -> Option<ColorImage> {
     let argb = value["argb"].as_str()?;
@@ -928,6 +930,25 @@ fn select_option(value: &mut Value, path: &[String], multiple: bool) {
     });
 }
 impl Dialog {
+    fn dismiss_alert(&mut self, ctx: &egui::Context) -> bool {
+        let Some(kind) = self.alert_type else {
+            return false;
+        };
+        if self.result.lock().unwrap().get("event").is_some() {
+            return false;
+        }
+        // Reader ignores Escape when the alert offers no Cancel button. Its
+        // window-close result is resolved separately by alert() below.
+        let escape = matches!(kind, 1 | 3)
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+        if escape || ctx.input(|i| i.viewport().close_requested()) {
+            *self.result.lock().unwrap() = json!({"result":"cancel","values":self.values});
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return true;
+        }
+        false
+    }
+
     fn element(&mut self, ui: &mut egui::Ui, e: &Value) -> Option<Value> {
         let id = e["item_id"].as_str().unwrap_or("");
         let kind = e["type"].as_str().unwrap_or("view");
@@ -1192,6 +1213,9 @@ fn capture(ctx: &egui::Context, path: &std::path::Path) -> bool {
 }
 impl eframe::App for Dialog {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        if self.dismiss_alert(ctx) {
+            return;
+        }
         if let Ok(dir) = std::env::var("MPMB_UI_SMOKE_DIR") {
             if !self.capture_requested {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
@@ -1236,7 +1260,8 @@ pub fn alert(value: &Value) -> Result<Value> {
             .as_bool()
             .unwrap_or(false));
     }
-    let buttons: Vec<(&str, i32)> = match value["nType"].as_i64().unwrap_or(0) {
+    let kind = value["nType"].as_i64().unwrap_or(0);
+    let buttons: Vec<(&str, i32)> = match kind {
         1 => vec![("OK", 1), ("Cancel", 2)],
         2 => vec![("Yes", 4), ("No", 3)],
         3 => vec![("Yes", 4), ("No", 3), ("Cancel", 2)],
@@ -1245,7 +1270,7 @@ pub fn alert(value: &Value) -> Result<Value> {
     elements.push(json!({"type":"view","align_children":"align_row","elements":buttons.iter().map(|(label,number)|json!({"type":"button","name":label,"item_id":format!("btn{number}")})).collect::<Vec<_>>()}));
     loop {
         let reply = modal(
-            &json!({"description":{"name":value["cTitle"].as_str().unwrap_or("MPMB"),"elements":elements},"values":values,"enabled":{},"visible":{}}),
+            &json!({"description":{"name":value["cTitle"].as_str().unwrap_or("MPMB"),"elements":elements},"values":values,"enabled":{},"visible":{},"alert_type":kind}),
         )?;
         if let Some(v) = reply.get("values") {
             values = v.clone()
@@ -1258,7 +1283,15 @@ pub fn alert(value: &Value) -> Result<Value> {
             return Ok(json!({"button":n,"checked":values["ckbx"]}));
         }
         if reply["result"] == "cancel" {
-            return Ok(json!({"button":2,"checked":values["ckbx"]}));
+            // Actual Reader window-close codes: OK-only -> OK, Yes/No -> Yes,
+            // and alerts offering Cancel -> Cancel. Escape only closes the
+            // latter; the native dialog retains that distinction.
+            let button = match kind {
+                1 | 3 => 2,
+                2 => 4,
+                _ => 1,
+            };
+            return Ok(json!({"button":button,"checked":values["ckbx"]}));
         }
     }
 }
@@ -1266,6 +1299,83 @@ pub fn alert(value: &Value) -> Result<Value> {
 #[cfg(test)]
 mod dialog_tests {
     use super::*;
+
+    fn alert_dialog(kind: Option<i64>) -> Dialog {
+        Dialog {
+            description: json!({}),
+            values: BTreeMap::from([("ckbx".into(), json!(true))]),
+            enabled: json!({}),
+            visible: json!({}),
+            result: Arc::new(Mutex::new(json!({"result":"pending"}))),
+            images: BTreeMap::new(),
+            capture_requested: false,
+            focus: None,
+            focus_requested: false,
+            edited_controls: BTreeSet::new(),
+            alert_type: kind,
+        }
+    }
+
+    #[test]
+    fn alert_escape_and_window_close_preserve_distinct_reader_policies() {
+        for kind in [None, Some(0), Some(1), Some(2), Some(3)] {
+            for window_close in [false, true] {
+                let ctx = egui::Context::default();
+                let mut dialog = alert_dialog(kind);
+                let mut input = egui::RawInput::default();
+                if window_close {
+                    input
+                        .viewports
+                        .entry(egui::ViewportId::ROOT)
+                        .or_default()
+                        .events
+                        .push(egui::ViewportEvent::Close);
+                } else {
+                    input.events.push(egui::Event::Key {
+                        key: egui::Key::Escape,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                }
+                let expected = kind.is_some() && (window_close || matches!(kind, Some(1 | 3)));
+                let _ = ctx.run(input, |ctx| {
+                    assert_eq!(
+                        dialog.dismiss_alert(ctx),
+                        expected,
+                        "{kind:?}/{window_close}"
+                    );
+                });
+                let actual = dialog.result.lock().unwrap().clone();
+                assert_eq!(
+                    actual,
+                    if expected {
+                        json!({"result":"cancel","values":{"ckbx":true}})
+                    } else {
+                        json!({"result":"pending"})
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn alert_close_does_not_replace_an_already_selected_no_button() {
+        let ctx = egui::Context::default();
+        let mut dialog = alert_dialog(Some(2));
+        let selected = json!({"event":"btn3","values":{"ckbx":false}});
+        *dialog.result.lock().unwrap() = selected.clone();
+        let mut input = egui::RawInput::default();
+        input
+            .viewports
+            .entry(egui::ViewportId::ROOT)
+            .or_default()
+            .events
+            .push(egui::ViewportEvent::Close);
+        let _ = ctx.run(input, |ctx| assert!(!dialog.dismiss_alert(ctx)));
+        assert_eq!(*dialog.result.lock().unwrap(), selected);
+    }
 
     #[test]
     fn dialog_readonly_edits_and_unstored_buttons_preserve_values() {
@@ -1281,6 +1391,7 @@ mod dialog_tests {
             focus: Some("read".into()),
             focus_requested: false,
             edited_controls: BTreeSet::new(),
+            alert_type: None,
         };
         for events in [vec![], vec![egui::Event::Text("changed".into())]] {
             let _ = ctx.run(
@@ -1385,6 +1496,7 @@ mod dialog_tests {
             focus: Some("text".into()),
             focus_requested: false,
             edited_controls: BTreeSet::new(),
+            alert_type: None,
         };
         let control = json!({"type":"edit_text","item_id":"text"});
         let mut frame = |events: Vec<egui::Event>| {

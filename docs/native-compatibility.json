@@ -2871,5 +2871,30 @@
     "native_to_reader_scope": "7 states/3 fresh Reader processes from actual native compound17 and removed9 outputs; changed bow save, cold sword edit, restoration17 with empty slot then genuine re-selection",
     "final_native": "output/testing/fighter-additional-persistence-1793863261493417915/persistence.json",
     "final_native_scope": "10 fresh runtimes/20 loaded/changed/cold-restored states: Native and original Reader origins plus all three actual mixed-engine Reader bow/sword/progression outputs"
+  },
+  "alert_ui_dismissal": {
+    "status": "bounded real Reader/native Escape and window-close contract qualified",
+    "milestone": "3p bounded slice COMPLETE; broader dialog/class goal ACTIVE",
+    "runtime_tests": 152,
+    "binary_sha256": "f1056b3012ccc7088373c1553e205a1a967504da336fcb7924031d1a79daea42",
+    "reader": "cloud ROOT/output/testing/alert-dismiss-control-1793863019516178495/control.json",
+    "reader_local": "output/testing/cloud-alert-dismiss-results/control.json",
+    "native": "output/testing/native-alert-dismiss-1793865410552575102/control.json",
+    "native_display": "output/testing/alert-xvfb-1793865408232141759/qualification.json",
+    "cases": 8,
+    "behavior": "Real Reader window close returns OK1 for OK-only, Cancel2 for OK/Cancel, Yes4 for Yes/No, Cancel2 for Yes/No/Cancel. Escape is ignored for OK-only and Yes/No; it cancels types offering Cancel. Native now follows these measured distinctions, retaining live dialog values on dismissal and protecting already-selected button events.",
+    "comparison": "Original RunUserScript entry points in both engines, actual owned native windows/keyboard/close events, actual Reader controls/foreground. Native cold-loads initialized Reader output. Complete eight-result ASCII payload with real Unicode sentinel and saved-field checksum matches; original script bytes and input hashes checked. No scripted alert responses supply the results.",
+    "baseline_failure": "output/testing/native-alert-close-1793863565351346005/control.json: actual native OK-only close returned2 before repair; retained workflowfalse",
+    "test_integrity": "Four later native interaction probes remained failed: fresh raw input did not reach intended alert; unverified desktop typing failed; active-window metadata subsequently differed from actual X11 input focus. Disposable native process groups terminated; no original PDF modified. Isolated authenticated Xvfb enables verified input without claiming KDE/Wayland integration.",
+    "regression": "output/testing/native-fighter-additional-1793864918820680234/additional.json: fresh152 native12 states exactly match earlier actual Reader12 states; broad150 class audits were not resumed or relabeled",
+    "checks": "All152 Rust tests, locked build, fmt and strict all-targets Clippy PASS; output/testing/continuation-alert-dismiss-build.json",
+    "remaining": [
+      "Native default Enter and focused-button navigation; Reader Enter4-case control now passes but native behavior still under qualification",
+      "Changed checkbox close behavior and full alert API/style coverage",
+      "Generic execDialog cancellation/keyboard controls",
+      "Fresh raw-input interactive startup and real KDE/Wayland input integration beyond these probes",
+      "All broader class/subclass/table/import/appearance coverage"
+    ],
+    "full_mpmb_compatibility": false
   }
 }
