@@ -1,5 +1,11 @@
 # MPMB compatibility audit — 2026-10-26
 
+## Champion additional-style progress — 2026-11-05
+
+The bounded2014 Champion comparison passes12 states in each engine, including actual additional Defense/Dueling choices independent of the primary style, conditional AC/damage, level9 removal, cold reopen, restoration to17 with an empty slot and explicit re-selection. Native and Reader-created origins also pass four fresh native runtimes/eight changed-save and cold-edit states. Evidence and scope are recorded in native-compatibility.json under fighter_additional_styles_2014. Original scripts remain unchanged.
+
+Milestone3o remains incomplete pending native-to-Reader changed progression/compound persistence and final fresh native edits from those outputs. Other styles/classes/feats/resources/imports and full appearance coverage remain open. Historical failed input/observer reports remain failures; no partial run was relabeled.
+
 ## Modified spell controls — bounded 2024 repair (2026-11-02)
 
 Native page clicks now pass the release-event Shift/Ctrl/Cmd state to the original MouseDown/MouseUp actions. Later pointer movement or key releases in the same frame cannot erase it. Cancelling a popup now returns `null`; the old `undefined` result threw in MPMB's original `getMenu` after the modifier branch became reachable. Original embedded scripts are unchanged.

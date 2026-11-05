@@ -521,12 +521,12 @@
       "guarded_native_clean_probes": 32
     },
     "champion_additional_style_qualification": {
-      "status": "in_progress_not_qualified",
+      "status": "partial_12_state_native_reader_parity_and_native_persistence_qualified",
       "fixture": "2014",
       "profile": "Champion17 primary Archery and additional Defense/Dueling, compound effects, 17→9 removal and cold17 reselection",
-      "native": "output/testing/native-fighter-additional-1793699739162266582/additional.json",
+      "native": "output/testing/native-fighter-additional-1793858705013197322/additional.json",
       "native_states": 12,
-      "native_changed_save_pilot": "output/testing/fighter-additional-persistence-1793700274994057380/persistence.json",
+      "native_changed_save_pilot": "output/testing/fighter-additional-persistence-1793862289555330825/persistence.json",
       "native_pilot_states": 4,
       "reader_failures": [
         "output/testing/reader-fighter-additional-1793695991891869058/additional.json",
@@ -535,8 +535,8 @@
         "output/testing/reader-fighter-additional-1793701188366771879/additional.json"
       ],
       "reader_failure": "Four original-observer local runs failed exact Shield input verification after five states, despite observed edit control and split typing/commit. All retained/closed. Isolated two-style/split-input control passes; root cause unproven.",
-      "reader_retry": "Local tmux mpmb-additional-reader-150, current150 native report; retained observer, shield-only keyboard focus cycle, editable-role guard, verified system close and exclusive byte-identical cold snapshots. Prior partial failures remain failed.",
-      "remaining": "Entire Reader profile, native→Reader edited progression/compound persistence and final fresh native edits remain required. Old style observer additional getter used a display name and did not measure the real key subclassfeature10.",
+      "reader_retry": "Current150 Reader1793860718561835217 PASS12/3; actual native-to-Reader changed progression/compound reopen running in tmux mpmb-additional-reopen-150",
+      "remaining": "Actual native-to-Reader changed progression/compound saves and final fresh native changed/cold edits remain required. All broader class/table coverage remains incomplete. See fighter_additional_styles_2014 for current bounded proof.",
       "native_timer_observer": {
         "report": "output/testing/native-fighter-additional-1793735122602342587/additional.json",
         "passed": true,
@@ -550,7 +550,9 @@
       },
       "rejected_callback_control": "output/testing/reader-fighter-additional-1793734460449867026/additional.json",
       "rejected_callback_reason": "Bridge whitelist rejects custom callback; retained/closed separately in retention.json. Not a table compatibility failure or a passing observer control.",
-      "reader_weapon_control": "output/testing/reader-weapon-cold-control-1793859832693783789/control.json"
+      "reader_weapon_control": "output/testing/reader-weapon-cold-control-1793859832693783789/control.json",
+      "historical_native": "output/testing/native-fighter-additional-1793699739162266582/additional.json",
+      "reader": "output/testing/reader-fighter-additional-1793860718561835217/additional.json"
     },
     "dialog_control_integrity": {
       "status": "qualified_test_integrity_guard",
@@ -2839,6 +2841,32 @@
       "Full short/long rest healing and hit dice UI workflows",
       "Other class/subclass/source/multiclass profiles and fixtures",
       "Complete state/API/pixel equality"
+    ],
+    "full_mpmb_compatibility": false
+  },
+  "fighter_additional_styles_2014": {
+    "status": "native and Reader12-state comparison plus both-origin native changed saves qualified; mixed-engine progression/final native persistence still running",
+    "milestone": "3o INCOMPLETE",
+    "profile": "2014 Champion17/9/17, primary Archery/Defense and additional Defense/Dueling, Plate/Unarmored, Shield, Longbow/Longsword; actual original feature subclassfeature10/min10",
+    "binary_sha256": "79d35f6e753f1e1966e858fb272887931297d38d515657710f9aa11e9ebaf235",
+    "native": "output/testing/native-fighter-additional-1793858705013197322/additional.json",
+    "reader": "output/testing/reader-fighter-additional-1793860718561835217/additional.json",
+    "states_per_engine": 12,
+    "runtimes_per_engine": 3,
+    "behavior": "Independent primary/additional choices; Defense conditional armor AC; Dueling conditional sword damage; level9 removes additional choice, cold reopen preserves removal, restoring17 leaves slot empty, actual offered choice reselects Dueling. No assumed automatic restoration.",
+    "native_persistence": "output/testing/fighter-additional-persistence-1793862289555330825/persistence.json",
+    "native_persistence_scope": "4 fresh runtimes/8 states: Native and actual Reader origins, changed Longbow saves then cold Longsword edits",
+    "comparison": "Exact identity/choices/additional-definition,30 selected fields and64 actual resource fields; canonical values/widgets/visible AP text, original script hashes and immutable input hashes. ASCII JSON with real Unicode sentinel/Reader code-unit checksum. No blanket API or pixel equality. Native errors/console clean; original displayError observed in both engines.",
+    "observation": "Original RunUserScript once per runtime, document TimeOut held in tDoc, actual acknowledged timer counts9/2/1 required. No bridge whitelist bypass or source-function repair. Shield-only keyboard focus cycle; combo uses named field focus and observed editable-role guard. Each cold Reader copy is exclusive raw bytes with matching SHA256 and zero preceding Reader processes.",
+    "render_review": "output/testing/additional-style-render-150/review.json",
+    "render_scope": "Native/Reader saved fronts visibly contain HP123,AC20,Longsword+10/1d8+6 and measured resource maxima. No font/pixel equivalence claim.",
+    "retained_failures": "Earlier clipboard/focus/observer controls remain failed; blanket focus cycling selected a checkbox for a combo. Retained exact document and verified system close before corrected profile. Old unretained-timer and direct-callback reports do not qualify current mode.",
+    "remaining": [
+      "Actual native-to-Reader changed compound/progression saves and cold Reader edits",
+      "Final fresh native changed/cold edits from those Reader outputs",
+      "Other8 styles, all feats/ASIs/offhand gear and broader class/subclass/source/multiclass usage",
+      "Full rest/healing/hit-dice workflows and other fixtures",
+      "Complete appearance and console/API coverage"
     ],
     "full_mpmb_compatibility": false
   }
