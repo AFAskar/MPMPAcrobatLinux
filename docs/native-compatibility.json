@@ -521,7 +521,7 @@
       "guarded_native_clean_probes": 32
     },
     "champion_additional_style_qualification": {
-      "status": "partial_12_state_native_reader_parity_and_native_persistence_qualified",
+      "status": "bounded_slice_qualified_all_other_class_coverage_incomplete",
       "fixture": "2014",
       "profile": "Champion17 primary Archery and additional Defense/Dueling, compound effects, 17→9 removal and cold17 reselection",
       "native": "output/testing/native-fighter-additional-1793858705013197322/additional.json",
@@ -535,8 +535,8 @@
         "output/testing/reader-fighter-additional-1793701188366771879/additional.json"
       ],
       "reader_failure": "Four original-observer local runs failed exact Shield input verification after five states, despite observed edit control and split typing/commit. All retained/closed. Isolated two-style/split-input control passes; root cause unproven.",
-      "reader_retry": "Current150 Reader1793860718561835217 PASS12/3; actual native-to-Reader changed progression/compound reopen running in tmux mpmb-additional-reopen-150",
-      "remaining": "Actual native-to-Reader changed progression/compound saves and final fresh native changed/cold edits remain required. All broader class/table coverage remains incomplete. See fighter_additional_styles_2014 for current bounded proof.",
+      "reader_retry": "Current150 Native/Reader12-state profile, both-origin native8 states, native-to-Reader7 states and final native20 states all PASS; see fighter_additional_styles_2014",
+      "remaining": "Other8 styles, all feats/ASIs/offhand gear, broader classes/subclasses/source/multiclass/fixture usage and full appearance/API coverage remain incomplete. Old display-name additional getter was not real-slot evidence.",
       "native_timer_observer": {
         "report": "output/testing/native-fighter-additional-1793735122602342587/additional.json",
         "passed": true,
@@ -2845,8 +2845,8 @@
     "full_mpmb_compatibility": false
   },
   "fighter_additional_styles_2014": {
-    "status": "native and Reader12-state comparison plus both-origin native changed saves qualified; mixed-engine progression/final native persistence still running",
-    "milestone": "3o INCOMPLETE",
+    "status": "bounded choices, progression and changed Native/Reader/native persistence qualified",
+    "milestone": "3o bounded slice COMPLETE; broad goal ACTIVE",
     "profile": "2014 Champion17/9/17, primary Archery/Defense and additional Defense/Dueling, Plate/Unarmored, Shield, Longbow/Longsword; actual original feature subclassfeature10/min10",
     "binary_sha256": "79d35f6e753f1e1966e858fb272887931297d38d515657710f9aa11e9ebaf235",
     "native": "output/testing/native-fighter-additional-1793858705013197322/additional.json",
@@ -2862,12 +2862,14 @@
     "render_scope": "Native/Reader saved fronts visibly contain HP123,AC20,Longsword+10/1d8+6 and measured resource maxima. No font/pixel equivalence claim.",
     "retained_failures": "Earlier clipboard/focus/observer controls remain failed; blanket focus cycling selected a checkbox for a combo. Retained exact document and verified system close before corrected profile. Old unretained-timer and direct-callback reports do not qualify current mode.",
     "remaining": [
-      "Actual native-to-Reader changed compound/progression saves and cold Reader edits",
-      "Final fresh native changed/cold edits from those Reader outputs",
       "Other8 styles, all feats/ASIs/offhand gear and broader class/subclass/source/multiclass usage",
       "Full rest/healing/hit-dice workflows and other fixtures",
       "Complete appearance and console/API coverage"
     ],
-    "full_mpmb_compatibility": false
+    "full_mpmb_compatibility": false,
+    "native_to_reader": "output/testing/reader-fighter-additional-reopen-1793862289619106595/additional.json",
+    "native_to_reader_scope": "7 states/3 fresh Reader processes from actual native compound17 and removed9 outputs; changed bow save, cold sword edit, restoration17 with empty slot then genuine re-selection",
+    "final_native": "output/testing/fighter-additional-persistence-1793863261493417915/persistence.json",
+    "final_native_scope": "10 fresh runtimes/20 loaded/changed/cold-restored states: Native and original Reader origins plus all three actual mixed-engine Reader bow/sword/progression outputs"
   }
 }
