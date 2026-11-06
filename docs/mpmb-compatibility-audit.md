@@ -1,5 +1,9 @@
 # MPMB compatibility audit — 2026-10-26
 
+## Initial alert Return repair — 2026-11-06
+
+Native initial Return previously did nothing. Real Native/Reader4-case comparison now matches1/1/4/4 after a one-time default-button focus request; subsequent Tab selection remains effective. Current154 build also passes all8 earlier dismissal cases. This completes bounded3q only, with154 passing tests/build/strict lint checks. Checkbox and generic-dialog keyboard behavior, all-class table use and full compatibility remain incomplete. The earlier152 raw build logs were accidentally overwritten by the154 launcher; the unique154 build evidence and explicit correction are recorded in native-compatibility.json. Historical152 GUI/PDF evidence remains intact.
+
 ## Actual alert dismissal repair — 2026-11-05
 
 The native reader previously returnedCancel2 for every alert window close. Real Reader returns1/2/4/2 for the four alert types, includingYes4 for Yes/No. Eight actual Native/Reader cases now match Escape and window-close behavior, with original RunUserScript, full saved Unicode/checksum diagnostics and unchanged original scripts.152 tests/build/strict lint checks pass; the original negative and failed automation controls remain retained. This completes bounded milestone3p, while default Enter, other dialog controls and full class/table compatibility remain incomplete. See native-compatibility.json alert_ui_dismissal.

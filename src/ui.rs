@@ -1102,7 +1102,12 @@ impl Dialog {
                 }
                 "button" => {
                     let caption = value.as_str().filter(|s| !s.is_empty()).unwrap_or(name);
-                    if ui.button(caption).clicked() {
+                    let response = ui.button(caption);
+                    if self.focus.as_deref() == Some(id) && !self.focus_requested {
+                        response.request_focus();
+                        self.focus_requested = true;
+                    }
+                    if response.clicked() {
                         reply = Some(json!({"event":id}))
                     }
                 }
@@ -1270,7 +1275,7 @@ pub fn alert(value: &Value) -> Result<Value> {
     elements.push(json!({"type":"view","align_children":"align_row","elements":buttons.iter().map(|(label,number)|json!({"type":"button","name":label,"item_id":format!("btn{number}")})).collect::<Vec<_>>()}));
     loop {
         let reply = modal(
-            &json!({"description":{"name":value["cTitle"].as_str().unwrap_or("MPMB"),"elements":elements},"values":values,"enabled":{},"visible":{},"alert_type":kind}),
+            &json!({"description":{"name":value["cTitle"].as_str().unwrap_or("MPMB"),"elements":elements},"values":values,"enabled":{},"visible":{},"alert_type":kind,"focus":format!("btn{}",buttons[0].1)}),
         )?;
         if let Some(v) = reply.get("values") {
             values = v.clone()
@@ -1375,6 +1380,81 @@ mod dialog_tests {
             .push(egui::ViewportEvent::Close);
         let _ = ctx.run(input, |ctx| assert!(!dialog.dismiss_alert(ctx)));
         assert_eq!(*dialog.result.lock().unwrap(), selected);
+    }
+
+    fn button_frame(
+        ctx: &egui::Context,
+        dialog: &mut Dialog,
+        buttons: &Value,
+        key: Option<egui::Key>,
+    ) -> Option<Value> {
+        let events = key
+            .into_iter()
+            .flat_map(|key| {
+                [true, false].map(|pressed| egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                })
+            })
+            .collect();
+        let mut reply = None;
+        let _ = ctx.run(
+            egui::RawInput {
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    reply = dialog.element(ui, buttons);
+                });
+            },
+        );
+        reply
+    }
+
+    #[test]
+    fn alert_default_buttons_accept_enter_without_inventing_stored_values() {
+        for (kind, first, caption) in [(0, 1, "OK"), (1, 1, "OK"), (2, 4, "Yes"), (3, 4, "Yes")] {
+            let ctx = egui::Context::default();
+            let mut dialog = alert_dialog(Some(kind));
+            dialog.focus = Some(format!("btn{first}"));
+            let buttons = json!({"type":"button","name":caption,"item_id":format!("btn{first}")});
+            assert_eq!(button_frame(&ctx, &mut dialog, &buttons, None), None);
+            assert!(dialog.focus_requested);
+            assert_eq!(
+                button_frame(&ctx, &mut dialog, &buttons, Some(egui::Key::Enter)),
+                Some(json!({"event":format!("btn{first}")}))
+            );
+            assert_eq!(
+                dialog.values,
+                BTreeMap::from([("ckbx".into(), json!(true))])
+            );
+        }
+    }
+
+    #[test]
+    fn initial_button_focus_does_not_steal_a_later_tab_selection() {
+        for (first, second) in [(1, 2), (4, 3)] {
+            let ctx = egui::Context::default();
+            let mut dialog = alert_dialog(None);
+            dialog.focus = Some(format!("btn{first}"));
+            let buttons = json!({"type":"view","elements":[
+                {"type":"button","name":"First","item_id":format!("btn{first}")},
+                {"type":"button","name":"Second","item_id":format!("btn{second}")}
+            ]});
+            assert_eq!(button_frame(&ctx, &mut dialog, &buttons, None), None);
+            assert_eq!(
+                button_frame(&ctx, &mut dialog, &buttons, Some(egui::Key::Tab)),
+                None
+            );
+            assert_eq!(
+                button_frame(&ctx, &mut dialog, &buttons, Some(egui::Key::Enter)),
+                Some(json!({"event":format!("btn{second}")}))
+            );
+        }
     }
 
     #[test]

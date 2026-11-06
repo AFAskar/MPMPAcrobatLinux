@@ -2887,13 +2887,38 @@
     "baseline_failure": "output/testing/native-alert-close-1793863565351346005/control.json: actual native OK-only close returned2 before repair; retained workflowfalse",
     "test_integrity": "Four later native interaction probes remained failed: fresh raw input did not reach intended alert; unverified desktop typing failed; active-window metadata subsequently differed from actual X11 input focus. Disposable native process groups terminated; no original PDF modified. Isolated authenticated Xvfb enables verified input without claiming KDE/Wayland integration.",
     "regression": "output/testing/native-fighter-additional-1793864918820680234/additional.json: fresh152 native12 states exactly match earlier actual Reader12 states; broad150 class audits were not resumed or relabeled",
-    "checks": "All152 Rust tests, locked build, fmt and strict all-targets Clippy PASS; output/testing/continuation-alert-dismiss-build.json",
+    "checks": "Historical152 tests passed at a4c1ddb; original raw build logs were overwritten by the154 launcher. Current154 tests/build/fmt/strict all-targets Clippy pass at the unique alert_default_enter build path; historical152 GUI/PDF proof remains intact.",
     "remaining": [
-      "Native default Enter and focused-button navigation; Reader Enter4-case control now passes but native behavior still under qualification",
+      "Initial default Enter now qualified separately by alert_default_enter; broader focused controls/checkbox navigation remains incomplete",
       "Changed checkbox close behavior and full alert API/style coverage",
       "Generic execDialog cancellation/keyboard controls",
       "Fresh raw-input interactive startup and real KDE/Wayland input integration beyond these probes",
       "All broader class/subclass/table/import/appearance coverage"
+    ],
+    "full_mpmb_compatibility": false,
+    "current154_regression": "output/testing/native-alert-dismiss-1793988709889918374/control.json"
+  },
+  "alert_default_enter": {
+    "status": "bounded initial default Enter qualified; broad dialog/table coverage incomplete",
+    "milestone": "3q bounded slice COMPLETE",
+    "binary_sha256": "5381827624ebd1b602f762e654a40b1393247e4cc9f0fdd1e621f65b90cd9199",
+    "rust_tests": 154,
+    "reader": "output/testing/cloud-alert-enter-results/control.json",
+    "reader_scope": "Actual Reader first focus OK for types0/1,Yes for2/3; Return closes with1/1/4/4. Original RunUserScript, actual owned controls, saved ASCII payload/real Unicode sentinel/checksum/scripts qualified.",
+    "native_baseline": "output/testing/native-alert-dismiss-1793865872518666637/control.json: verified isolated keyboard delivery, initial Enter did not dismiss OK-only alert; failed152 probe retained",
+    "native": "output/testing/native-alert-dismiss-1793988615233473730/control.json",
+    "native_cases": 4,
+    "native_scope": "Actual current154 native windows, cold initialized Reader input, original RunUserScript, verified X11 ownership/viewability/focus and real Return keys. Full saved payload exactly matches Reader; original scripts and inputs unchanged.",
+    "dismissal_regression": "output/testing/native-alert-dismiss-1793988709889918374/control.json",
+    "dismissal_regression_cases": 8,
+    "implementation": "Focus the first offered alert button on initialization. Button focus requests apply once, so later Tab selects another button; no button entries are added to dialog.store(). No forced global Enter override.",
+    "build": "output/testing/alert-enter-build-1793988612766463640/qualification.json",
+    "artifact_correction": "The154 launcher reused old152 build-log filenames. Actual154 logs were archived under the unique build path above; original152 raw build logs were overwritten, while152 Native/Reader/PDF proof remains untouched. The old shared build JSON now describes154, not152. No coverage report was relabeled.",
+    "remaining": [
+      "Checkbox interaction/focus and Enter after checkbox changes",
+      "Generic execDialog keyboard behavior",
+      "Actual KDE/Wayland keyboard integration beyond isolated Xvfb",
+      "All broad class/subclass/source/resource/spell/import and persistence coverage"
     ],
     "full_mpmb_compatibility": false
   }

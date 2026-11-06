@@ -264,3 +264,9 @@ Actual native-to-Reader1793862289619106595 now passes7 states/3 Reader processes
 Real Reader and genuine native UI agree for all eight type0/1/2/3 Escape/window-close cases. Window close maps to1/2/4/2; Escape only cancels types1/3. Native now preserves current values and already-selected events. Original RunUserScript entry points, complete saved ASCII/Unicode checksum payloads, exact results, original scripts and immutable inputs are verified. See native-compatibility.json alert_ui_dismissal.152 Rust tests/build/fmt/strict all-targets Clippy pass; current native Champion12 states still match Reader.
 
 This qualifies the bounded alert dismissal slice only. Default Enter, changed checkboxes, generic dialogs, desktop compositor integration and broader class/table workflows remain incomplete. Next active control is default Enter: Reader's actual four cases pass, native parity still required.
+
+### Milestone3q: initial native alert Return behavior — qualified
+
+Actual Reader and native4 initial Return cases now agree: OK1 for types0/1 andYes4 for2/3. Native focuses the first offered button once, preserving later Tab selection of Cancel/No and keeping buttons out of dialog.store(). The old152 real-keyboard failure remains retained. All154 tests/build/fmt/strict all-targets Clippy pass; all8 Escape/window-close cases still pass on154. See native-compatibility.json alert_default_enter for exact evidence and build-log correction.
+
+This completes initial default Return only. Checkbox interactions, generic dialog keyboard behavior, full class/subclass/table/spell/resource/import compatibility and broader persistence remain incomplete.

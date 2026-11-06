@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real native alert Escape/window-close comparison with a qualified Reader report.
+"""Real native alert keyboard/window-close comparison with a qualified Reader report.
 
 Runs original RunUserScript after a cold load of the initialized Reader save, matching the reference
 entry points. X11 controls only exact observed child windows owned by this probe.
@@ -77,9 +77,13 @@ def activate(w):
   if focused.value==w:break
   assert time.monotonic()<deadline,('Native alert focus differs',w,focused.value,prop(root,'_NET_ACTIVE_WINDOW'));time.sleep(.1)
 
-def key(w,symbol):
+def key(w,symbol,shift=False):
  activate(w);code=x.XKeysymToKeycode(D,symbol);assert code
- assert xt.XTestFakeKeyEvent(D,code,True,0);assert xt.XTestFakeKeyEvent(D,code,False,0);x.XSync(D,False)
+ modifier=x.XKeysymToKeycode(D,0xffe1)
+ if shift:assert xt.XTestFakeKeyEvent(D,modifier,True,0)
+ assert xt.XTestFakeKeyEvent(D,code,True,0);assert xt.XTestFakeKeyEvent(D,code,False,0)
+ if shift:assert xt.XTestFakeKeyEvent(D,modifier,False,0)
+ x.XSync(D,False)
 
 def close(w):
  delete=atom('WM_DELETE_WINDOW');assert delete in prop(w,'WM_PROTOCOLS')
@@ -87,8 +91,9 @@ def close(w):
  assert x.XSendEvent(D,w,False,0,C.byref(event));x.XSync(D,False)
 
 p=argparse.ArgumentParser(description=__doc__);p.add_argument('--reader',type=Path,required=True);p.add_argument('--reader-pdf',type=Path,required=True);args=p.parse_args()
-reader=json.loads(args.reader.read_text());assert reader['passed'] and len(reader['cases'])==8
-assert [(c['type'],c['method']) for c in reader['cases']]==[(k,m) for k in range(4) for m in ['escape','window-close']]
+reader=json.loads(args.reader.read_text());assert reader['passed']
+methods=['enter'] if reader.get('mode')=='enter' else ['escape','window-close']
+assert [(c['type'],c['method']) for c in reader['cases']]==[(k,m) for k in range(4) for m in methods]
 fixture=next((ROOT/'Testing').glob('*_2024_*.pdf'));assert hashlib.sha256(fixture.read_bytes()).hexdigest()==reader['input_sha256'];source=args.reader_pdf.resolve();before=hashlib.sha256(source.read_bytes()).hexdigest()
 style=module('style','default-style-persistence.py');profile=module('profile','fighter-styles.py');expected=style.saved_capture(args.reader_pdf,reader['summary'],fixture);assert expected==reader['captured']
 folder=ROOT/'output/testing'/('native-alert-dismiss-'+str(time.time_ns()));folder.mkdir();print(folder,flush=True);binary=folder/'mpmb-reader';__import__('shutil').copy2(ROOT/'target/debug/mpmb-reader',binary)
@@ -112,15 +117,15 @@ with (folder/'run.log').open('w') as log:
    assert len(found)==1;w,title=found[0];pids=prop(w,'_NET_WM_PID');assert len(pids)==1;pid=pids[0];status=Path('/proc/'+str(pid)+'/status').read_text();parent=int(next(line.split()[1] for line in status.splitlines() if line.startswith('PPid:')));assert parent==process.pid
    case={'type':reference['type'],'method':reference['method'],'observed':{'window':w,'title':title,'dialog_pid':pid,'parent_pid':parent}};report['cases'].append(case);activate(w);time.sleep(.3)
    if reference['method']=='escape':key(w,0xff1b)
+   elif reference['method']=='enter':key(w,0xff0d)
    else:close(w)
    time.sleep(.8);case['dismissed']=not Path('/proc/'+str(pid)).exists();assert case['dismissed']==reference['dismissed'],case
    if not case['dismissed']:
-    # No edits/checkboxes exist in these descriptors. Tab starts at the first
-    # button: OK, or Yes then No. The returned API code independently verifies
-    # the fallback selection; it is not injected as a scripted alert response.
-    count=1 if reference['type']==0 else 2
-    for _ in range(count):key(w,0xff09);time.sleep(.1)
-    key(w,0xff0d);case['fallback']='Tab to actual OK/No button and Enter'
+    # Reverse traversal selects the last offered button (OK or No), whether
+    # initial focus is unset or on Reader's default first button. The actual
+    # returned API code independently verifies the selection.
+    key(w,0xff09,shift=True);time.sleep(.1)
+    key(w,0xff0d);case['fallback']='Reverse Tab to actual OK/No button and Enter'
    deadline=time.monotonic()+12
    while Path('/proc/'+str(pid)).exists():
     assert time.monotonic()<deadline,'Native dialog did not complete after actual input';time.sleep(.1)
