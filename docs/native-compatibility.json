@@ -2956,5 +2956,15 @@
       "Other styles, class/subclass/source/multiclass/fixture workflows and complete table use"
     ],
     "full_mpmb_compatibility": false
+  },
+  "2024_functional_release": {
+    "ready": false,
+    "priority": "Before further2014/Ashnar feature qualification",
+    "release_gates": "docs/2024-readiness.md",
+    "current_native_baseline": "output/testing/native-acceptance-1794230754642948230/acceptance.json",
+    "baseline_scope": "2024-only original class-dialog Fighter1, Strength/proficiency calculations, native save/fresh reopen, independent canonical/widgets/AP/scripts and native/Poppler rendering. Does not establish other classes or full table use.",
+    "binary_sha256": "5381827624ebd1b602f762e654a40b1393247e4cc9f0fdd1e621f65b90cd9199",
+    "native_worker_limits": "MemoryMax2GiB, CPUQuota100%; one worker, no Cargo build",
+    "reader_qualification": "Fresh local readiness in progress; cloud failed clipboard qualification and is not currently an oracle"
   }
 }

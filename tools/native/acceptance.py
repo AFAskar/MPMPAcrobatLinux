@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """Run original-sheet vertical slices and independent Linux checks. Evidence stays ignored."""
-import hashlib,json,subprocess,sys,time,os
+import argparse,hashlib,json,subprocess,sys,time,os
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'tools/acrobat'))
 from verify import inspect,script_hashes
 
 def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--fixture', choices=['2014','2024'], action='append', help='Run only this ruleset; repeat to select both')
+    args=parser.parse_args()
+    selected=args.fixture or ['2014','2024']
     folder=ROOT/'output/testing'/('native-acceptance-'+str(time.time_ns()));folder.mkdir(parents=True)
-    binary=ROOT/'target/debug/mpmb-reader';report={'passed':False,'cases':[],'directory':str(folder)}
+    binary=ROOT/'target/debug/mpmb-reader';report={'passed':False,'selected_fixtures':selected,'cases':[],'directory':str(folder)}
     def run(pdf,scenario,label):
         spec=folder/(label+'-scenario.json');evidence=folder/(label+'-report.json');log=folder/(label+'.log')
         spec.write_text(json.dumps(scenario))
@@ -20,7 +24,7 @@ def main():
         assert not result['diagnostics']['errors'],result['diagnostics']
         return {'probe':str(evidence),'seconds':round(time.monotonic()-started,3),'gaps':result['diagnostics']['gaps']}
     try:
-        for rule in ['2014','2024']:
+        for rule in selected:
             item=next(x for x in json.loads((ROOT/'docs/fixtures.json').read_text()) if '_'+rule+'_' in x['file']);pdf=ROOT/'Testing'/item['file']
             assert hashlib.sha256(pdf.read_bytes()).hexdigest()==item['sha256']
             output=folder/('native-'+rule+'.pdf')
