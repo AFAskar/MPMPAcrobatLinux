@@ -87,6 +87,7 @@ Read `docs/testing-environment.md` before changing or testing PDF behavior.
 
 - Calculation order includes non-leaf PDF references that can have no executable action. Preserve those physical slots and references: calcOrderIndex counts them. Registration/replacement/clearing must update the authoritative order and survive native/Reader save/reopen. Separate executable-action counts from raw CO-slot counts; level/proficiency checks do not prove calculated resource maxima.
 
+- User sequencing (2026-11-09): focus implementation and thorough qualification on the 2024 fixture first. Begin further 2014/Ashnar feature qualification only after 2024 meets its functional release gates in docs/2024-readiness.md. Existing evidence remains historical; safely finish/clean up already-active reference suites. The overall three-fixture goal stays active.
 - User priority: calculations, genuine class/subclass choices, resources, spells, imports and reliable save/reopen take priority over cosmetic font/pixel differences. Continue checking that visible values are present, but keep remaining appearance fidelity explicit instead of letting it displace functional workflow repairs.
 
 - Explicit calculateNow does not override disabled app/document calculation; display delay is independent. Class operations can retain calcStop until their menu callback returns and calcCont runs. Qualify separate user actions with readiness checks; synchronous intermediate snapshots are not completed table states. Enumerate actual resource field names rather than assuming a row count.

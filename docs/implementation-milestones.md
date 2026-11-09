@@ -2,6 +2,8 @@
 
 The active Codex goal is complete reachable MPMB behavior in all three authorized PDFs. No milestone alone completes that goal. A milestone stays in progress until its stated evidence exists; unsupported cases and unexercised choices remain explicit gaps.
 
+The user now prioritizes **2024 first** (2026-11-09). Further 2014/Ashnar feature testing is deferred until the [2024 functional release gates](2024-readiness.md) pass. Historical bounded evidence below remains valid only for its stated scope.
+
 | Milestone | Required evidence | Status |
 | --- | --- | --- |
 | 1. Printing | Original page-selection dialog and print function; all/selected/generated pages; field visibility, duplex, cancellation; independent print artifact inspection/rendering; real Windows Reader controlled print workflow and reopened native output | Nine controlled Reader PDF outputs and three native fixture suites pass; CUPS/physical/advanced settings and broader appearance qualification remain incomplete |

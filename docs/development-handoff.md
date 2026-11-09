@@ -1,3 +1,13 @@
+## Authoritative priority change — 2026-11-09
+
+User requires thorough 2024 qualification first; do not continue 2014 feature work until 2024 is ready for regular table use. The three-fixture Codex goal remains ACTIVE and incomplete. See docs/2024-readiness.md. Existing 2014 Superior Technique and Battle Master results are historical bounded evidence, not a reason to continue those profiles now.
+
+Local orchestration parent49687 is intentionally SIGSTOPPED before its queued2014 mixed profile; active readiness child49777 continues safely. After that child finishes, terminate only the stopped parent so the deferred2014 command cannot launch. Record the actual readiness result independently; orchestration cancellation is user steering, not a failed readiness case. Do not interrupt or replay Reader mutations.
+
+Cloud startup-dialog guard deployed0b54e468... passed preflight but readiness1794228925 FAILED at2024 clipboard keyboard input (empty clipboard read-back, owner0). Same document retained/closed in reference-clipboard-retention1794230130121257901 PASS: pending PCName empty before save, actual original typed name committed on save, canonical/AP/scripts and zero Reader processes verified. No input replay. Cloud remains unqualified; inspect clipboard transport before a new suite. Main local tools/acrobat remains unchanged.
+
+2014 Native-only Battle Master startup-observer input1794230169199952320 and profile1794230237027829640 PASS12 states/2 runtimes, including three maneuvers, spending/short rest, cold reopen and dice progression. No Reader qualification or milestone completion. Earlier RunUserScript profiles1794229510860084529/1794229592650388661 stay FAILED: manual RunUserScript reexecutes bundled all-sources add-on, registers duplicate fighter-battle master-2; after cold reopen a subsequent level parse can change identity and clear choices. This is diagnostic interference, not yet an engine discrepancy. Private startup bootstrap adds only a disclosed document script, preserves every original script and all canonical properties except physical reference IDs, and avoids rerunning add-ons; it still needs2024/Reader qualification. New Battle Master tools are WIP, not qualified public interfaces.
+
 ## Authoritative continuation — 2026-11-08, Superior Technique paired evidence
 
 Goal tracker now ACTIVE (verified get_goal after user continuation); overall compatibility still incomplete. Previous goal turn made progress: committeddf854ac initial Enter repair,154 tests; completed new maneuver evidence. HEADdf854ac, runtime5381827624ebd1b602f762e654a40b1393247e4cc9f0fdd1e621f65b90cd9199 unchanged. No new Rust build.
