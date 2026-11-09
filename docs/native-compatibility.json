@@ -2961,10 +2961,62 @@
     "ready": false,
     "priority": "Before further2014/Ashnar feature qualification",
     "release_gates": "docs/2024-readiness.md",
-    "current_native_baseline": "output/testing/native-acceptance-1794230754642948230/acceptance.json",
+    "current_native_baseline": "output/testing/native-acceptance-1794236159948346034/acceptance.json",
     "baseline_scope": "2024-only original class-dialog Fighter1, Strength/proficiency calculations, native save/fresh reopen, independent canonical/widgets/AP/scripts and native/Poppler rendering. Does not establish other classes or full table use.",
-    "binary_sha256": "5381827624ebd1b602f762e654a40b1393247e4cc9f0fdd1e621f65b90cd9199",
+    "binary_sha256": "ef918c90172190a7608cc4fea2626b0492dcda3d2f8b32e194c12041c30de70c",
     "native_worker_limits": "MemoryMax2GiB, CPUQuota100%; one worker, no Cargo build",
-    "reader_qualification": "Fresh local readiness in progress; cloud failed clipboard qualification and is not currently an oracle"
+    "reader_qualification": "Local readiness1794229401 PASSED24 and preflight passed; queued2014 feature profile canceled. Cloud remains unqualified after clipboard/ASCII-focus transport failures.",
+    "local_reader_readiness": "output/testing/readiness-1794229401.json",
+    "structural_audit": {
+      "report": "output/testing/native-subclasses-1794230888084509591/subclasses.json",
+      "passed": false,
+      "registered_classes": 15,
+      "registered_subclass_entries": 107,
+      "non_sidekick_candidates": 104,
+      "clean_creation_and_reopen_cases": 14,
+      "failure": "College of Swords emitted40 original console warnings; no clean compatibility claim. Requires actual2024 Reader/source/choice qualification.",
+      "unattempted_after_stop": 89,
+      "sidekicks": "Three classes require explicit base-creature/HD and offered spellcaster profiles; not generic defaults",
+      "scope": "Original all-source/class/subclass dialogs and structural progression/reopen only; actual feature/spell/resource choices remain unqualified.",
+      "binary_sha256": "5381827624ebd1b602f762e654a40b1393247e4cc9f0fdd1e621f65b90cd9199"
+    },
+    "native_berserker_resources": {
+      "report": "output/testing/native-barbarian-2024-resources-1794231808286232131/resources.json",
+      "passed": true,
+      "states": 8,
+      "runtimes": 2,
+      "scope": "2024 Rage used3\u2192short rest2\u2192long restempty; used2 saved/cold reopened\u2192short rest1\u2192long restempty. Original field/rest actions, AC15/Greataxe1d12+4, full captured resources, checksum/sentinel, original scripts plus disclosed startup observer. Positive native console sentinel; Reader/mixed changes pending.",
+      "instrumentation": "output/testing/workflow-startup-input-1794231705371903017/input.json",
+      "reader_status": "Reader1794232892593105193 FAILED after7 matched states/positive live console checks: host suspend caused expired command, refused replay; same document retained/closed. Not an8-state workflow pass."
+    },
+    "other_structural_classes": {
+      "report": "output/testing/native-subclasses-1794231567267361412/subclasses.json",
+      "passed": true,
+      "cases": 87,
+      "scope": "Explicitly excludes Bard/Barbarian; plus14 prior clean cases gives101 ordinary pairs on frozen154, not current UI-repair binary. Swords failed, two Bard pairs and explicit sidekicks remain. Default feature replies do not qualify complete choices."
+    }
+  },
+  "pending_desktop_edits_2024": {
+    "status": "Native save/close repair proved; real Reader consumption remains required",
+    "milestone": "4 INCOMPLETE",
+    "binary_sha256": "ef918c90172190a7608cc4fea2626b0492dcda3d2f8b32e194c12041c30de70c",
+    "build": "output/testing/pending-save-build-1794233786204669626/qualification.json",
+    "rust_tests": 154,
+    "negative_save": "output/testing/native-save-ui-1794232969495858442/pending-save.json",
+    "negative_close": "output/testing/native-save-ui-1794232969495858442/pending-close.json",
+    "positive_save": "output/testing/native-save-ui-1794233841984230573/pending-save.json",
+    "positive_field_switch_and_calculation": "output/testing/native-save-ui-1794233841984230573/strength-save.json",
+    "existing_destination_rejection": "output/testing/native-save-ui-1794233841984230573/existing-path-control.json",
+    "positive_cold_gui_and_save_close": "output/testing/native-save-ui-1794235890082792322/pending-close.json",
+    "fresh_changed_native_reopens": "output/testing/pending-save-reopen-1794237004084895693/reopen.json",
+    "behavior": "Pending sidebar edits are committed through Runtime.user_edit before save/close and selected-field/document actions; typing marks unsaved, canonical read-back refreshes the editor, close handling runs after text input. Unchanged editors do not reassign stale values. Original input/new-copy-only guards retained.",
+    "evidence_scope": "Actual owned/focused Xvfb windows and XTest input; Name save, Strength18\u219220/modifier4\u21925 on field switch, pending close confirmation, existing-file rejection without replacing bytes, fresh GUI reopen and successful save-and-close. Three fresh native runtimes then change Strength to16/modifier3 and independently verify canonical/widgets/AP/scripts. No KDE/Wayland keyboard or full class/appearance claim.",
+    "artifact_correction": "One fixed-build initial screenshot was overwritten by a later read-only snapshot; that later image is correctly retained as strength-field-switch-settled.png and artifact-correction.json records the loss. The negative baseline and pending/before-after save images are intact.",
+    "retained_interrupted_attempt": "The first fixed GUI process reached its private20min timeout before final save-close. No successful close claim for that process; the fresh second GUI process exits0 with independently verified new output.",
+    "remaining": [
+      "Real Acrobat edit/save followed by further native changes from these actual GUI outputs",
+      "Remaining UI/action/class/spell/resource/import and per-character release gates"
+    ],
+    "full_mpmb_compatibility": false
   }
 }

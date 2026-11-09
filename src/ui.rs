@@ -223,6 +223,7 @@ pub fn main() -> Result<()> {
         filter: String::new(),
         edit_name: "PC Name".into(),
         edit_value,
+        edit_dirty: false,
         status: String::new(),
         last_tick: std::time::Instant::now(),
         save_path: format!(
@@ -262,6 +263,7 @@ struct Reader {
     filter: String,
     edit_name: String,
     edit_value: String,
+    edit_dirty: bool,
     status: String,
     last_tick: std::time::Instant,
     save_path: String,
@@ -312,6 +314,55 @@ fn bookmark_items(ui: &mut egui::Ui, node: &Value, path: &str, action: &mut Opti
     }
 }
 impl Reader {
+    fn refresh_editor(&mut self) -> Result<()> {
+        self.edit_value = self
+            .rt
+            .eval(&format!(
+                "(function(){{var field=getField({});return field?field.valueAsString:''}})()",
+                serde_json::to_string(&self.edit_name)?
+            ))?
+            .as_str()
+            .unwrap_or("")
+            .to_owned();
+        Ok(())
+    }
+
+    fn commit_editor(&mut self) -> Result<()> {
+        self.rt
+            .user_edit(&self.edit_name, &json!(self.edit_value))?;
+        self.refresh_editor()?;
+        self.edit_dirty = false;
+        self.unsaved = true;
+        self.texture = None;
+        Ok(())
+    }
+
+    fn commit_pending_edit(&mut self) -> Result<()> {
+        if self.edit_dirty {
+            self.commit_editor()?;
+        }
+        Ok(())
+    }
+
+    fn select_editor(&mut self, name: &str) -> Result<()> {
+        self.commit_pending_edit()?;
+        let value = self.rt.eval(&format!(
+            "getField({}).valueAsString",
+            serde_json::to_string(name)?
+        ))?;
+        self.edit_name = name.to_owned();
+        self.edit_value = value.as_str().unwrap_or("").to_owned();
+        self.edit_dirty = false;
+        Ok(())
+    }
+
+    fn save_copy(&mut self) -> Result<()> {
+        self.commit_pending_edit()?;
+        self.rt.ready()?;
+        self.pdf
+            .save_new(&self.rt.snapshot()?, std::path::Path::new(&self.save_path))
+    }
+
     fn draw_console(&mut self, ctx: &egui::Context) {
         let Ok(state) = self.rt.eval("__host.consoleView()") else {
             return;
@@ -476,6 +527,9 @@ impl Reader {
     fn result(&mut self, r: Result<()>) {
         if r.is_ok() {
             self.unsaved = true;
+            if !self.edit_dirty {
+                let _ = self.refresh_editor();
+            }
         }
         self.status = match r {
             Ok(_) => "Completed".into(),
@@ -486,14 +540,6 @@ impl Reader {
 }
 impl eframe::App for Reader {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-        if self.smoke.is_none()
-            && !self.allow_close
-            && ctx.input(|i| i.viewport().close_requested())
-            && self.unsaved
-        {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.confirm_close = true;
-        }
         if self.confirm_close {
             egui::Window::new("Save your changes?")
                 .collapsible(false)
@@ -503,13 +549,7 @@ impl eframe::App for Reader {
                     ui.text_edit_singleline(&mut self.save_path);
                     ui.horizontal(|ui| {
                         if ui.button("Save and close").clicked() {
-                            let r =
-                                self.rt
-                                    .ready()
-                                    .and_then(|_| self.rt.snapshot())
-                                    .and_then(|s| {
-                                        self.pdf.save_new(&s, std::path::Path::new(&self.save_path))
-                                    });
+                            let r = self.save_copy();
                             let saved = r.is_ok();
                             self.result(r);
                             if saved {
@@ -604,6 +644,9 @@ impl eframe::App for Reader {
                             .collect();
                     }
                 }
+                if !self.edit_dirty {
+                    let _ = self.refresh_editor();
+                }
                 self.texture = None;
             }
         }
@@ -623,28 +666,34 @@ impl eframe::App for Reader {
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("Previous").clicked() {
-                    self.page = (self.page - 1).max(0);
-                    let _ = self.rt.eval(&format!("pageNum={}", self.page));
-                    self.texture = None
+                    if let Err(error) = self.commit_pending_edit() {
+                        self.result(Err(error));
+                    } else {
+                        self.page = (self.page - 1).max(0);
+                        let _ = self.rt.eval(&format!("pageNum={}", self.page));
+                        self.texture = None
+                    }
                 }
                 ui.label(format!("Page {} / {}", self.page + 1, page_count));
                 if ui.button("Next").clicked() {
-                    self.page = (self.page + 1).min(page_count - 1);
-                    let _ = self.rt.eval(&format!("pageNum={}", self.page));
-                    self.texture = None
+                    if let Err(error) = self.commit_pending_edit() {
+                        self.result(Err(error));
+                    } else {
+                        self.page = (self.page + 1).min(page_count - 1);
+                        let _ = self.rt.eval(&format!("pageNum={}", self.page));
+                        self.texture = None
+                    }
                 }
                 if ui.button("Select class…").clicked() {
                     let r = self
-                        .rt
-                        .eval("__host.invokeMenu('ClassesButton')")
-                        .map(|_| ());
+                        .commit_pending_edit()
+                        .and_then(|_| self.rt.eval("__host.invokeMenu('ClassesButton')").map(|_| ()));
                     self.result(r)
                 }
                 if ui.button("Import script…").clicked() {
                     let r = self
-                        .rt
-                        .eval("ImportUserScriptFile();RunUserScript(false,false)")
-                        .map(|_| ());
+                        .commit_pending_edit()
+                        .and_then(|_| self.rt.eval("ImportUserScriptFile();RunUserScript(false,false)").map(|_| ()));
                     self.result(r)
                 }
                 for (label, code) in [
@@ -656,12 +705,12 @@ impl eframe::App for Reader {
                     ("Generate spells", "GenerateSpellSheet()"),
                 ] {
                     if ui.button(label).clicked() {
-                        let r = self.rt.command(code);
+                        let r = self.commit_pending_edit().and_then(|_| self.rt.command(code));
                         self.result(r)
                     }
                 }
                 if ui.button("Calculate").clicked() {
-                    let r = self.rt.eval("calculateNow()").map(|_| ());
+                    let r = self.commit_pending_edit().and_then(|_| self.rt.eval("calculateNow()").map(|_| ()));
                     self.result(r)
                 }
             });
@@ -669,18 +718,14 @@ impl eframe::App for Reader {
                 ui.label("New copy:");
                 ui.text_edit_singleline(&mut self.save_path);
                 if ui.button("Save").clicked() {
-                    let r = self
-                        .rt
-                        .ready()
-                        .and_then(|_| self.rt.snapshot())
-                        .and_then(|s| self.pdf.save_new(&s, std::path::Path::new(&self.save_path)));
+                    let r = self.save_copy();
                     let saved=r.is_ok();self.result(r);if saved{self.unsaved=false;}
                 }
             });
             ui.menu_button("MPMB tools",|ui|{match self.rt.eval("__host.menuItems()"){
                 Ok(items)=>if let Some(items)=items.as_array(){for item in items{let name=item["name"].as_str().unwrap_or("");if !self.menu_images.contains_key(name){if let Some(image)=argb_image(&item["icon"]){self.menu_images.insert(name.into(),ctx.load_texture(name,image,Default::default()));}}
                     ui.horizontal(|ui|{if let Some(image)=self.menu_images.get(name){ui.image(image);}
-                        if ui.add_enabled(item["enabled"]==true,egui::Button::new(format!("{}{}",if item["marked"]==true{"✓ "}else{""},item["label"].as_str().unwrap_or(name)))).on_hover_text(item["tooltip"].as_str().unwrap_or("")).clicked(){let r=self.rt.eval(&format!("__host.invokeMenu({})",serde_json::to_string(name).unwrap())).map(|_|());self.result(r);ui.close();}
+                        if ui.add_enabled(item["enabled"]==true,egui::Button::new(format!("{}{}",if item["marked"]==true{"✓ "}else{""},item["label"].as_str().unwrap_or(name)))).on_hover_text(item["tooltip"].as_str().unwrap_or("")).clicked(){let r=self.commit_pending_edit().and_then(|_|self.rt.eval(&format!("__host.invokeMenu({})",serde_json::to_string(name).unwrap())).map(|_|()));self.result(r);ui.close();}
                     });
                 }},Err(e)=>{ui.label(format!("Menu error: {e:#}"));}
             }});
@@ -697,11 +742,12 @@ impl eframe::App for Reader {
                     if let Ok(tree)=self.rt.eval("JSON.parse(JSON.stringify(bookmarkRoot))"){
                         let mut action=None;
                         egui::ScrollArea::vertical().id_salt("bookmarks").max_height(220.).show(ui,|ui|{bookmark_items(ui,&tree,"bookmarkRoot",&mut action);});
-                        if let Some(code)=action{let r=self.rt.eval(&code).map(|_|());self.result(r);}
+                        if let Some(code)=action{let r=self.commit_pending_edit().and_then(|_|self.rt.eval(&code).map(|_|()));self.result(r);}
                     }
                 });
                 ui.heading("Form fields");
                 ui.text_edit_singleline(&mut self.filter);
+                let mut selected = None;
                 egui::ScrollArea::vertical()
                     .max_height(350.)
                     .show(ui, |ui| {
@@ -709,16 +755,23 @@ impl eframe::App for Reader {
                             if name.to_lowercase().contains(&self.filter.to_lowercase())
                                 && ui.selectable_label(self.edit_name == *name, name).clicked()
                             {
-                                self.edit_name = name.clone();
-                                if let Ok(value)=self.rt.eval(&format!("getField({}).valueAsString",serde_json::to_string(name).unwrap())){self.edit_value=value.as_str().unwrap_or("").to_owned();}
+                                selected = Some(name.clone());
                             }
                         }
                     });
+                if let Some(name) = selected {
+                    if let Err(error) = self.select_editor(&name) {
+                        self.result(Err(error));
+                    }
+                }
                 ui.separator();
                 ui.label(&self.edit_name);
-                ui.text_edit_multiline(&mut self.edit_value);
+                if ui.text_edit_multiline(&mut self.edit_value).changed() {
+                    self.edit_dirty = true;
+                    self.unsaved = true;
+                }
                 if ui.button("Commit field edit").clicked() {
-                    let r = self.rt.user_edit(&self.edit_name, &json!(self.edit_value));
+                    let r = self.commit_editor();
                     self.result(r)
                 }
                 if let Ok(values)=self.rt.eval("['Str','Str Mod','Character Level','Proficiency Bonus'].map(n=>[n,getField(n).valueAsString])"){
@@ -778,21 +831,16 @@ impl eframe::App for Reader {
                             })();
                             match hit {
                                 Ok(Some(w)) => {
-                                    self.edit_name = w["name"].as_str().unwrap_or("").into();
-                                    let name = serde_json::to_string(&self.edit_name).unwrap();
-                                    let r = self
-                                        .rt
-                                        .eval(&format!(
+                                    let r = (|| -> Result<()> {
+                                        self.select_editor(w["name"].as_str().unwrap_or(""))?;
+                                        let name = serde_json::to_string(&self.edit_name)?;
+                                        self.rt.eval(&format!(
                                             "__host.activate({name},{},{modifiers})",
                                             w["index"]
-                                        ))
-                                        .map(|_| ());
+                                        ))?;
+                                        self.refresh_editor()
+                                    })();
                                     self.result(r);
-                                    if let Ok(value) =
-                                        self.rt.eval(&format!("getField({name}).valueAsString"))
-                                    {
-                                        self.edit_value = value.as_str().unwrap_or("").into();
-                                    }
                                 }
                                 Err(e) => self.status = format!("Field interaction failed: {e:#}"),
                                 _ => {}
@@ -803,6 +851,16 @@ impl eframe::App for Reader {
             });
         });
         self.draw_console(ctx);
+        // Process this after text input so a close request in the same frame
+        // as the final typed character cannot discard an uncommitted edit.
+        if self.smoke.is_none()
+            && !self.allow_close
+            && ctx.input(|i| i.viewport().close_requested())
+            && self.unsaved
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.confirm_close = true;
+        }
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
     }
 }
