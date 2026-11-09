@@ -1,5 +1,9 @@
 # MPMB compatibility audit — 2026-10-26
 
+## Bonus maneuver/resource workflow — 2026-11-08
+
+Superior Technique now has13 matching Native/Reader checkpoints, including genuine Disarming Attack/Riposte choices, die spending/reset, reaction/notes and level-based removal/re-selection. Both-origin changed native persistence adds16 states;26 saved snapshots prove visible note/reaction text and removal. This is bounded milestone3r progress, not completion: direct Native-to-Reader changed saves/progression and final Native edits remain required, along with broader class/table coverage. No source PDF script repair was added.
+
 ## Initial alert Return repair — 2026-11-06
 
 Native initial Return previously did nothing. Real Native/Reader4-case comparison now matches1/1/4/4 after a one-time default-button focus request; subsequent Tab selection remains effective. Current154 build also passes all8 earlier dismissal cases. This completes bounded3q only, with154 passing tests/build/strict lint checks. Checkbox and generic-dialog keyboard behavior, all-class table use and full compatibility remain incomplete. The earlier152 raw build logs were accidentally overwritten by the154 launcher; the unique154 build evidence and explicit correction are recorded in native-compatibility.json. Historical152 GUI/PDF evidence remains intact.

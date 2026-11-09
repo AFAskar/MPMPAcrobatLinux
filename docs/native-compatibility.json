@@ -2921,5 +2921,33 @@
       "All broad class/subclass/source/resource/spell/import and persistence coverage"
     ],
     "full_mpmb_compatibility": false
+  },
+  "fighter_superior_technique_2014": {
+    "status": "paired13-state workflow and both-origin native changed saves qualified; direct native-to-Reader and final mixed persistence pending",
+    "milestone": "3r INCOMPLETE",
+    "binary_sha256": "5381827624ebd1b602f762e654a40b1393247e4cc9f0fdd1e621f65b90cd9199",
+    "native": "output/testing/native-fighter-superior-1793991338582292011/superior.json",
+    "reader": "output/testing/reader-fighter-superior-1793991592466756322/superior.json",
+    "states_per_engine": 13,
+    "runtimes_per_engine": 3,
+    "native_persistence": "output/testing/fighter-superior-persistence-1794123573776161526/persistence.json",
+    "native_persistence_scope": "8 fresh runtimes/16 changed/cold-restored states from Native/Reader spent and final outputs",
+    "visible_notes_and_reactions": "output/testing/superior-visible-1794124204152626927/visibility.json",
+    "visible_scope": "26 Native/Reader states verify actual visible note AP text for Disarming Attack/Riposte, absence after removal, and visible Riposte reaction. Canonical markup kept separate; no font/pixel equality claim.",
+    "behavior": "Actual Superior Technique grants one d6/short-rest die and one bonus Battle Master maneuver without changing Champion identity. Select Disarming Attack, spend die, cold reopen, short reset, remove maneuver, select Riposte/reaction, drop to9 and remove style/resource/maneuver/notes/reaction, cold reopen, restore17 with empty slot and explicitly reselect style/maneuver.",
+    "comparison": "30 selected fields,64 actual resource fields, enumerated reactions, complete Class Features/Extra.Notes canonical text, maneuver list and bonus availability. Full saved ASCII payload/real Unicode sentinel/checksum, canonical/widgets/resource APs, immutable input hashes and original script bytes. JSON object-member order ignored; array order and all captured properties retained.",
+    "dialog_scope": "Native requires exact actual dialog-title sequence and retained control errors. Reader uses actual offered menus/input, qualified automatic Close acknowledgement for informational CHANGES ALERT DIALOG, original document-menu callbacks and verified cold byte snapshots. This is not generic default-dialog qualification.",
+    "retained_failures": [
+      "Native1793990029313378874: planned informational acknowledgement was invalid after maneuver removal; caught control error retained, entire run failed",
+      "Native1793990397523977313: planned informational acknowledgement invalid after restoring Superior Technique into empty slot; entire run failed",
+      "Discovery1793989531461685469: maneuver correctly selected but test incorrectly searched Class Features; actual rule note is Extra.Notes. Raw failed report preserved."
+    ],
+    "remaining": [
+      "Actual native-generated spent/removal outputs into changed Reader maneuver/resource/progression saves",
+      "Final fresh native changes/reopens from those mixed Reader outputs",
+      "Stacking with Martial Adept/Battle Master and other maneuver choices",
+      "Other styles, class/subclass/source/multiclass/fixture workflows and complete table use"
+    ],
+    "full_mpmb_compatibility": false
   }
 }

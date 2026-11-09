@@ -270,3 +270,9 @@ This qualifies the bounded alert dismissal slice only. Default Enter, changed ch
 Actual Reader and native4 initial Return cases now agree: OK1 for types0/1 andYes4 for2/3. Native focuses the first offered button once, preserving later Tab selection of Cancel/No and keeping buttons out of dialog.store(). The old152 real-keyboard failure remains retained. All154 tests/build/fmt/strict all-targets Clippy pass; all8 Escape/window-close cases still pass on154. See native-compatibility.json alert_default_enter for exact evidence and build-log correction.
 
 This completes initial default Return only. Checkbox interactions, generic dialog keyboard behavior, full class/subclass/table/spell/resource/import compatibility and broader persistence remain incomplete.
+
+### Milestone3r: Superior Technique bonus maneuver/resource persistence — in progress
+
+Native and actual Reader13-state/3-runtime profiles pass genuine style and bonus-maneuver choices, one-die spending/cold reopen/short reset, Disarming Attack removal, Riposte/reaction, level9 removal and cold17 restoration/re-selection. Both-origin native persistence passes8 runtimes/16 changed/cold-restored states. Visible note/reaction AP presence and removal passes26 states. See fighter_superior_technique_2014 in native-compatibility.json.
+
+Do not mark complete until actual Native-generated inputs undergo changed Reader saves/progression and final fresh Native edits. Other maneuvers/stacking/styles/classes/fixtures and all-table coverage remain incomplete. Failed dialog-profile assumptions and wrong note-field discovery are retained, not counted as passes.
