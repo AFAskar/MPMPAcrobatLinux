@@ -3103,5 +3103,14 @@
     "readiness": "output/testing/readiness-1794299454.json",
     "reference_scope": "2024 only, exact12; no full24 or native readiness claim",
     "limitations": "Original Swords workflow still needs fresh full completion. Cloud capability not deployed or qualified."
+  },
+  "reference_2024_scoping": {
+    "status": "qualified exact12-case2024 environment plan; default24 preserved by focused producer/consumer tests",
+    "readiness": "output/testing/readiness-1794299454.json",
+    "preflight_checks": 30,
+    "focused_tests": 6,
+    "failed_prototype": "output/testing/readiness-1794298731.json",
+    "prototype_failure": "Mutable expected-field mapping overwrote case plan; raw report remains failed, downstream operations correctly withheld. Fixed by independent plan and strict completion helper.",
+    "scope": "Does not qualify full24/native table readiness; no further2014 feature qualification before2024 release gates."
   }
 }

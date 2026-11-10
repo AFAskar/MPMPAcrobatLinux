@@ -1,5 +1,12 @@
 # MPMB compatibility audit — 2026-10-26
 
+## Exact 2024 reference plan qualified — 2026-11-10
+
+Current local preflight PASS30 and output/testing/readiness-1794299454.json PASS12, complete exact2024 sequence and matching frozen harness fingerprint. Six focused producer/consumer tests pass, including full default24 planning, missing/duplicate/reordered cases, non-boolean successes and field-mapping rejection. `tools/acrobat/run readiness --fixture 2024` now preserves a separate case plan; unscoped default remains all three fixtures/24. New suites reject a pre-existing visible PDF before opening their disposable copy. Scoped2024 reference qualification is environment-only; consumers requiring24 continue to reject12. No new2014 feature workflow was run.
+
+Prototype readiness1794298731 remains FAILED overall: all12 individual workflows executed but the report's plan was overwritten by its field expectations. The old HP follower stopped without submission. Corrected run pointer-2024-corrected1794299438943279012 now owns local Reader and starts actual GUI-save HP interoperability only after exact-plan/fingerprint success; do not compete with it. Four fresh candidate native changed saves are queued in candidate-hp-mixed-native1794299532026655521 after actual HP Reader PASS. Current candidate5ec7df remains unpromoted; broader2024 release and three-fixture goal remain ACTIVE/incomplete.
+
+
 ## Candidate 2024 selected spells — bounded native PASS
 
 Bard spell producer now accepts --binary, retains strict probe qualifications and rejects console messages, caught errors, malformed diagnostics or missing intended selected/ability-edited/regenerated phases. Candidate5ec7df report output/testing/native-bard-spells-1794299785353193688/spells.json PASS:three cantrips/nine selected spells from original offered dialog controls; seven-page generated output; Charisma20→18 and regeneration; fresh changed-snapshot reopen→20/restored regeneration. Four saved outputs independently preserve selected values/widgets/appearances and original scripts; all three discovery/workflow/reopen probes are clean. Source lore5.pdf script hashes independently matched the authorized2024 fixture before execution. Canonical spell lists/DC/attack/healing modifiers are asserted. Ability stages use the producer's edit operation; no desktop key/Blur claim. Reader equivalence, slot expenditure, other lists/choices and full class readiness remain open. Default binary remains ef918c; candidate is not promoted. No new2014 feature qualification.

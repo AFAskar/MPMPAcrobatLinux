@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Measured Acrobat readiness cases with independent saved-PDF verification."""
+import argparse
 import json
 import time
 import subprocess
@@ -8,10 +9,36 @@ import control as c
 from verify import inspect,script_hashes,canonical_fields
 import resources
 
+def case_plan(scope):
+    fixtures=[('blank-'+x if x!='ashnar' else x) for x in scope]
+    names=['desktop-session','reader-bridge','reject-outside-workspace']
+    for fixture in fixtures:
+        names.append(fixture+'-read')
+        names.extend(([fixture+'-keyboard-and-calculation',fixture+'-multiclass',fixture+'-manual-addon',fixture+'-companion-page'] if fixture!='ashnar' else ['ashnar-class-dialog-cancel','ashnar-regenerate-spells']))
+        names.append(fixture+'-roundtrip')
+    for suffix in ['wildshape-roundtrip','spell-generation-roundtrip']:
+        names.extend(['druid-'+x+'-'+suffix for x in scope if x!='ashnar'])
+    names.append('no-new-reader-crash-or-resource-exhaustion')
+    return names
+
+
+def cases_complete(cases, plan):
+    return (isinstance(plan, list) and bool(plan)
+            and [case['name'] for case in cases] == plan
+            and all(case.get('passed') is True for case in cases))
+
+
 def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--fixture',action='append',choices=['2014','2024','ashnar'])
+    args=parser.parse_args()
+    scope=args.fixture or ['2014','2024','ashnar']
+    if len(scope)!=len(set(scope)):parser.error('Duplicate fixtures are not allowed')
+    fixtures=[('blank-'+x if x!='ashnar' else x) for x in scope]
+    planned=case_plan(scope)
     cases=[];started=time.time();run_id=str(int(started));report=c.STATE/('readiness-'+run_id+'.json');fingerprint=c.harness_fingerprint();host_start=resources.host()
     def write_report(status):
-        data=dict(started=started,run_id=run_id,status=status,planned_cases=24,harness_sha256=fingerprint,host_start=host_start,elapsed_seconds=round(time.time()-started,3),cases=cases,passed=status=='complete' and all(x['passed'] for x in cases))
+        data=dict(started=started,run_id=run_id,status=status,planned_cases=len(planned),fixture_scope=scope,expected_cases=planned,harness_sha256=fingerprint,host_start=host_start,elapsed_seconds=round(time.time()-started,3),cases=cases,passed=status=='complete' and cases_complete(cases,planned))
         rendered=json.dumps(data,indent=2);report.write_text(rendered)
         temporary=c.STATE/'readiness-latest.tmp';temporary.write_text(rendered);temporary.replace(c.STATE/'readiness-latest.json')
     write_report('running')
@@ -27,7 +54,11 @@ def main():
         actual=result['fields'];assert all(actual.get(k)==str(v) for k,v in expected.items()),(expected,actual)
         return result
     with c.desktop_lock():
-        record('desktop-session',lambda:c.command('health'))
+        def isolated_desktop():
+            windows=c.command('inspect')
+            assert not [w for w in windows if w.get('class')=='AcrobatSDIWindow' and '.pdf' in w.get('name','').lower()], 'Pre-existing document must be retained/closed before readiness'
+            return c.command('health')
+        record('desktop-session',isolated_desktop)
         record('reader-bridge',lambda:c.script('ping'))
         def reject_outside():
             try:c.command('open',path=r'C:\Windows\win.ini')
@@ -36,7 +67,7 @@ def main():
                 return {'refused':True}
             raise AssertionError('Outside path was accepted')
         record('reject-outside-workspace',reject_outside)
-        for fixture in ['blank-2014','blank-2024','ashnar']:
+        for fixture in fixtures:
             path=c.remote_path('runs/'+fixture+'-'+run_id+'-readiness.pdf')
             c.powershell('Copy-Item '+c.literal(c.remote_path('fixtures/'+fixture+'.pdf'))+' '+c.literal(path)+' -Force;(Get-Item '+c.literal(path)+').IsReadOnly=$false')
             expected={'PC Name':'Ashnar','Str':'8','Str Mod':'-1','Character Level':'12'} if fixture=='ashnar' else {'PC Name':''}
@@ -116,10 +147,10 @@ def main():
                 return dict(reader=reopened,pdf=verified)
             record(fixture+'-roundtrip',roundtrip)
         from wildshape import test as wildshape_test
-        for rule in ['2014','2024']:
+        for rule in [x for x in scope if x!='ashnar']:
             record('druid-'+rule+'-wildshape-roundtrip',lambda r=rule:wildshape_test(r,run_id))
         from spells import test as spell_test
-        for rule in ['2014','2024']:
+        for rule in [x for x in scope if x!='ashnar']:
             record('druid-'+rule+'-spell-generation-roundtrip',lambda r=rule:spell_test(r,run_id))
         def audit_resources():
             assert c.harness_fingerprint()==fingerprint,'Harness or fixture configuration changed during this run'
@@ -131,6 +162,6 @@ def main():
         record('no-new-reader-crash-or-resource-exhaustion',audit_resources)
         write_report('complete')
         print(report)
-    return 0 if all(x['passed'] for x in cases) else 1
+    return 0 if cases_complete(cases,planned) else 1
 
 if __name__=='__main__':raise SystemExit(main())
