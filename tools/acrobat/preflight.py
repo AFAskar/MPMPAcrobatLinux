@@ -55,6 +55,7 @@ def main():
         checks['interactive-session'] = health['session'] > 0
         checks['desktop-protocol'] = health.get('version') == lock['desktop_protocol']
         checks['native-dialog-controls'] = {'dialog_control','focus_control'} <= set(health.get('capabilities',[]))
+        checks['native-dialog-pointer-controls'] = 'click_dialog_control' in health.get('capabilities',[])
         checks['popup-menu-controls'] = {'inspect_focused','inspect_menu','activate_menu'} <= set(health.get('capabilities',[]))
         checks['acrobat-reader'] = bridge['type'] == 'Reader'
         checks['adapter-protocol'] = bridge.get('protocol') == lock['adapter_protocol']

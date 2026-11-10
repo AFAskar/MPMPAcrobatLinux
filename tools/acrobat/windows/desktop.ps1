@@ -304,6 +304,23 @@ function Dialog-Control($q){
  if($q.action -eq 'dialog_control' -and $class -eq 'ComboBox'){return @{owner=$q.owner;handle=$q.handle;class=$class;selected_index=[DesktopNative]::ComboIndex($handle);item_count=[DesktopNative]::ComboCount($handle);full_labels_qualified=$false}}
  throw 'Unsupported dialog control type'
 }
+function Click-DialogControl($q){
+ if(-not $q.owner -or -not $q.handle -or -not $q.name){throw 'Pointer activation requires observed owner, control and exact caption'}
+ $owner=[IntPtr]([long]$q.owner);$handle=[IntPtr]([long]$q.handle)
+ if($owner -notin @(Reader-Windows) -or [DesktopNative]::Class($owner) -ne '#32770' -or -not [DesktopNative]::IsWindowEnabled($owner)){throw 'Pointer owner is not an enabled visible Reader dialog'}
+ if(-not [DesktopNative]::IsChild($owner,$handle) -or -not [DesktopNative]::IsWindowVisible($handle) -or -not [DesktopNative]::IsWindowEnabled($handle) -or [DesktopNative]::Class($handle) -ne 'Button'){throw 'Pointer target is not an enabled visible owned button'}
+ if([DesktopNative]::ControlText($handle) -cne [string]$q.name){throw 'Pointer target caption changed'}
+ $b=[DesktopNative]::Bounds($handle);$parent=[DesktopNative]::Bounds($owner)
+ if($b[2] -le 0 -or $b[3] -le 0 -or $b[0] -lt $parent[0] -or $b[1] -lt $parent[1] -or $b[0]+$b[2] -gt $parent[0]+$parent[2] -or $b[1]+$b[3] -gt $parent[1]+$parent[3]){throw 'Pointer button has no bounds inside its dialog'}
+ $x=[int]($b[0]+$b[2]/2);$y=[int]($b[1]+$b[3]/2);$hit=[DesktopNative]::HandleAt($x,$y)
+ if($hit -ne $handle -and -not [DesktopNative]::IsChild($handle,$hit)){throw 'Pointer button is covered by another window/control'}
+ [DesktopNative]::SetCursorPos($x,$y)|Out-Null
+ if([DesktopNative]::HandleAt($x,$y) -ne $hit){throw 'Pointer hit ownership changed before input'}
+ [DesktopNative]::mouse_event(2,0,0,0,[UIntPtr]::Zero)
+ try {Start-Sleep -Milliseconds 50} finally {[DesktopNative]::mouse_event(4,0,0,0,[UIntPtr]::Zero)}
+ Start-Sleep -Milliseconds 100
+ @{owner=$q.owner;handle=$q.handle;clicked=$q.name;rect=$b;method='guarded physical dialog button'}
+}
 function Resolve-Known-Dialog($elements){
   $reading=@($elements | Where-Object {$_.name -eq 'Preparing document for reading'})
   if($reading.Count -gt 0){Invoke-Native (Find-Native 'Cancel' 1 ([IntPtr]$reading[0].handle));return $true}
@@ -596,7 +613,7 @@ function Uia-Child($action,$value='') {
 }
 function Execute($q) {
  switch($q.action){
-  'health' {[uint32]$fp=0;$fh=[DesktopNative]::GetForegroundWindow();$ft=[DesktopNative]::GetWindowThreadProcessId($fh,[ref]$fp);@{version=3;capabilities=@('dialog_control','focus_control','inspect_focused','inspect_menu','activate_menu');foreground_handle=$fh.ToInt64();foreground_pid=$fp;foreground_thread=$ft;session=(Get-Process -Id $PID).SessionId;readers=@(Reader-Processes | Select-Object Id,SessionId);windows=@(Reader-Windows | ForEach-Object {$b=New-Object Text.StringBuilder(512);[DesktopNative]::GetWindowText($_,$b,512) | Out-Null;$b.ToString()})}}
+  'health' {[uint32]$fp=0;$fh=[DesktopNative]::GetForegroundWindow();$ft=[DesktopNative]::GetWindowThreadProcessId($fh,[ref]$fp);@{version=3;capabilities=@('dialog_control','focus_control','inspect_focused','inspect_menu','activate_menu','click_dialog_control');foreground_handle=$fh.ToInt64();foreground_pid=$fp;foreground_thread=$ft;session=(Get-Process -Id $PID).SessionId;readers=@(Reader-Processes | Select-Object Id,SessionId);windows=@(Reader-Windows | ForEach-Object {$b=New-Object Text.StringBuilder(512);[DesktopNative]::GetWindowText($_,$b,512) | Out-Null;$b.ToString()})}}
   'dismiss_pin' {
    [uint32]$fp=0;$fh=[DesktopNative]::GetForegroundWindow();[DesktopNative]::GetWindowThreadProcessId($fh,[ref]$fp)|Out-Null
    if((Get-Process -Id $fp).ProcessName -ne 'ShellExperienceHost'){throw 'Foreground is not Windows notification host'}
@@ -617,6 +634,7 @@ function Execute($q) {
   'inspect_uia' {,@(Uia-Child 'inspect_uia')}
   'inspect_full' {,@(Uia-Child 'inspect_full')}
   'invoke' {$parent=[IntPtr]::Zero;if($q.owner){$parent=[IntPtr]([long]$q.owner)};$element=$null;try{$element=Find-Native $q.name 0.3 $parent}catch{};if($element){Invoke-Native $element}elseif($q.owner){throw 'Named control is absent from the requested dialog'}else{Uia-Child 'invoke' $q.name|Out-Null};@{invoked=$q.name}}
+  'click_dialog_control' {Click-DialogControl $q}
   'keys' {Focus-Reader;Assert-Reader;[Windows.Forms.SendKeys]::SendWait($q.keys);Start-Sleep -Milliseconds 150;@{sent=$q.keys}}
   'paste' {Paste-Checked $q.value}
   'dispatch' {Dispatch-Reader $q}

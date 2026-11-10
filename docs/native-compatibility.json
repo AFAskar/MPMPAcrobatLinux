@@ -3095,5 +3095,13 @@
       "bard_selected_spells": "output/testing/native-bard-spells-1794299785353193688/spells.json",
       "bard_spell_scope": "Three explicit cantrips/nine spells, seven-page generated document, ability change/regeneration and changed fresh native reopen/restoration: four independently checked saved outputs and three strict clean probes. Input original scripts independently match2024. Reader parity, slot use and other spells/choices are separate."
     }
+  },
+  "reference_dialog_pointer": {
+    "status": "bounded native Windows Button control/recovery qualified; not arbitrary desktop automation",
+    "negative_and_actual_recovery": "output/testing/swords-pointer-summary-recovery-1794298420591732427/recovery.json",
+    "preflight": "output/testing/pointer-2024-corrected-1794299438943279012/preflight.log",
+    "readiness": "output/testing/readiness-1794299454.json",
+    "reference_scope": "2024 only, exact12; no full24 or native readiness claim",
+    "limitations": "Original Swords workflow still needs fresh full completion. Cloud capability not deployed or qualified."
   }
 }
