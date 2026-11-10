@@ -1384,7 +1384,17 @@
     ],
     "alert_validation": "Scripted responses must use actual dialog button codes; optional exact title and checkbox guards. Legacy response 1 is invalid for Yes/No (3/4) and now fails explicitly.",
     "native_other": "output/testing/native-sidekicks-1793106845145753682/sidekicks.json",
-    "cases": 15
+    "cases": 15,
+    "current_2024_strict": {
+      "report": "output/testing/native-sidekicks-1794287418534163242/sidekicks.json",
+      "binary_sha256": "ef918c90172190a7608cc4fea2626b0492dcda3d2f8b32e194c12041c30de70c",
+      "profiles": 5,
+      "progression_checkpoints": 35,
+      "cold_reopens": 5,
+      "clean_probe_qualifications": 10,
+      "qualification_rules_tests": 24,
+      "scope": "Original source/class/subclass dialogs, explicit Yes=4 conversion and2d8 base HD, levels3/1/5/11/17/20/3, manual race/background, displayed d8+1, canonical/widgets/AP/original scripts. Both creation and reopen reject original caught errors/console warnings via shared strict qualifier. Feature/tool/skill/spell defaults remain unqualified; no Reader/HP/full sidekick milestone claim."
+    }
   },
   "checkbox_values": {
     "status": "Three restored-state fixture comparisons and the Ashnar initially-checked clearing comparison pass; mark appearance and wider button behavior remain incomplete",

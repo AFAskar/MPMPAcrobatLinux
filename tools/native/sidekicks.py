@@ -11,6 +11,7 @@ from pypdf import PdfReader
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'tools/acrobat'))
 from verify import inspect,script_hashes
+import subclass_audit_qualification as qualification
 source_dialogs=runpy.run_path(str(ROOT/'tools/native/subclass-audit.py'))['source_dialogs']
 PROFILES=[('sidekick-expert-tcoe','Expert (sidekick)',None,None),('sidekick-warrior-tcoe','Warrior (sidekick)',None,None)]+[('sidekick-spellcaster-tcoe','Spellcaster (sidekick)','sidekick-spellcaster-tcoe-'+s,s.title()) for s in ['mage','healer','prodigy']]
 
@@ -18,11 +19,11 @@ PROFILES=[('sidekick-expert-tcoe','Expert (sidekick)',None,None),('sidekick-warr
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--fixture',choices=['2014','2024','ashnar'],action='append');args=parser.parse_args()
     folder=ROOT/'output/testing'/('native-sidekicks-'+str(time.time_ns()));folder.mkdir();binary=folder/'mpmb-reader';shutil.copy2(ROOT/'target/debug/mpmb-reader',binary)
-    report={'passed':False,'scope':__doc__,'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'cases':[]};print(folder,flush=True)
+    report={'passed':False,'scope':__doc__,'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'cases':[],'probe_qualifications':[],'full_mpmb_compatibility':False};print(folder,flush=True)
     def run(source,label,dialogs,alerts,steps):
         scenario,evidence=folder/(label+'-scenario.json'),folder/(label+'-report.json');scenario.write_text(json.dumps({'dialogs':dialogs,'alerts':alerts,'steps':steps}));env=os.environ.copy();env['MPMB_DIALOG_TRACE_DIR']=str(folder/(label+'-dialogs'))
         with (folder/(label+'.log')).open('w') as log:proc=subprocess.run([str(binary),str(source),'--probe',str(scenario),str(evidence)],env=env,stdout=log,stderr=log,timeout=300)
-        data=json.loads(evidence.read_text());assert proc.returncode==0 and data['passed'],data.get('error');return data,evidence
+        data=json.loads(evidence.read_text());checked=qualification.qualify_probe(proc.returncode,data,label);report['probe_qualifications'].append({'label':label,'evidence':str(evidence),**checked});assert checked['passed'],checked['error'];return data,evidence
     try:
         for fixture in args.fixture or ['2014','2024','ashnar']:
             source=next((ROOT/'Testing').glob('Ashnar*.pdf' if fixture=='ashnar' else '*_'+fixture+'_*.pdf'));original_hash=hashlib.sha256(source.read_bytes()).hexdigest()
@@ -52,6 +53,8 @@ def main():
                 assert hashlib.sha256(source.read_bytes()).hexdigest()==original_hash
                 report['cases'].append({'fixture':fixture,'class':key,'subclass':subkey,'passed':True,'probe':str(evidence),'reopen':str(reopened),'output':str(output),'expected':expected,'displayed':{'HD1 Die':'d8+1'},'base_creature':'Bandit (CR 1/8), manual base proficiencies/attacks still unqualified'})
                 (folder/'sidekicks.json').write_text(json.dumps(report,indent=2));print(name,'explicit conversion/HD/progression/reopen PASS',flush=True)
+        assert len(report['cases'])==len(args.fixture or ['2014','2024','ashnar'])*len(PROFILES),'Incomplete profile set'
+        assert len(report['probe_qualifications'])==2*len(report['cases']) and all(p['passed'] for p in report['probe_qualifications']),'Creation and reopen must both have clean diagnostics'
         report['passed']=True
     except Exception as error:report['error']=str(error);raise
     finally:(folder/'sidekicks.json').write_text(json.dumps(report,indent=2));print(folder/'sidekicks.json',flush=True)
