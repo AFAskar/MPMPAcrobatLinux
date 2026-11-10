@@ -3099,7 +3099,9 @@
     "current_default_binary_sha256": "5ec7df0977ff902623b949926ba9e0cffc0309d0b31367b1a9e2e309479a201c",
     "reader_consumption": "output/testing/candidate-hp-reader-1794298717755112252/reader.json",
     "final_changed_native": "output/testing/candidate-hp-mixed-native-1794299532026655521/reopen.json",
-    "promotion": "output/testing/readonly-hit-promotion-1794300569874728751/promotion.json"
+    "promotion": "output/testing/readonly-hit-promotion-1794300569874728751/promotion.json",
+    "complete_payloads": "output/testing/hp-gui-complete-payloads-1794300917068943156/payloads.json",
+    "complete_payload_scope": "All six Reader/further native outputs preserve complete stored imported-script, CurrentFeatureChoices and CurrentSpells payload fields exactly, without Unicode/space/member-order normalization. Full other canonical value differences are retained separately as field names/digests; no full field equality claim."
   },
   "reference_dialog_pointer": {
     "status": "bounded native Windows Button control/recovery qualified; not arbitrary desktop automation",
