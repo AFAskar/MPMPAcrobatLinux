@@ -2997,8 +2997,8 @@
     }
   },
   "pending_desktop_edits_2024": {
-    "status": "Native save/close repair proved; real Reader consumption remains required",
-    "milestone": "4 INCOMPLETE",
+    "status": "Bounded pending-editor save/close milestone qualified in native UI and real Reader",
+    "milestone": "4 pending-editor subset COMPLETE; overall durable-table-state gate INCOMPLETE",
     "binary_sha256": "ef918c90172190a7608cc4fea2626b0492dcda3d2f8b32e194c12041c30de70c",
     "build": "output/testing/pending-save-build-1794233786204669626/qualification.json",
     "rust_tests": 154,
@@ -3014,9 +3014,11 @@
     "artifact_correction": "One fixed-build initial screenshot was overwritten by a later read-only snapshot; that later image is correctly retained as strength-field-switch-settled.png and artifact-correction.json records the loss. The negative baseline and pending/before-after save images are intact.",
     "retained_interrupted_attempt": "The first fixed GUI process reached its private20min timeout before final save-close. No successful close claim for that process; the fresh second GUI process exits0 with independently verified new output.",
     "remaining": [
-      "Real Acrobat edit/save followed by further native changes from these actual GUI outputs",
       "Remaining UI/action/class/spell/resource/import and per-character release gates"
     ],
-    "full_mpmb_compatibility": false
+    "full_mpmb_compatibility": false,
+    "reader_interop": "output/testing/reader-pending-edits-1794239994510561311/interop.json",
+    "retained_failed_reader_verifier": "output/testing/reader-pending-edits-1794239304410062380/interop.json",
+    "reader_scope": "All three actual native GUI saves load in separate real Reader processes; genuine keyboard Strength16/mod3 edits match all selected fields and64 resource values; Reader save/close followed by three fresh native restores to original18/20 and changed saves. Complete imported payloads and original document scripts preserved. Canonical MPMB markup is checked separately from formatted rich AP; Fighter1 labels visibly present. Raw whole-canonical differences retained: CurrentEvals.Stringified differs in each case. No exact whole-PDF, console-clean, generic rich-editor or full class claim."
   }
 }

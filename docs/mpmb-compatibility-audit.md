@@ -1,5 +1,13 @@
 # MPMB compatibility audit — 2026-10-26
 
+## 2024 pending-edit save/close milestone — 2026-11-10
+
+Bounded milestone COMPLETE: real Reader report `output/testing/reader-pending-edits-1794239994510561311/interop.json` passes all three actual native GUI outputs on runtime ef918c90172190a7608cc4fea2626b0492dcda3d2f8b32e194c12041c30de70c. Each cold Reader process retains Name/class/features/resources, accepts actual keyboard Strength16/mod3, saves and terminates. Each resulting PDF then cold-loads natively and accepts another original-action Strength restoration and changed save. Independent canonical, widgets, visible plain AP, formatted Fighter1 feature labels, complete imported payloads and original scripts pass. Whole canonical differences are retained explicitly: CurrentEvals.Stringified differs in all three cases. This does not qualify full class workflows, generic rich editing or pixel/font equality.
+
+The prior Reader pilot1794239304410062380 remains FAILED: its verifier incorrectly compared canonical MPMB markup literally to formatted AP. The new full run checks canonical rich values exactly and formatted visible labels separately. No old failed report was relabeled. reader-ascii-input.py permits the observed owned AVPageView Document provider, while retaining foreground/ownership checks, actual Tab commit and independent exact named-field read; a provider role alone is insufficient.
+
+2024 remains NOT ready for general table use. No new2014 feature runs. Fresh local reference startup/preflight/readiness and a current-runtime eight-state Berserker rerun are running in persistent inhibited tmux mpmb-2024-resumed, orchestration output/testing/2024-qualification-resumed-1794287234543694776. The former tmux server was absent after host restart; do not infer a live job from older logs. Goal remains ACTIVE. Cloud is still unqualified after its last failed Ashnar readiness; same document retention/closure passed in remote reference-native-retention-1794237893176879108. No competing cloud GUI suite has been launched.
+
 ## Bonus maneuver/resource workflow — 2026-11-08
 
 Superior Technique now has13 matching Native/Reader checkpoints, including genuine Disarming Attack/Riposte choices, die spending/reset, reaction/notes and level-based removal/re-selection. Both-origin changed native persistence adds16 states;26 saved snapshots prove visible note/reaction text and removal. This is bounded milestone3r progress, not completion: direct Native-to-Reader changed saves/progression and final Native edits remain required, along with broader class/table coverage. No source PDF script repair was added.

@@ -10,7 +10,11 @@ def commit(c,path,field,value,*,cycle_focus=False):
     focused=c.script('focus',path=path,field=field)
     cycle=c.command('keys',keys='{TAB}+{TAB}') if cycle_focus else None
     observed=c.command('inspect_focused')
-    assert observed.get('in_reader') and observed.get('foreground_class')=='AcrobatSDIWindow' and observed.get('type') in ('ControlType.Edit','ControlType.ComboBox','ControlType.Pane'), ('Requested PDF edit is not the observed editable control',field,observed)
+    # Reader can expose the active PDF text caret only as its AVPageView
+    # Document provider. The view role alone cannot identify the focused field;
+    # the independent exact field read after the actual Tab commit is required.
+    page_view=(observed.get('type')=='ControlType.Document' and observed.get('class')=='AVL_AVView' and observed.get('name')=='AVPageView' and observed.get('native_window_handle',0) and len(observed.get('rect',[]))==4 and observed['rect'][2]>0 and observed['rect'][3]>0)
+    assert observed.get('in_reader') and observed.get('foreground_class')=='AcrobatSDIWindow' and (observed.get('type') in ('ControlType.Edit','ControlType.ComboBox','ControlType.Pane') or page_view), ('Requested PDF edit is not the observed editable control',field,observed)
     keys='^a'+(escaped if value else '{BACKSPACE}')
     sent=c.command('keys',keys=keys)
     pending=c.command('inspect_focused')
