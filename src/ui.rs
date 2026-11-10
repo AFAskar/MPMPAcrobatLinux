@@ -26,6 +26,26 @@ fn activation_input(events: &[egui::Event], rect: egui::Rect) -> Option<(egui::P
     })
 }
 
+fn page_widget_hit(widgets: &[Value], x: f32, y: f32) -> Option<Value> {
+    widgets
+        .iter()
+        .rev()
+        .find(|widget| {
+            // MPMB uses large read-only push buttons for page artwork. They
+            // remain visible, but must not intercept the editable fields drawn
+            // over them (for example the Constitution score).
+            if widget["type"] == "button" && widget["readonly"] == true {
+                return false;
+            }
+            let rect = &widget["rect"];
+            x >= rect[0].as_f64().unwrap_or(0.) as f32
+                && x <= rect[2].as_f64().unwrap_or(0.) as f32
+                && y >= rect[1].as_f64().unwrap_or(0.) as f32
+                && y <= rect[3].as_f64().unwrap_or(0.) as f32
+        })
+        .cloned()
+}
+
 pub fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("--dialog") {
@@ -818,16 +838,7 @@ impl eframe::App for Reader {
                                     .eval(&format!("__host.pageWidgets({})", self.page))?;
                                 Ok(widgets
                                     .as_array()
-                                    .and_then(|widgets| {
-                                        widgets.iter().rev().find(|w| {
-                                            let r = &w["rect"];
-                                            x >= r[0].as_f64().unwrap_or(0.) as f32
-                                                && x <= r[2].as_f64().unwrap_or(0.) as f32
-                                                && y >= r[1].as_f64().unwrap_or(0.) as f32
-                                                && y <= r[3].as_f64().unwrap_or(0.) as f32
-                                        })
-                                    })
-                                    .cloned())
+                                    .and_then(|widgets| page_widget_hit(widgets, x, y)))
                             })();
                             match hit {
                                 Ok(Some(w)) => {
@@ -1362,6 +1373,36 @@ pub fn alert(value: &Value) -> Result<Value> {
 #[cfg(test)]
 mod dialog_tests {
     use super::*;
+
+    #[test]
+    fn page_artwork_does_not_intercept_the_editable_score_beneath_it() {
+        let widgets = vec![
+            json!({"name":"Con","type":"text","readonly":false,"rect":[40,440,66,458]}),
+            json!({"name":"Image.calc_boxes.CSfront","type":"button","readonly":true,"rect":[30,24,566,668]}),
+        ];
+        assert_eq!(page_widget_hit(&widgets, 53., 449.).unwrap()["name"], "Con");
+        assert_eq!(page_widget_hit(&widgets, 100., 100.), None);
+        assert_eq!(page_widget_hit(&widgets, 600., 700.), None);
+    }
+
+    #[test]
+    fn active_buttons_and_readonly_text_keep_their_page_hit_targets() {
+        let mut widgets = vec![
+            json!({"name":"Con","type":"text","readonly":false,"rect":[40,440,66,458]}),
+            json!({"name":"Action","type":"button","readonly":false,"rect":[40,440,66,458]}),
+        ];
+        assert_eq!(
+            page_widget_hit(&widgets, 53., 449.).unwrap()["name"],
+            "Action"
+        );
+        widgets[1]["readonly"] = json!(true);
+        assert_eq!(page_widget_hit(&widgets, 53., 449.).unwrap()["name"], "Con");
+        widgets[1]["type"] = json!("text");
+        assert_eq!(
+            page_widget_hit(&widgets, 53., 449.).unwrap()["name"],
+            "Action"
+        );
+    }
 
     fn alert_dialog(kind: Option<i64>) -> Dialog {
         Dialog {

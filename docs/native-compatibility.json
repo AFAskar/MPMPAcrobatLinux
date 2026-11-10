@@ -3064,5 +3064,25 @@
     "reader_interop": "output/testing/reader-pending-edits-1794239994510561311/interop.json",
     "retained_failed_reader_verifier": "output/testing/reader-pending-edits-1794239304410062380/interop.json",
     "reader_scope": "All three actual native GUI saves load in separate real Reader processes; genuine keyboard Strength16/mod3 edits match all selected fields and64 resource values; Reader save/close followed by three fresh native restores to original18/20 and changed saves. Complete imported payloads and original document scripts preserved. Canonical MPMB markup is checked separately from formatted rich AP; Fighter1 labels visibly present. Raw whole-canonical differences retained: CurrentEvals.Stringified differs in each case. No exact whole-PDF, console-clean, generic rich-editor or full class claim."
+  },
+  "readonly_artwork_page_hits_2024": {
+    "status": "Implemented and native-qualified candidate; actual Reader consumption/promotion pending",
+    "milestone": "2024 UI hit-test repair INCOMPLETE pending mixed-engine consumption",
+    "candidate_binary_sha256": "5ec7df0977ff902623b949926ba9e0cffc0309d0b31367b1a9e2e309479a201c",
+    "frozen_default_binary_sha256": "ef918c90172190a7608cc4fea2626b0492dcda3d2f8b32e194c12041c30de70c",
+    "build": "output/testing/readonly-hit-build-1794291246810903898/qualification.json",
+    "rust_tests": 156,
+    "acceptance": "output/testing/native-acceptance-1794293156037910732/acceptance.json",
+    "negative": "output/testing/native-hp-save-ui-1794290242340797356/page-hit-negative.json",
+    "actual_gui_save": "output/testing/native-hp-hit-fixed-ui-1794291920083016100/hp-save.json",
+    "changed_native_reopens": "output/testing/candidate-hp-gui-reopen-1794295081750014771/reopen.json",
+    "behavior": "Skip read-only push buttons when choosing a page hit, retaining visible artwork and the existing eligible widget order. Actual Con click previously selected Image.calc_boxes.CSfront; candidate selects Con and saves pending18 via original user-edit/Blur to HP102 with Tough, current/temp/HD/resources/feat retained. Active buttons and readonly text hit targets retain prior behavior. No form-state duplication or original PDF/script change.",
+    "scope": "Two hit-target unit controls, actual owned/focused Xvfb input, canonical/widgets/AP/scripts, settled GUI values and two fresh changed native saves: Con20 HP111 then cold Con16 HP93. Native no longer targets the decoration at the tested Con score; full page/annotation ordering/readonly API/desktop/class coverage is not established.",
+    "artifact_limits": "First synthetic click before client focus settled did not execute a hit and is not counted. Immediate post-save shot predates rerender; saved-con18-settled.png shows updated18/102. Private20min deadline later SIGTERMed the GUI(-15); no successful native close claim from it. Original input hash preserved.",
+    "remaining": [
+      "Reader edit/save and further candidate native changes from actual GUI output",
+      "Promote candidate only after qualification; default target/debug is still ef918c",
+      "Broader widget/page/class/release gates"
+    ]
   }
 }
