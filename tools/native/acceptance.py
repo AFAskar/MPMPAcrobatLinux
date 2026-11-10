@@ -9,10 +9,11 @@ from verify import inspect,script_hashes
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--fixture', choices=['2014','2024'], action='append', help='Run only this ruleset; repeat to select both')
+    parser.add_argument('--binary', type=Path, default=ROOT/'target/debug/mpmb-reader', help='Qualify an isolated build without replacing a running reference binary')
     args=parser.parse_args()
     selected=args.fixture or ['2014','2024']
     folder=ROOT/'output/testing'/('native-acceptance-'+str(time.time_ns()));folder.mkdir(parents=True)
-    binary=ROOT/'target/debug/mpmb-reader';report={'passed':False,'selected_fixtures':selected,'cases':[],'directory':str(folder)}
+    binary=args.binary.resolve();binary_hash=hashlib.sha256(binary.read_bytes()).hexdigest();report={'passed':False,'selected_fixtures':selected,'binary':str(binary),'binary_sha256':binary_hash,'cases':[],'directory':str(folder)}
     def run(pdf,scenario,label):
         spec=folder/(label+'-scenario.json');evidence=folder/(label+'-report.json');log=folder/(label+'.log')
         spec.write_text(json.dumps(scenario))
@@ -21,7 +22,9 @@ def main():
             proc=subprocess.run([str(binary),str(pdf),'--probe',str(spec),str(evidence)],cwd=ROOT,stdout=out,stderr=out,timeout=300)
         result=json.loads(evidence.read_text()) if evidence.exists() else {'error':'No probe report; inspect '+str(log)}
         assert proc.returncode==0,(label,result)
+        assert result['passed'] is True,result.get('error')
         assert not result['diagnostics']['errors'],result['diagnostics']
+        assert not result['diagnostics']['console']['messages'],result['diagnostics']['console']
         return {'probe':str(evidence),'seconds':round(time.monotonic()-started,3),'gaps':result['diagnostics']['gaps']}
     try:
         for rule in selected:
@@ -42,6 +45,7 @@ def main():
             subprocess.run(['pdftoppm','-f','1','-singlefile','-scale-to','1100','-png',str(output),str(folder/(rule+'-poppler'))],check=True,stdout=subprocess.DEVNULL,stderr=(folder/(rule+'-poppler.log')).open('w'),timeout=60)
             assert hashlib.sha256(pdf.read_bytes()).hexdigest()==item['sha256']
             print(rule+' original scripts, class selection, calculations, save, native reopen and independent checks PASS',flush=True)
+        assert hashlib.sha256(binary.read_bytes()).hexdigest()==binary_hash,'Runtime binary changed during acceptance'
         report['passed']=True
     except Exception as e:
         report['error']=str(e);raise
