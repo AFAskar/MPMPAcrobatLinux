@@ -2974,9 +2974,9 @@
     "current_native_baseline": "output/testing/native-acceptance-1794236159948346034/acceptance.json",
     "baseline_scope": "2024-only original class-dialog Fighter1, Strength/proficiency calculations, native save/fresh reopen, independent canonical/widgets/AP/scripts and native/Poppler rendering. Does not establish other classes or full table use.",
     "binary_sha256": "ef918c90172190a7608cc4fea2626b0492dcda3d2f8b32e194c12041c30de70c",
-    "native_worker_limits": "MemoryMax2GiB, CPUQuota100%; one worker, no Cargo build",
-    "reader_qualification": "Local readiness1794229401 PASSED24 and preflight passed; queued2014 feature profile canceled. Cloud remains unqualified after clipboard/ASCII-focus transport failures.",
-    "local_reader_readiness": "output/testing/readiness-1794229401.json",
+    "native_worker_limits": "Current structural corpus MemoryMax2GiB/CPUQuota100%; focused native investigations1.5GiB/one CPU. Local measured available memory remained above5.3GiB; no Cargo build. Cloud retains one Reader controller and16GiB guest on33GiB host.",
+    "reader_qualification": "Fresh local preflight29/readiness24 PASS after host restart. Cloud2024-scoped readiness1794287396 FAILED at wild-shape saved-document close; no cloud oracle or Swords reference pass.",
+    "local_reader_readiness": "output/testing/readiness-1794287413.json",
     "structural_audit": {
       "report": "output/testing/native-subclasses-1794230888084509591/subclasses.json",
       "passed": false,
@@ -2991,19 +2991,41 @@
       "binary_sha256": "5381827624ebd1b602f762e654a40b1393247e4cc9f0fdd1e621f65b90cd9199"
     },
     "native_berserker_resources": {
-      "report": "output/testing/native-barbarian-2024-resources-1794231808286232131/resources.json",
+      "report": "output/testing/native-barbarian-2024-resources-1794288806793684901/resources.json",
       "passed": true,
       "states": 8,
       "runtimes": 2,
       "scope": "2024 Rage used3\u2192short rest2\u2192long restempty; used2 saved/cold reopened\u2192short rest1\u2192long restempty. Original field/rest actions, AC15/Greataxe1d12+4, full captured resources, checksum/sentinel, original scripts plus disclosed startup observer. Positive native console sentinel; Reader/mixed changes pending.",
-      "instrumentation": "output/testing/workflow-startup-input-1794231705371903017/input.json",
-      "reader_status": "Reader1794232892593105193 FAILED after7 matched states/positive live console checks: host suspend caused expired command, refused replay; same document retained/closed. Not an8-state workflow pass."
+      "instrumentation": "output/testing/workflow-startup-input-1794232675230927079/input.json",
+      "reader_status": "Fresh current8-state Reader comparison running in reader-barbarian-2024-resources1794289022624548433, using fresh local readiness1794287413. Prior7-state failed report stays failed. Native-to-Reader and final changed native chains are queued only after an actual full PASS.",
+      "historical_native": "output/testing/native-barbarian-2024-resources-1794231808286232131/resources.json",
+      "binary_sha256": "ef918c90172190a7608cc4fea2626b0492dcda3d2f8b32e194c12041c30de70c"
     },
     "other_structural_classes": {
       "report": "output/testing/native-subclasses-1794231567267361412/subclasses.json",
       "passed": true,
       "cases": 87,
       "scope": "Explicitly excludes Bard/Barbarian; plus14 prior clean cases gives101 ordinary pairs on frozen154, not current UI-repair binary. Swords failed, two Bard pairs and explicit sidekicks remain. Default feature replies do not qualify complete choices."
+    },
+    "current_barbarian_bard_structural": {
+      "report": "output/testing/native-subclasses-1794287805502750834/subclasses.json",
+      "passed": true,
+      "cases": 16,
+      "binary_sha256": "ef918c90172190a7608cc4fea2626b0492dcda3d2f8b32e194c12041c30de70c",
+      "scope": "Ten Barbarian and six Bard pairs via original all-source/class/subclass dialogs, structural progression and fresh native reopen with clean error/console streams. Swords explicitly excluded as known warning failure; feature choices/spells/resources/Reader remain separate. Remaining87 current-runtime cases are running in native-subclasses1794288954706275056."
+    },
+    "swords_investigation": {
+      "status": "Native warning attribution/mechanics evidence only; real Reader pending and class gate incomplete",
+      "explicit_tools": "output/testing/2024-swords-explicit-tools-1794288221588902710/observation.json",
+      "menu": "output/testing/2024-swords-menu-discovery-1794288531184638839/probe.json",
+      "dueling_creation": "output/testing/2024-swords-dueling-1794288622279349623/probe.json",
+      "changed_cold_saves": "output/testing/2024-swords-changed-snapshots-qualified-1794288825479284268/qualification.json",
+      "scope": "Explicit Flute/Lute/Drum; initial/unselected Swords emits8 original metadata warnings, menu offers only valid Dueling/Two-Weapon Fighting. Actual Dueling menu choice changes Rapier damage4\u21926 and leaves Longbow4. Two further fresh runtimes save Longbow4 then cold restore/save Rapier6 with visible AP/canonical/resources/scripts checked and zero console messages after valid style is selected. Not a clean initial class workflow or Reader/full-class proof.",
+      "retained_failed_expectations": [
+        "2024-swords-dueling-reopen1794288735441786467",
+        "2024-swords-changed-snapshots1794288783035222830"
+      ],
+      "failure_correction": "Those pilot verifiers wrongly required8 warnings on selected-Dueling cold load; actual original-action probes passed with zero messages. Raw failures remain failed; corrected two-runtime proof ran anew."
     }
   },
   "pending_desktop_edits_2024": {
