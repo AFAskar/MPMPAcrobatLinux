@@ -1,5 +1,16 @@
 # Development handoff
 
+## Current native build promoted; bounded UI milestone COMPLETE — 2026-11-10
+
+Default target/debug/mpmb-reader is now exact tested156 binary5ec7df0977ff902623b949926ba9e0cffc0309d0b31367b1a9e2e309479a201c. Promotion1794300569874728751/promotion.json preserves the previous ef918c executable, verifies candidate hash/source/UI hash and required concrete evidence, then atomically replaces the default. No new Cargo build or Rust changes. Code remains1deb74c; original fixtures and pinned reference unchanged.
+
+Actual repaired GUI save native-1794291948804.pdf (Con18/HP102) now PASSES real Reader consumption in candidate-hp-reader1794298717755112252/reader.json: genuine Con20→HP111, clean process termination, byte-identical cold snapshot/reopen, genuine Con16→HP93 and clean termination. Current30/temp5/HD-used2/Tough/class/resources and original scripts retained, canonical/widgets/AP independently checked. Both actual Reader saved outputs then PASS four fresh changed native saves in candidate-hp-mixed-native1794299532026655521/reopen.json:18/102→cold20/111 for each origin, strict errors/console and independent canonical/AP/scripts/input hashes. This completes the bounded page-hit/pending-save interoperability milestone, not all UI/HP modes/feat/class behavior or2024 table readiness. Prior GUI20min termination is still not a successful native close qualification.
+
+Candidate selected Bard spells, five explicit sidekicks,16 structural pairs and eight Rage/rest states pass. Eight new focused candidate counter checks1794300259533384997 include blank AP clearing; this is separate from the historical27-state mixed chain. Remaining87 structural suite native-subclasses1794297110538482321 is still running. Do not infer completion from its completed rows.
+
+Local Reader now belongs to fresh Swords warning profile reader-swords-2024-warning1794300539295614298, wrapper swords-explicit-manifest1794300536050921682; inspect terminal result before another suite. Earlier follower1794300346729343941 failed before submission on a missing manifest path, with no Reader document opened. WIP public probe now takes explicit --instrumentation and validates its passed startup manifest/input hash. Warning attribution remains clean_workflow=false and is not full class qualification. Cloud corrected scoped suite1794299472247508285 remains active/unqualified.2024 NOT ready;2014 deferred; overall goal ACTIVE.
+
+
 ## Exact 2024 reference plan qualified — 2026-11-10
 
 Current local preflight PASS30 and output/testing/readiness-1794299454.json PASS12, complete exact2024 sequence and matching frozen harness fingerprint. Six focused producer/consumer tests pass, including full default24 planning, missing/duplicate/reordered cases, non-boolean successes and field-mapping rejection. `tools/acrobat/run readiness --fixture 2024` now preserves a separate case plan; unscoped default remains all three fixtures/24. New suites reject a pre-existing visible PDF before opening their disposable copy. Scoped2024 reference qualification is environment-only; consumers requiring24 continue to reject12. No new2014 feature workflow was run.
