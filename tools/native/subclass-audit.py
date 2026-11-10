@@ -47,11 +47,12 @@ def main():
     parser.add_argument('--skip-class-key', action='append', help='Explicit separate-profile classes; recorded as unexercised in this suite')
     parser.add_argument('--limit', type=int)
     parser.add_argument('--subclass-key', action='append')
+    parser.add_argument('--binary', type=Path, default=ROOT / 'target/debug/mpmb-reader', help='Copy and qualify this isolated runtime build')
     args = parser.parse_args()
     folder = ROOT / 'output/testing' / ('native-subclasses-' + str(time.time_ns())); folder.mkdir(parents=True)
     report = {'passed': False, 'full_mpmb_compatibility': False, 'scope': __doc__, 'fixtures': []}
     binary = folder / 'mpmb-reader'
-    shutil.copy2(ROOT / 'target/debug/mpmb-reader', binary)
+    shutil.copy2(args.binary.resolve(), binary)
     report['binary_sha256'] = hashlib.sha256(binary.read_bytes()).hexdigest()
     print(folder, flush=True)
 

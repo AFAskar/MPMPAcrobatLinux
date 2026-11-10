@@ -15,10 +15,10 @@ def module(name,file):
  s=importlib.util.spec_from_file_location(name,ROOT/'tools/native'/file);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 
 def main():
- p=argparse.ArgumentParser(description=__doc__);p.add_argument('--input',type=Path,required=True);p.add_argument('--instrumentation',type=Path,required=True);a=p.parse_args();source=a.input.resolve();instrumentation=json.loads(a.instrumentation.read_text());assert instrumentation['passed'] and Path(instrumentation['input'])==source and hashlib.sha256(source.read_bytes()).hexdigest()==instrumentation['input_sha256']
+ p=argparse.ArgumentParser(description=__doc__);p.add_argument('--input',type=Path,required=True);p.add_argument('--instrumentation',type=Path,required=True);p.add_argument('--binary',type=Path,default=ROOT/'target/debug/mpmb-reader');a=p.parse_args();source=a.input.resolve();instrumentation=json.loads(a.instrumentation.read_text());assert instrumentation['passed'] and Path(instrumentation['input'])==source and hashlib.sha256(source.read_bytes()).hexdigest()==instrumentation['input_sha256']
  folder=ROOT/'output/testing'/('native-barbarian-2024-resources-'+str(time.time_ns()));folder.mkdir();print(folder,flush=True)
  profile=module('profile','fighter-styles.py');style=module('style','default-style-persistence.py');fields=module('fields','field-state-comparison.py')
- observer=(ROOT/'tools/native/barbarian-2024-observer.js').read_text();binary=folder/'mpmb-reader';shutil.copy2(ROOT/'target/debug/mpmb-reader',binary)
+ observer=(ROOT/'tools/native/barbarian-2024-observer.js').read_text();binary=folder/'mpmb-reader';shutil.copy2(a.binary.resolve(),binary)
  report={'passed':False,'scope':__doc__,'input':str(source),'input_sha256':hashlib.sha256(source.read_bytes()).hexdigest(),'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'observer_sha256':hashlib.sha256(observer.encode()).hexdigest(),'diagnostic_mode':'startup-script-timer','instrumentation':str(a.instrumentation.resolve()),'diagnostic_helper_sha256':hashlib.sha256(Path(diagnostics.__file__).read_bytes()).hexdigest(),'test_source_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),'phases':[],'full_class_coverage':False,'reader_qualified':False}
  def start():
   assert instrumentation['observer_sha256']==hashlib.sha256(observer.encode()).hexdigest()

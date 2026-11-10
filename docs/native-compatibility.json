@@ -3083,6 +3083,15 @@
       "Reader edit/save and further candidate native changes from actual GUI output",
       "Promote candidate only after qualification; default target/debug is still ef918c",
       "Broader widget/page/class/release gates"
-    ]
+    ],
+    "candidate_regression": {
+      "binary_sha256": "5ec7df0977ff902623b949926ba9e0cffc0309d0b31367b1a9e2e309479a201c",
+      "status": "partial; candidate not promoted; Reader GUI-output chain pending",
+      "structural_16": "output/testing/native-subclasses-1794297110445001487/subclasses.json",
+      "explicit_sidekicks_5": "output/testing/native-sidekicks-1794298256418479069/sidekicks.json",
+      "berserker_resource_8_states": "output/testing/native-barbarian-2024-resources-1794299305063301079/resources.json",
+      "remaining_ordinary_87": "running: output/testing/native-subclasses-1794297110538482321/subclasses.json",
+      "limitations": "Default feature replies do not establish actual feature choices, all resources/spells or Reader parity. Swords initial warning case remains excluded and failed; no comprehensive table readiness."
+    }
   }
 }

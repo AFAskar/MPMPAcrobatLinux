@@ -17,8 +17,8 @@ PROFILES=[('sidekick-expert-tcoe','Expert (sidekick)',None,None),('sidekick-warr
 
 
 def main():
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--fixture',choices=['2014','2024','ashnar'],action='append');args=parser.parse_args()
-    folder=ROOT/'output/testing'/('native-sidekicks-'+str(time.time_ns()));folder.mkdir();binary=folder/'mpmb-reader';shutil.copy2(ROOT/'target/debug/mpmb-reader',binary)
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--fixture',choices=['2014','2024','ashnar'],action='append');parser.add_argument('--binary',type=Path,default=ROOT/'target/debug/mpmb-reader',help='Copy and qualify an isolated runtime build');args=parser.parse_args()
+    folder=ROOT/'output/testing'/('native-sidekicks-'+str(time.time_ns()));folder.mkdir();binary=folder/'mpmb-reader';shutil.copy2(args.binary.resolve(),binary)
     report={'passed':False,'scope':__doc__,'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'cases':[],'probe_qualifications':[],'full_mpmb_compatibility':False};print(folder,flush=True)
     def run(source,label,dialogs,alerts,steps):
         scenario,evidence=folder/(label+'-scenario.json'),folder/(label+'-report.json');scenario.write_text(json.dumps({'dialogs':dialogs,'alerts':alerts,'steps':steps}));env=os.environ.copy();env['MPMB_DIALOG_TRACE_DIR']=str(folder/(label+'-dialogs'))

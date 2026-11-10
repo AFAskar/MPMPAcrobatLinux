@@ -1,5 +1,10 @@
 # MPMB compatibility audit — 2026-10-26
 
+## Isolated 2024 candidate regression — 2026-11-10
+
+The subclass, explicit-sidekick and Berserker-resource producers now accept --binary and copy/hash the chosen executable into each unique report directory. Default target/debug stays frozen ef918c; no rebuild or promotion. Candidate5ec7df PASS:16 structural Barbarian/Bard pairs (native-subclasses1794297110445001487), five explicit sidekicks/35 progression checkpoints/five cold reopens (native-sidekicks1794298256418479069), eight Berserker Rage/rest/persistence states across two runtimes (native-barbarian-2024-resources1794299305063301079). Same-candidate remaining87 structural pairs are still running in native-subclasses1794297110538482321. Default feature replies, excluded Swords initial warnings, genuine choices/spells/resources beyond bounded profiles and Reader parity remain incomplete. The first Rage launch failed before execution because no extensionless wrapper exists; rage.log preserves it, rage-retry.log uses the actual Python producer. No output was overwritten.
+
+
 ## Readonly artwork hit repair — native candidate qualified, Reader pending
 
 Candidate5ec7df0977ff902623b949926ba9e0cffc0309d0b31367b1a9e2e309479a201c fixes a genuine page interaction failure: visible Con score clicks selected readonly Image.calc_boxes.CSfront. src/ui.rs now skips readonly push buttons during hit selection while retaining artwork and active buttons/readonly text behavior.156 Rust tests, locked build, fmt and strict all-targets Clippy PASS in readonly-hit-build1794291246810903898;2024 acceptance1794293156037910732 PASS. Reflinked build target has separate inodes; frozen default target/debug remains ef918c and was hash-checked after build. tools/native/acceptance --binary enables this isolation and records/checks the selected binary hash plus explicit probe success/empty errors/console.
