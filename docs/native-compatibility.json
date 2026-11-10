@@ -2997,9 +2997,21 @@
       "runtimes": 2,
       "scope": "2024 Rage used3\u2192short rest2\u2192long restempty; used2 saved/cold reopened\u2192short rest1\u2192long restempty. Original field/rest actions, AC15/Greataxe1d12+4, full captured resources, checksum/sentinel, original scripts plus disclosed startup observer. Positive native console sentinel; Reader/mixed changes pending.",
       "instrumentation": "output/testing/workflow-startup-input-1794232675230927079/input.json",
-      "reader_status": "Fresh current8-state Reader comparison running in reader-barbarian-2024-resources1794289022624548433, using fresh local readiness1794287413. Prior7-state failed report stays failed. Native-to-Reader and final changed native chains are queued only after an actual full PASS.",
+      "reader_status": "PASS8 full states/2 Reader processes plus3 states from actual native spent save in a third Reader process;11 positive live console checks. Four further fresh native runtimes/8 changed states PASS.",
       "historical_native": "output/testing/native-barbarian-2024-resources-1794231808286232131/resources.json",
-      "binary_sha256": "ef918c90172190a7608cc4fea2626b0492dcda3d2f8b32e194c12041c30de70c"
+      "binary_sha256": "ef918c90172190a7608cc4fea2626b0492dcda3d2f8b32e194c12041c30de70c",
+      "milestone": "2024 C1 Berserker3 resource cycle COMPLETE; broader class/table goal ACTIVE",
+      "reader": "output/testing/reader-barbarian-2024-resources-1794289022624548433/resources.json",
+      "native_to_reader": "output/testing/reader-barbarian-2024-resources-1794290634832179977/resources.json",
+      "final_native": "output/testing/barbarian-2024-final-native-1794291118301144777/reopen.json",
+      "visible": "output/testing/barbarian-2024-visible-1794293926372635392/visible.json",
+      "comparison": "Exact complete captured fields/choices/resources/reactions, calculation flags and subclass metadata; canonical/widgets/AP/scripts and ASCII checksum/real Unicode sentinel. JSON object-member order is ignored; arrays and all captured properties retained. No exact raw PDF type or pixel/font claim.",
+      "visibility_scope": "All27 Native/Reader/mixed/final states independently inspect64 resources and visible used-counter text. Blank counter requires no visible stale text; absent AP or whitespace-only text is allowed, matching actual Reader. Damaged new native copy keeps /V empty but injects actual spent3 AP; generic inspector passes its empty exemption and the focused verifier correctly rejects stale3. Original Native/Reader outputs unchanged.",
+      "remaining": [
+        "Other levels/subclasses/classes and genuine feature choices/progression/removal/reselection",
+        "Rage-active/Frenzy combat effects and all HP/healing/rest interactions",
+        "Complete spells/imports/generated pages/multiclass/table release gates"
+      ]
     },
     "other_structural_classes": {
       "report": "output/testing/native-subclasses-1794231567267361412/subclasses.json",
