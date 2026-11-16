@@ -2807,7 +2807,16 @@
     "native": "output/testing/script-observation-comparison-1793681831603083164/comparison.json",
     "observed": "Ten listed style names; only Dueling and Two-Weapon Fighting objects; include filter contains those two; Swords excluded in measured default source profile",
     "transport": "ASCII-escaped JSON with real Unicode sentinel, Reader UTF16 summary and independent saved PDF/scripts check",
-    "limitation": "Does not qualify warnings during original class application or genuine Swords choices. Do not enable missing forbidden styles or silently patch original source."
+    "limitation": "Original warning application now qualified separately; metadata parity does not qualify actual fighting-style choices. Do not enable forbidden missing styles or silently patch original source.",
+    "original_warning_workflow": {
+      "status": "bounded native/Reader original warning parity qualified; clean_workflow=false",
+      "reader": "output/testing/reader-swords-2024-warning-1794300539295614298/observation.json",
+      "native": "output/testing/2024-swords-explicit-tools-1794288221588902710/observation.json",
+      "instrumentation": "output/testing/workflow-startup-input-1794288222186834155/input.json",
+      "scope": "Five original source-selection buttons, original ApplyClasses parser, six genuine Reader ability edits, three explicit offered Bard tools. Exact saved captured state and eight original displayError/console warnings match; positive console sentinel, timer/checksum, full saved fields and original scripts independently checked. Reader process terminated.",
+      "normalization": "Decoded JSON member order ignored, every member and array order retained; only console line endings normalized.",
+      "remaining": "Class/subclass dropdown, actual Dueling/Two-Weapon choice, conditional combat effects and changed mixed reopens remain separate. Initial warning profile is never a clean class pass."
+    }
   },
   "fighter_styles_2014": {
     "status": "bounded original choices and changed native/Reader/cold persistence qualified",

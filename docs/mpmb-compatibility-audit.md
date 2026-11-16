@@ -1,5 +1,12 @@
 # MPMB compatibility audit — 2026-10-26
 
+## 2024 Swords original warnings qualified — 2026-11-16
+
+Recovered terminal report reader-swords-2024-warning1794300539295614298/observation.json PASS for its explicitly non-clean warning-attribution scope. Original all-source selection used five offered source buttons; ApplyClasses parsed Swords3, six real ability edits and three offered Bard tool edits chose Flute/Lute/Drum. Native and actual Reader captured complete selected state and the same eight original displayError(false,warning)/console warnings, with positive console sentinel, retained document timer acknowledgement, ASCII Unicode carrier/checksum and independent saved values/scripts. Reader's actual process terminated. Decoded JSON object-member order is ignored while all members/array order remain strict; console normalization is line endings only. No original script repair or warning suppression. Previous failed warning/recovery reports remain failed. Missing-manifest follower1794300346729343941 failed before opening Reader; explicit --instrumentation corrected the lookup.
+
+Public reader-swords-2024-warning.py is now reproducible with --input workflow-startup-input1794288222186834155/instrumented.pdf --native 2024-swords-explicit-tools1794288221588902710 --instrumentation workflow-startup-input1794288222186834155/input.json --readiness <current qualified2024 report> (paths under output/testing). This is not a clean Swords class pass, actual fighting-style choice, class dropdown or full combat/persistence qualification; those remain required.2024 and the overall goal remain incomplete.
+
+
 ## Current native build promoted; bounded UI milestone COMPLETE — 2026-11-10
 
 Default target/debug/mpmb-reader is now exact tested156 binary5ec7df0977ff902623b949926ba9e0cffc0309d0b31367b1a9e2e309479a201c. Promotion1794300569874728751/promotion.json preserves the previous ef918c executable, verifies candidate hash/source/UI hash and required concrete evidence, then atomically replaces the default. No new Cargo build or Rust changes. Code remains1deb74c; original fixtures and pinned reference unchanged.
