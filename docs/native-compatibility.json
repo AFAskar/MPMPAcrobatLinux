@@ -3365,5 +3365,28 @@
       "console_reads_requiring_retry": 1
     },
     "scope": "Full captured states match native expected data; actual retained timer counts, saved ASCII Unicode/checksum/canonical/resource AP/script checks. One bounded read retry succeeds with failures retained; no replayed keyboard or mutations. Earlier failed profiles stay failed. No complete Bard or three-fixture readiness claim."
+  },
+  "2024_fighter_resource_progression": {
+    "status": "Native25 PASS; actual Reader qualification active; bounded resource milestone INCOMPLETE",
+    "native": "output/testing/native-fighter-2024-resources-1794849255054466315/resources.json",
+    "candidate_sha256": "78661940b2bba60f8394bf337f935a468a0d2ee7b1665a96c78fd08202c47e38",
+    "states": 25,
+    "fresh_runtimes": 3,
+    "scope": "Champion class selection input from original source/class dialogs; original ApplyClasses and short/long rests, levels1/2/3/4/5/9/10/13/17/20, spend/recovery, partial Second Wind recovery and explicit zero on repeated rest, resource removal/reselection and cold changed saves. Exact canonical/resources/AP/scripts, caught errors, positive console, retained timer/checksum/Unicode observations. Native spending is programmatic Field.value; Reader profile requires actual verified typing.",
+    "reader_supervisor": "output/testing/fighter-2024-current-1794849950/reader-supervisor.json",
+    "limits": [
+      "Not complete Fighter/Champion or every subclass",
+      "Fighting style, mastery, feats, automatic HP and combat unqualified in this profile",
+      "Original function-call class progression is separate from actual Reader class-dropdown qualification"
+    ],
+    "reproduce": [
+      "tools/native/prepare-workflow-observer.py --input <original-Champion-state> --observer tools/native/fighter-2024-resource-observer.js",
+      "tools/native/fighter-2024-resources.py --input <instrumented.pdf> --instrumentation <input.json> --binary <sealed-binary>",
+      "tools/native/reader-fighter-2024-resources.py --native <native-resources.json> --readiness <fresh-2024-readiness.json>"
+    ],
+    "prior_failures": [
+      "Private original profile incorrectly expected Second Wind to retain2 used after short rest. Original sheet explicitly restores1; corrected expectation, no runtime patch. Failed raw profile retained.",
+      "Private broadened profile lacked13th valid Changes-dialog reply; caught control error retained; public16 offered OK replies complete25."
+    ]
   }
 }
