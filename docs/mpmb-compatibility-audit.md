@@ -729,3 +729,6 @@ Cloud native candidate passes160 tests/build/acceptance,103 ordinary structural 
 
 
 2026-11-16 bounded PDF-icon content correction: icon-annotation-validation1794849500 passes161 tests/build/strict Clippy and native-icon-import1794849146898821109 passes8 saved states. Existing selected-page normal widget AP is now flattened into imported icons, matching actual Reader page2 preview inclusion. Reader discovery1794847765435905783 retained/closed with explicit failed pilot/recovery; not a clean workflow pass. Other annotations/flags, UserUnit/OCG and cross-document icons remain open. See current handoff and compatibility JSON for raw proof/limits.
+
+
+2026-11-16 Champion bounded resource milestone completes native25/Reader25/further-native25 on786619. Original class/rest functions, actual Reader usage typing, partial Wind recovery down to explicit0, maxima at breakpoints, removal/reselection and cold changes pass.25 positive Reader console checks/three process closures;588 visible empty resource widgets per stage checked and actual2→1→0 crops reviewed. See2024_fighter_resource_progression in compatibility JSON for evidence/limits. This does not qualify all Fighter choices/subclasses, HP/combat or all character payloads. Monk native21 is a separate incomplete candidate; Body and Mind application remains untested.

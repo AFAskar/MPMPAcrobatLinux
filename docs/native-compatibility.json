@@ -3367,7 +3367,7 @@
     "scope": "Full captured states match native expected data; actual retained timer counts, saved ASCII Unicode/checksum/canonical/resource AP/script checks. One bounded read retry succeeds with failures retained; no replayed keyboard or mutations. Earlier failed profiles stay failed. No complete Bard or three-fixture readiness claim."
   },
   "2024_fighter_resource_progression": {
-    "status": "Native25 PASS; actual Reader qualification active; bounded resource milestone INCOMPLETE",
+    "status": "Bounded progression/spending/rest/mixed-persistence milestone COMPLETE; not full Fighter/Champion or2024 release",
     "native": "output/testing/native-fighter-2024-resources-1794849255054466315/resources.json",
     "candidate_sha256": "78661940b2bba60f8394bf337f935a468a0d2ee7b1665a96c78fd08202c47e38",
     "states": 25,
@@ -3377,7 +3377,8 @@
     "limits": [
       "Not complete Fighter/Champion or every subclass",
       "Fighting style, mastery, feats, automatic HP and combat unqualified in this profile",
-      "Original function-call class progression is separate from actual Reader class-dropdown qualification"
+      "Original function-call class progression is separate from actual Reader class-dropdown qualification",
+      "Full captured state equality covers enumerated resource fields and observer fields, not all character/import payloads."
     ],
     "reproduce": [
       "tools/native/prepare-workflow-observer.py --input <original-Champion-state> --observer tools/native/fighter-2024-resource-observer.js",
@@ -3387,7 +3388,20 @@
     "prior_failures": [
       "Private original profile incorrectly expected Second Wind to retain2 used after short rest. Original sheet explicitly restores1; corrected expectation, no runtime patch. Failed raw profile retained.",
       "Private broadened profile lacked13th valid Changes-dialog reply; caught control error retained; public16 offered OK replies complete25."
-    ]
+    ],
+    "reader": "output/testing/reader-fighter-2024-resources-1794850406158052057/resources.json",
+    "further_native": "output/testing/native-fighter-2024-resources-1794852350034226314/resources.json",
+    "mixed_state_comparison": "output/testing/fighter-2024-reader-clean-1794850500/further-native.json:all25 full captured states exactly equal to first native profile",
+    "counts": {
+      "native": 25,
+      "reader": 25,
+      "further_native": 25,
+      "reader_positive_live_console": 25,
+      "reader_process_terminations": 3
+    },
+    "empty_appearances": "output/testing/fighter-2024-reader-clean-1794850500/blank-three/blank-resource-appearances.json:588 visible empty resource widgets per engine independently checked, including removed labels/maxima/used/recovery; canonical values exact, blank AP permits whitespace/no appearance",
+    "visible": "output/testing/fighter-2024-reader-clean-1794850500/wind-renders/renders.json:Poppler nine crops visibly show actual Second Wind used2\u21921\u21920 in native/Reader/further-native. No whole-page/pixel equality claim",
+    "remaining": "Resource gate complete only for defined profile. Actual source/class dropdown parity, feats/ASIs/styles/mastery/HP/combat and subclass-specific features remain open."
   },
   "reference_startup_timer_barrier": {
     "status": "Bounded2024 environment milestone COMPLETE; no native release claim",
@@ -3398,5 +3412,12 @@
     "failed_prior": "output/testing/readiness-1794849549.json:welcome appeared during keyboard paste; exact failed document saved and closed in fighter-2024-current1794849950/readiness-cleanup.json. No mutation replay.",
     "invalidated_followup": "reader-fighter-2024-resources1794850232172128508 invalidated because an operator briefly added a host test under frozen tools/acrobat during its run. Test relocated outside frozen inputs, owned driver interrupted during local PDF parsing, same document retained/closed, raw passed=false and invalidated.json preserved. Count none of its checkpoints. Prior completed readiness remained valid.",
     "host_tests": "tools/native/test_reference_startup_readiness.py:4 meaningful host readiness controls; tools/acrobat/tests/startup-barrier.js per-document retention/actual callbacks and existing result-delivery regression pass."
+  },
+  "2024_monk_resource_candidate": {
+    "status": "Native21 PASS; Reader and mixed persistence pending; milestone INCOMPLETE",
+    "report": "output/testing/monk-2024-preparation-1794851400/resources.json",
+    "candidate_sha256": "78661940b2bba60f8394bf337f935a468a0d2ee7b1665a96c78fd08202c47e38",
+    "scope": "Shadow Monk Focus Points/Uncanny Metabolism maxima and separate rests, source-selected original subclass, unarmed attack die/to-hit and retained unarmored AC, levels1/2/3/5/10/11/15/17/20 plus removal/reselection and three fresh runtimes; original caught-error/positive-console/timer/Unicode/checksum/canonical/AP checks.",
+    "important_limit": "Initial structural input directly has18 ability fields. Level20 Body and Mind bonus remains pending, Dex/Wis stay18 and AC18. Explicit ability-dialog application/removal, initiative/Metabolism healing, spell choices, legal feat/ASI progression and actual Reader class dropdown are NOT qualified. Do not claim full Monk or automatic Body and Mind."
   }
 }
