@@ -3157,5 +3157,26 @@
     "limitations": "Real Reader, subsequent mixed edits, spell-slot conversion and other levels/subclasses/resources remain separate requirements. No desktop keyboard or complete HP claim.",
     "cloud_controller": "~/.cache/mpmb-reference/reader-1793688790884081293/output/testing/bard-resource-reference-1794810689091380375",
     "reader_tool_status": "WIP reader-bard-2024-resources.py not yet qualified or committed"
+  },
+  "2024_font_manual_slots": {
+    "status": "COMPLETE bounded manual slot/counter/rest/mixed persistence slice; broad Bard/2024 release INCOMPLETE",
+    "native": "output/testing/native-bard-font-slots-1794812254041731342/slots.json",
+    "reader": "output/testing/reader-bard-font-slots-1794813442315075670/slots.json",
+    "further_native": "output/testing/font-slots-final-native-1794815635553337790/reopen.json",
+    "selected_spell_generation": "output/testing/native-bard-spells-1794811643564424619/spells.json",
+    "renders": [
+      "output/testing/behavior-renders-1794813550892423727/visual-review.json",
+      "output/testing/font-interop-renders-1794815902919192668/visual-review.json"
+    ],
+    "counts": {
+      "native_states": 6,
+      "reader_states": 6,
+      "further_fresh_native_states": 5,
+      "reader_console_positive_checks": 6
+    },
+    "scope": "2024 Lore5 after actual9\u21924\u21925 progression: native explicit12 selected spells/generation/ability edits/regeneration, manual one-slot spending and used Inspiration3\u21922, SR clears Inspiration but retains ordinary slot, changed Reader save/cold reopen, LR clears both. Reader uses literal counter edits and observed owned Space activation; canonical/API/widget AS/on-AP/blank-counter/scripts/timer/Unicode checks and clean positive console capture pass. Two Reader process terminations.",
+    "payloads": "All five further native outputs retain complete stored imported/feature-choice/spell payload fields exactly; no import workflow or nonempty add-on qualification claim.",
+    "source_behavior": "Original Font advertises secondary resource SS1+; this is manual sheet bookkeeping, not an invented automatic conversion command.",
+    "remaining": "Real Reader selection/regeneration on this new progression input; other levels, higher-slot use, rests/HP modes, subclasses and all other classes remain separate. No full pixel/whole-page/keyboard-event API equality."
   }
 }

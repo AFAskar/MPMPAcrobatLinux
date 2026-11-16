@@ -1,5 +1,14 @@
 # MPMB compatibility audit — 2026-10-26
 
+## Bounded 2024 Font manual bookkeeping milestone COMPLETE — 2026-11-16
+
+Native-bard-spells1794811643564424619 PASS4 saved states/three strict probes on the actual Lore9→4→5 resource output:12 explicitly selected spells, generated seventh page, Charisma change/regeneration and cold restoration. Reader selection/regeneration on this particular new input is still separate.
+
+Native-bard-font-slots1794812254041731342 PASS6 states and reader-bard-font-slots1794813442315075670 PASS6 actual states: used Inspiration3, spend one first-level checkbox and reduce used to2, Short Rest clears Inspiration while retaining the slot, actual changed save/byte-identical cold Reader reopen, Long Rest clears both. Genuine owned counter typing and Space; six positive live console checks, retained actual timer counts4+2, ASCII Unicode/checksum, canonical/API/widget AS/distinct checked AP/blank-counter/original-script checks. Both actual Reader closures terminate processes. Five additional changed fresh native saves from both Reader outputs PASS in font-slots-final-native1794815635553337790, retaining complete stored imported/feature-choice/spell payloads exactly; no nonempty import workflow claim.
+
+All12 earlier and16 actual Reader/further-native crops reviewed: behavior-renders1794813550892423727 and font-interop-renders1794815902919192668 visual-review.json. Maximum5/used2 or blank and expected marked/unmarked slot are visible. Actual Reader also draws the rectangular cross over the printed circular background, so do not label this a native-only appearance failure. No pixel/whole-page equality claim. This completes only the defined manual bookkeeping/rest/persistence slice. Original SS1+ is a descriptive secondary resource; no automatic conversion API was invented. Full Bard progression, other levels/slots/choices/classes and2024 release remain incomplete.
+
+
 ## 2024 Bard resource native slice PASS; Reader running — 2026-11-16
 
 Native-bard-2024-resources1794300817582794666/resources.json PASS13 states/two runtimes on current156/5ec7df. Qualified Lore9 input: Inspiration maxima5→2→5 after original-action Cha20→14→20, spending/SR, spent save/cold reopen/LR; downlevel4 changes to d6/long-rest-only and preserves used3 through SR, LR clears; level5 d8/Font returns SR clearing. Every captured field/resource/reaction/feature choice, retained timer invocation count/Unicode ASCII carrier checksum, original scripts and independent canonical/AP values passes. Explicit blank usage checks reject stale visible text. Native strict qualifier exempts only the exactly asserted one positive observer console sentinel per runtime and records it; other console messages and original caught errors remain failures. This is native-only evidence, not a completed resource milestone, desktop key test or complete HP/class claim. Spell-slot conversion remains untested.
