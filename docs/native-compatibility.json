@@ -3145,5 +3145,17 @@
     "failed_prototype": "output/testing/readiness-1794298731.json",
     "prototype_failure": "Mutable expected-field mapping overwrote case plan; raw report remains failed, downstream operations correctly withheld. Fixed by independent plan and strict completion helper.",
     "scope": "Does not qualify full24/native table readiness; no further2014 feature qualification before2024 release gates."
+  },
+  "2024_bard_inspiration_resources": {
+    "status": "Native13-state profile PASS; real Reader comparison running; milestone INCOMPLETE",
+    "native": "output/testing/native-bard-2024-resources-1794300817582794666/resources.json",
+    "instrumentation": "output/testing/workflow-startup-input-1794300791205499527/input.json",
+    "binary_sha256": "5ec7df0977ff902623b949926ba9e0cffc0309d0b31367b1a9e2e309479a201c",
+    "states": 13,
+    "scope": "Lore9 Inspiration maximum5\u21922\u21925 after genuine original-action Cha20\u219214\u219220; spend/short rest, actual spent save and cold reopen/long rest; level4 d6 long-rest-only keeps used3 through SR, LR clears; level5 d8 Font restores SR clearing. All enumerated resources/choices/fields, retained timer counts, positive console sentinel, ASCII Unicode/checksum, canonical/AP/script preservation verified. Blank visible usage checked explicitly.",
+    "expected_console_rule": "Exactly one positive observer sentinel per runtime is recorded and exempted; every other console message and original caught error fails. Raw diagnostics retained.",
+    "limitations": "Real Reader, subsequent mixed edits, spell-slot conversion and other levels/subclasses/resources remain separate requirements. No desktop keyboard or complete HP claim.",
+    "cloud_controller": "~/.cache/mpmb-reference/reader-1793688790884081293/output/testing/bard-resource-reference-1794810689091380375",
+    "reader_tool_status": "WIP reader-bard-2024-resources.py not yet qualified or committed"
   }
 }
