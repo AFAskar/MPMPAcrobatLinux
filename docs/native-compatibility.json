@@ -3244,7 +3244,7 @@
     },
     "remaining": [
       "Real Reader original import and page-picker behavior; native-to-Reader and Reader-to-native media changes/reopens",
-      "Native interactive multi-page selection; JPEG/GIF/BMP/TIFF real-workflow format coverage; PCX unsupported",
+      "JPEG/GIF/BMP/TIFF real-workflow format coverage; PCX unsupported",
       "PDF page annotations/widget appearances, UserUnit and unusual page resources not implemented/qualified",
       "Cross-document icon copying, non-normal icon faces and all icon-fit/alignment options remain incomplete",
       "Default KDE portal and broader chooser behavior unqualified"
@@ -3255,6 +3255,12 @@
       "acceptance": "output/testing/native-acceptance-1794821841483181074/acceptance.json",
       "font_six_saved_states": "output/testing/native-bard-font-slots-1794821878105387483/slots.json",
       "scope": "Same sealed74189e candidate,2024 original scripts/class dialog/calculation/save/reopen and six Font slot/resource/rest/cold saves; no new Reader claim."
+    },
+    "native_pdf_picker": {
+      "report": "output/testing/icon-pdf-picker-xvfb-1794822073036483088/picker.json",
+      "passed": true,
+      "scope": "Original2024 Portrait/menu; genuine file picker selects two-page synthetic PDF; owned viewable native page dialog edited to2 and OK clicked after screenshot verification; selected rotated blue vector exact in saved MK.I/AP; subsequent original-menu chooser cancellation retains it. Strict original errors/console empty.",
+      "manual_actions": "Full chosen file/owned PID/window, observed edit and OK bounds, before/after page2 screenshots and actual keyboard/pointer confirmations retained. Mixed automated/observed manual control, not unattended-driver claim."
     }
   }
 }
