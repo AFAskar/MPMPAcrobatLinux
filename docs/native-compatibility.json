@@ -3047,6 +3047,23 @@
         "2024-swords-changed-snapshots1794288783035222830"
       ],
       "failure_correction": "Those pilot verifiers wrongly required8 warnings on selected-Dueling cold load; actual original-action probes passed with zero messages. Raw failures remain failed; corrected two-runtime proof ran anew."
+    },
+    "current_structural_103": {
+      "status": "native-only bounded structural PASS on current156 binary, not full classes",
+      "reports": [
+        "output/testing/native-subclasses-1794297110445001487/subclasses.json",
+        "output/testing/native-subclasses-1794297110538482321/subclasses.json"
+      ],
+      "pairs": 103,
+      "checkpoints_per_pair": [
+        3,
+        5,
+        11,
+        20,
+        3
+      ],
+      "original_error_and_console_streams": "clean during creation and fresh reopen for every counted pair",
+      "remaining": "Default feature replies; Swords warning profile excluded and qualified separately as non-clean Reader parity. Actual features/spells/resources/combat/Reader equivalence and excluded/source variants still require coverage."
     }
   },
   "pending_desktop_edits_2024": {
@@ -3098,7 +3115,7 @@
       "structural_16": "output/testing/native-subclasses-1794297110445001487/subclasses.json",
       "explicit_sidekicks_5": "output/testing/native-sidekicks-1794298256418479069/sidekicks.json",
       "berserker_resource_8_states": "output/testing/native-barbarian-2024-resources-1794299305063301079/resources.json",
-      "remaining_ordinary_87": "running: output/testing/native-subclasses-1794297110538482321/subclasses.json",
+      "remaining_ordinary_87": "PASS: output/testing/native-subclasses-1794297110538482321/subclasses.json",
       "limitations": "Default feature replies do not establish actual feature choices, all resources/spells or Reader parity. Swords initial warning case remains excluded and failed; no comprehensive table readiness.",
       "bard_selected_spells": "output/testing/native-bard-spells-1794299785353193688/spells.json",
       "bard_spell_scope": "Three explicit cantrips/nine spells, seven-page generated document, ability change/regeneration and changed fresh native reopen/restoration: four independently checked saved outputs and three strict clean probes. Input original scripts independently match2024. Reader parity, slot use and other spells/choices are separate.",

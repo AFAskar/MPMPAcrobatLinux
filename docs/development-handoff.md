@@ -1,5 +1,10 @@
 # Development handoff
 
+## Current runtime structural run finished — 2026-11-16
+
+Authoritative reports and raw creation/reopen diagnostic streams confirm native-subclasses1794297110538482321 PASS87. Combined with native-subclasses1794297110445001487 PASS16, current156/5ec7df has103 ordinary structural class/subclass pairs at levels3,5,11,20,3 plus fresh reopens, all clean original error/console streams. No still-running local jobs remain from November10; tmux handles were absent after the host restart. Do not resume/replay old operations from stale run names. Five explicit sidekick profiles remain separate from these counts. Default feature replies, excluded/source variants, Swords initial warnings and full per-class table workflows/Reader equivalence remain unqualified by this structural count.
+
+
 ## 2024 Swords original warnings qualified — 2026-11-16
 
 Recovered terminal report reader-swords-2024-warning1794300539295614298/observation.json PASS for its explicitly non-clean warning-attribution scope. Original all-source selection used five offered source buttons; ApplyClasses parsed Swords3, six real ability edits and three offered Bard tool edits chose Flute/Lute/Drum. Native and actual Reader captured complete selected state and the same eight original displayError(false,warning)/console warnings, with positive console sentinel, retained document timer acknowledgement, ASCII Unicode carrier/checksum and independent saved values/scripts. Reader's actual process terminated. Decoded JSON object-member order is ignored while all members/array order remain strict; console normalization is line endings only. No original script repair or warning suppression. Previous failed warning/recovery reports remain failed. Missing-manifest follower1794300346729343941 failed before opening Reader; explicit --instrumentation corrected the lookup.
