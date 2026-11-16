@@ -2816,6 +2816,16 @@
       "scope": "Five original source-selection buttons, original ApplyClasses parser, six genuine Reader ability edits, three explicit offered Bard tools. Exact saved captured state and eight original displayError/console warnings match; positive console sentinel, timer/checksum, full saved fields and original scripts independently checked. Reader process terminated.",
       "normalization": "Decoded JSON member order ignored, every member and array order retained; only console line endings normalized.",
       "remaining": "Class/subclass dropdown, actual Dueling/Two-Weapon choice, conditional combat effects and changed mixed reopens remain separate. Initial warning profile is never a clean class pass."
+    },
+    "dueling_workflow": {
+      "status": "COMPLETE bounded original Dueling/conditional damage/mixed persistence slice; broad Swords/class gate INCOMPLETE",
+      "native": "output/testing/swords-current-dueling-1794811109949444743/dueling.json",
+      "reader": "output/testing/reader-swords-dueling-reviewed-1794811433574973586/dueling.json",
+      "further_native": "output/testing/swords-dueling-final-native-1794813184537565852/reopen.json",
+      "visual_review": "output/testing/behavior-renders-1794813550892423727/visual-review.json",
+      "scope": "Actual offered Bard\u2192Fighting Style\u2192Dueling menu in both engines; Rapier1d8+6, Longbow1d8+4, cold Rapier1d8+6. Three native/three Reader states, two Reader process terminations and four fresh native changes from both actual Reader saves; complete stored payloads preserved, original scripts/canonical/AP and visible values checked.",
+      "warnings": "First selection in both engines retains exactly the same eight original missing-choice warnings; clean_initial_workflow=false. Selected-style cold reopen has no original error/warning, one diagnostic sentinel. No source patch or blanket warning suppression.",
+      "remaining": "Two-Weapon Fighting, flourishes/Inspiration interactions, other levels/choices/combat and full class/source dropdown qualification remain open. Native/Reader proof drivers remain private unique run.py/scenario artifacts; public warning-attribution tool is separate."
     }
   },
   "fighter_styles_2014": {
