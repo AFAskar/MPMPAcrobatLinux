@@ -3178,5 +3178,30 @@
     "payloads": "All five further native outputs retain complete stored imported/feature-choice/spell payload fields exactly; no import workflow or nonempty add-on qualification claim.",
     "source_behavior": "Original Font advertises secondary resource SS1+; this is manual sheet bookkeeping, not an invented automatic conversion command.",
     "remaining": "Real Reader selection/regeneration on this new progression input; other levels, higher-slot use, rests/HP modes, subclasses and all other classes remain separate. No full pixel/whole-page/keyboard-event API equality."
+  },
+  "reader_observation_retries": {
+    "status": "seven focused tests PASS; full Bard13 reference qualification remains incomplete",
+    "source": [
+      "tools/native/reader-console.py:read_console_text",
+      "tools/native/reader-ascii-input.py:observe_focus"
+    ],
+    "tests": [
+      "tools/native/test_console_read_retry.py",
+      "tools/native/test_focus_observation_retry.py"
+    ],
+    "semantics": "At most three read-only observations; revalidate debugger ownership or Reader foreground, retain every getter/UIA timeout, reject unrelated errors/ownership loss, never replay focus/typing/Tab/PDF commands. No cached edit-caption fallback.",
+    "failed_cloud_runs": [
+      "reader-bard-2024-resources-1794812907996856951/resources.json",
+      "reader-bard-2024-resources-1794815516845457005/resources.json"
+    ],
+    "actual_partial_evidence": "Second run baseline9/cha14 passed with positive console; then isolated UIA worker timed out. Cleanup retained/closed same document. No full13 or clean-workflow relabel."
+  },
+  "2024_portrait_import": {
+    "status": "FAILED reachable original native workflow; not implemented",
+    "probe": "output/testing/2024-portrait-reachability-1794816326247724729/probe.json",
+    "operation": "Original Portrait MouseUp menu\u2192Set any image/pdf file as Portrait",
+    "failure": "Original MakeIconMenu_IconOptions reaches missing Field.buttonImportIcon and throws TypeError at Functions2:4259. Valid original offered button path; no scripted control rejection.",
+    "reader": "Actual import/page-picker qualification pending; documented Field API returns0 success,1 cancel,-1 open failure,-2 invalid page.",
+    "priority": "Explicit release gap. Continue primary calculations/classes/resources/spells while preparing genuine import/persistence support."
   }
 }

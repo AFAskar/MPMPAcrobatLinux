@@ -22,6 +22,54 @@ def observed_console(expected):
     return {'owner':owner,'edit':edit['handle'],'live':live,'rows':rows}
 
 
+class ConsoleReadError(RuntimeError):
+    def __init__(self, message, attempts):
+        self.read_attempts = attempts
+        super().__init__(message)
+
+
+def read_console_text(owner, edit, *, controller=None, max_attempts=3):
+    """Retry only bounded live text reads; never replay input or PDF commands.
+
+    Each attempt re-observes the exact owned debugger/edit. All getter failures
+    are retained even if a later read succeeds. No cached caption fallback.
+    """
+    controller = c if controller is None else controller
+    if not owner or not edit or not 1 <= max_attempts <= 3:
+        raise ValueError('Observed handles and one to three read attempts required')
+    attempts = []
+    for index in range(max_attempts):
+        rows = controller.command('inspect')
+        roots = [r for r in rows if r.get('handle') == owner and r.get('class') == '#32770'
+                 and r.get('name') == 'JavaScript Debugger' and r.get('enabled')]
+        edits = [r for r in rows if r.get('handle') == edit and r.get('owner') == owner
+                 and r.get('class') == 'RICHEDIT50W' and r.get('enabled')
+                 and len(r.get('rect', [])) == 4 and r['rect'][2] > 0 and r['rect'][3] > 0]
+        observation = {'attempt': index + 1, 'owner': owner, 'handle': edit,
+                       'ownership_valid': len(roots) == len(edits) == 1}
+        if not observation['ownership_valid']:
+            attempts.append(observation)
+            raise ConsoleReadError('Observed debugger/edit ownership changed', attempts)
+        observation['inspection_text_error'] = edits[0].get('text_error')
+        try:
+            live = controller.command('dialog_control', owner=owner, handle=edit)
+            if (live.get('owner') != owner or live.get('handle') != edit
+                    or live.get('class') != 'RICHEDIT50W' or not isinstance(live.get('text'), str)):
+                raise RuntimeError('Live console reply identity/text differs')
+        except RuntimeError as error:
+            observation['error'] = str(error)
+            attempts.append(observation)
+            transient = ('ControlText' in str(error) and any(marker in str(error) for marker in
+                         ['Control query timed out', 'Control text read timed out']))
+            if not transient or index + 1 == max_attempts:
+                raise ConsoleReadError(str(error), attempts) from error
+            continue
+        observation['succeeded'] = True
+        attempts.append(observation)
+        return {'owner': owner, 'edit': edit, 'live': live, 'read_attempts': attempts}
+    raise AssertionError('Unreachable console read state')
+
+
 def close_console(observed):
     focused=c.command('focus_control',owner=observed['owner'],handle=observed['edit']);assert focused['focused']
     result=c.command('keys',keys='%{F4}');assert not [r for r in c.command('inspect') if r.get('class')=='#32770' and r.get('name')=='JavaScript Debugger']

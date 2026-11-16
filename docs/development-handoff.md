@@ -1,5 +1,14 @@
 # Development handoff
 
+## Current reference observation failures and bounded retries — 2026-11-16
+
+Cloud fresh preflight/readiness1794810741 PASS12 under its own fingerprint. Actual Bard profile1794812907996856951 FAILED before qualifying baseline: bounded live ControlText query timed out; later cleanup read recovered the expected positive sentinel, retained the same document and terminated Reader. Console read retries now re-observe the same owner/edit, retain all failed reads and reject unrelated/ownership errors; no cached text or mutation replay. Retry profile1794815516845457005 qualified baseline9 and cha14/max2 with positive console, then FAILED on isolated inspect_focused UIA-child15s timeout. These raw reports stay failed; inspect their cleanup_close before another cloud run. Focus observations now retry only that explicit read-only timeout, check live Reader foreground health and never repeat initial focus, typed keys or Tab. Seven focused tests PASS, including failures before/after typing, exhausted retries, ownership/foreground loss and unrelated errors. Full13-state Reader and the broader resource milestone remain INCOMPLETE. WIP reader-bard-2024-resources.py has not been qualified/committed.
+
+New concrete2024 failure: portrait-reachability1794816326247724729 selects the actual offered Portrait menu import and reaches missing Field.buttonImportIcon, TypeError in Functions2:4259. This is a real reachable unsupported import, not an invalid scripted response. No successful no-op or source repair was added. Native class/resource validation retains priority; image/PDF import/persistence is an explicit remaining implementation gap.
+
+Capacity check: local user-freed host9GiB before4GiB VM, now~7GiB available; cloud~16GiB available, oom_kill0. Both desktops independent, one controller each. Cloud incoming disk is an empty194KiB image, not a ready second Reader baseline. Additional cloud workers need a clean offline clone/provisioning after the active document is retained/closed; do not live-copy the running guest or infer qualification. Keep source fixtures/pinned submodule unchanged and the overall goal ACTIVE.
+
+
 ## Bounded 2024 Font manual bookkeeping milestone COMPLETE — 2026-11-16
 
 Native-bard-spells1794811643564424619 PASS4 saved states/three strict probes on the actual Lore9→4→5 resource output:12 explicitly selected spells, generated seventh page, Charisma change/regeneration and cold restoration. Reader selection/regeneration on this particular new input is still separate.
