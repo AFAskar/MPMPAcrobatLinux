@@ -1,4 +1,5 @@
 mod attachments;
+mod icon_import;
 mod pdf;
 mod printing;
 mod render;

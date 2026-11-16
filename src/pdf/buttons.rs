@@ -1,19 +1,21 @@
 use super::*;
-// A button icon is a reference to an original document resource, never a raster
-// copy or a second mutable form value. The live JS model resolves icon swaps.
+// Button icons refer to immutable original resources or imported media assets.
+// The live JavaScript field owns the selection; projections own no form state.
 pub(super) fn project(
     doc: &mut Document,
     source_doc: &Document,
     fields: &BTreeMap<String, Field>,
     widget: &Widget,
     rect: &[f64],
-    state: &Value,
+    state_and_assets: (&Value, &Value),
     font: (&ttf_parser::Face<'_>, ObjectId),
 ) -> Result<()> {
+    let (state, assets) = state_and_assets;
     let (face, font) = font;
     let icon = state["icon"]["field"].as_str();
+    let external = state["icon"]["asset"].as_str();
     let caption = state["caption"].as_str();
-    if icon.is_none() && caption.is_none() {
+    if icon.is_none() && external.is_none() && caption.is_none() {
         return Ok(());
     }
     if rect.len() != 4 {
@@ -31,26 +33,33 @@ pub(super) fn project(
         .unwrap_or_default();
     let mut resources = dictionary! {"Font"=>dictionary!{"Helv"=>font}};
     let mut content = Vec::new();
-    if let Some(name) = icon {
-        let field = fields.get(name).context("Icon source field not found")?;
-        let source = field.widgets.first().context("Icon source has no widget")?;
-        let wd = source_doc.get_dictionary(source.id)?;
-        let source_icon = wd
-            .get(b"MK")
-            .ok()
-            .and_then(|v| resolved(source_doc, v).ok())
-            .and_then(|v| v.as_dict().ok())
-            .and_then(|v| v.get(b"I").ok())
-            .or_else(|| {
-                wd.get(b"AP")
-                    .ok()
-                    .and_then(|v| resolved(source_doc, v).ok())
-                    .and_then(|v| v.as_dict().ok())
-                    .and_then(|v| v.get(b"N").ok())
-            })
-            .cloned();
+    if icon.is_some() || external.is_some() {
+        let source_icon = if let Some(asset) = external {
+            Some(Object::Reference(crate::icon_import::embed(
+                doc,
+                &assets[asset],
+            )?))
+        } else {
+            let name = icon.context("Missing icon source")?;
+            let field = fields.get(name).context("Icon source field not found")?;
+            let source = field.widgets.first().context("Icon source has no widget")?;
+            let wd = source_doc.get_dictionary(source.id)?;
+            wd.get(b"MK")
+                .ok()
+                .and_then(|v| resolved(source_doc, v).ok())
+                .and_then(|v| v.as_dict().ok())
+                .and_then(|v| v.get(b"I").ok())
+                .or_else(|| {
+                    wd.get(b"AP")
+                        .ok()
+                        .and_then(|v| resolved(source_doc, v).ok())
+                        .and_then(|v| v.as_dict().ok())
+                        .and_then(|v| v.get(b"N").ok())
+                })
+                .cloned()
+        };
         if let Some(source_icon) = source_icon {
-            let stream = resolved(source_doc, &source_icon)?.as_stream()?;
+            let stream = resolved(doc, &source_icon)?.as_stream()?;
             let bounds = stream.dict.get(b"BBox")?.as_array()?;
             let b: Vec<f32> = bounds.iter().map(|x| x.as_float().unwrap_or(0.)).collect();
             if b.len() != 4 || b[2] <= b[0] || b[3] <= b[1] {
@@ -162,7 +171,10 @@ mod tests {
             &fields,
             &fields["Target"].widgets[0],
             &[0., 0., 20., 20.],
-            &json!({"icon":{"field":"Empty"},"caption":"","captions":{"0":"","1":"","2":""}}),
+            (
+                &json!({"icon":{"field":"Empty"},"caption":"","captions":{"0":"","1":"","2":""}}),
+                &Value::Null,
+            ),
             (&face, (999, 0)),
         )
         .unwrap();

@@ -806,7 +806,15 @@ impl Pdf {
                 }
                 wd.set("F", flags);
                 if f.kind == "Btn" && f.flags & 65536 != 0 {
-                    buttons::project(&mut doc, &icon_source, &fields, w, &rect, s, (&face, font))?;
+                    buttons::project(
+                        &mut doc,
+                        &icon_source,
+                        &fields,
+                        w,
+                        &rect,
+                        (s, &state["__iconAssets"]),
+                        (&face, font),
+                    )?;
                     continue;
                 }
                 if !changed

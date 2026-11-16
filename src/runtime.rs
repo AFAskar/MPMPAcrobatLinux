@@ -330,6 +330,21 @@ impl Runtime {
                         .collect::<String>()
                         == "ce4624265af7fad2456badd108fa6003e5dbb939263ee7269a4cbbf9e3055857"
             });
+        let icon_base = pdf
+            .path
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .to_owned();
+        ctx.globals().set("__iconImport", Function::new(ctx.clone(), move |ctx: Ctx, input: String| -> rquickjs::Result<String> {
+            (|| -> Result<String> {
+                let request: Value = serde_json::from_str(&input)?;
+                let result = crate::icon_import::request(&request, interactive, &icon_base)?;
+                if interactive && result["code"].as_i64().is_some_and(|v| v < 0) {
+                    crate::ui::alert(&json!({"cTitle":"Import image or PDF icon", "cMsg":result["reason"].as_str().unwrap_or("The selected page is invalid"), "nType":0, "nIcon":0}))?;
+                }
+                Ok(result.to_string())
+            })().map_err(|e| Exception::throw_message(&ctx, &format!("{e:#}")))
+        })?)?;
         let attachments = crate::attachments::read(&pdf.doc)?;
         let attachment_metadata: Vec<_> = attachments.values().cloned().collect();
         let exporter = std::cell::RefCell::new(crate::attachments::Exporter::default());
@@ -663,6 +678,17 @@ impl Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn imported_icon_tokens_copy_without_duplicate_payloads_and_failures_preserve_selection() {
+        let engine = Engine::new().unwrap();
+        let context = Context::full(&engine).unwrap();
+        context.with(|ctx| {
+            let button=json!({"kind":"Btn","flags":65536,"value":"","default_value":"","items":[],"widgets":[],"actions":{}});
+            ctx.globals().set("__initial",json!({"fields":{"Portrait":button,"Copy":button},"order":[],"info":{},"bookmarks":{"children":[]},"pages":1,"templates":{}}).to_string()).unwrap();
+            ctx.eval::<(),_>(concat!(include_str!("acrobat.js"),"\nvoid 0;")).unwrap();
+            let result=ctx.eval::<bool,_>(r#"globalThis.__iconImport=function(){return JSON.stringify({code:0,asset:{id:'fixture',pdf_hex:'00'}})};var a=getField('Portrait'),b=getField('Copy');var imported=a.buttonImportIcon('alpha.png')===0;var token=a.buttonGetIcon();b.buttonSetIcon(token);var first=JSON.parse(__host.snapshot());var rev=__host.revision;dirty=false;globalThis.__iconImport=function(){return JSON.stringify({code:1})};var cancelled=a.buttonImportIcon()===1;var preserved=__host.revision===rev&&!dirty&&JSON.parse(__host.snapshot()).Portrait.icon.asset==='fixture';globalThis.__iconImport=function(){return JSON.stringify({code:-1})};var failed=a.buttonImportIcon('missing.png')===-1;var rejected=false;try{b.buttonSetIcon({asset:{id:'fixture',pdf_hex:'00'}})}catch(e){rejected=true}imported&&cancelled&&preserved&&failed&&rejected&&first.Copy.icon.asset==='fixture'&&Object.keys(first.__iconAssets).length===1"#).unwrap();assert!(result);
+        });
+    }
     #[test]
     fn metadata_standard_aliases_preserve_custom_case_and_pdf_date_types() {
         host(

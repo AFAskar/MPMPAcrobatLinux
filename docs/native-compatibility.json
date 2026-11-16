@@ -3207,11 +3207,54 @@
     "actual_partial_evidence": "Second run baseline9/cha14 passed with positive console; then isolated UIA worker timed out. Cleanup retained/closed same document. No full13 or clean-workflow relabel."
   },
   "2024_portrait_import": {
-    "status": "FAILED reachable original native workflow; not implemented",
+    "status": "Native candidate implemented and bounded native proof PASS; milestone INCOMPLETE pending real Reader interoperability",
     "probe": "output/testing/2024-portrait-reachability-1794816326247724729/probe.json",
     "operation": "Original Portrait MouseUp menu\u2192Set any image/pdf file as Portrait",
     "failure": "Original MakeIconMenu_IconOptions reaches missing Field.buttonImportIcon and throws TypeError at Functions2:4259. Valid original offered button path; no scripted control rejection.",
     "reader": "Actual import/page-picker qualification pending; documented Field API returns0 success,1 cancel,-1 open failure,-2 invalid page.",
-    "priority": "Explicit release gap. Continue primary calculations/classes/resources/spells while preparing genuine import/persistence support."
+    "priority": "Bounded native implementation only; do not mark compatibility milestone or 2024 release complete. Tested default156 remains preserved while candidate is qualified.",
+    "candidate_binary_sha256": "74189e4340e8c16fb3cd8c966ef27b55316851f5c06a0e2ccbcc3a9c76f850fe",
+    "implementation": "Field.buttonImportIcon now opens a genuine native file picker or decodes an explicit local path, returns success/cancel/open/page codes, and gives the authoritative JavaScript field immutable opaque media. PNG alpha and selected PDF vector page resources project into MK.I/AP and survive file deletion, changed save and cold reopen. No successful no-op.",
+    "build": {
+      "report": "output/testing/icon-import-validation-1794821386574123547/qualification.json",
+      "rust_tests": 160,
+      "locked_build": true,
+      "strict_all_targets_clippy": true,
+      "default_binary_preserved": true
+    },
+    "native_api": {
+      "report": "output/testing/native-icon-import-1794821509752481917/imports.json",
+      "saved_states": 6,
+      "scenarios": [
+        "PNG alpha",
+        "cold PNG with source removed",
+        "missing replacement preserves portrait",
+        "selected rotated PDF page two",
+        "invalid page preserves portrait",
+        "cold vector with source removed"
+      ],
+      "canonical_fields": "All original canonical fields exact in every saved state; original embedded scripts unchanged.",
+      "visible": "output/testing/native-icon-import-1794821509752481917/visual-review.json"
+    },
+    "original_menu_picker": {
+      "report": "output/testing/icon-picker-xvfb-1794821690482378386/picker.json",
+      "scope": "Original Portrait MouseUp and actual offered import menu, owned genuine GTK chooser, PNG selection then cancellation preserving imported media; strict empty caught-error/console observations. Authenticated isolated X11, no default portal qualification.",
+      "intervention": "Initial Return left the same chooser open with entered path; inspected live screenshot then pressed Return on that observed owned picker. Full intervention record retained; not a fully unattended driver claim.",
+      "prior_failure": "icon-picker-xvfb1794821627726080423 failed helper import before any PDF/picker launch; raw report preserved."
+    },
+    "remaining": [
+      "Real Reader original import and page-picker behavior; native-to-Reader and Reader-to-native media changes/reopens",
+      "Native interactive multi-page selection; JPEG/GIF/BMP/TIFF real-workflow format coverage; PCX unsupported",
+      "PDF page annotations/widget appearances, UserUnit and unusual page resources not implemented/qualified",
+      "Cross-document icon copying, non-normal icon faces and all icon-fit/alignment options remain incomplete",
+      "Default KDE portal and broader chooser behavior unqualified"
+    ],
+    "candidate_regression": {
+      "report": "output/testing/icon-candidate-functional-regression-1794821841203944551/qualification.json",
+      "passed": true,
+      "acceptance": "output/testing/native-acceptance-1794821841483181074/acceptance.json",
+      "font_six_saved_states": "output/testing/native-bard-font-slots-1794821878105387483/slots.json",
+      "scope": "Same sealed74189e candidate,2024 original scripts/class dialog/calculation/save/reopen and six Font slot/resource/rest/cold saves; no new Reader claim."
+    }
   }
 }
