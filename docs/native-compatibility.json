@@ -3207,7 +3207,7 @@
     "actual_partial_evidence": "Second run baseline9/cha14 passed with positive console; then isolated UIA worker timed out. Cleanup retained/closed same document. No full13 or clean-workflow relabel."
   },
   "2024_portrait_import": {
-    "status": "Native candidate implemented and bounded native proof PASS; milestone INCOMPLETE pending real Reader interoperability",
+    "status": "Bounded PNG native/Reader/further-native workflow PASS; full image/PDF import compatibility milestone remains INCOMPLETE",
     "probe": "output/testing/2024-portrait-reachability-1794816326247724729/probe.json",
     "operation": "Original Portrait MouseUp menu\u2192Set any image/pdf file as Portrait",
     "failure": "Original MakeIconMenu_IconOptions reaches missing Field.buttonImportIcon and throws TypeError at Functions2:4259. Valid original offered button path; no scripted control rejection.",
@@ -3261,7 +3261,27 @@
       "passed": true,
       "scope": "Original2024 Portrait/menu; genuine file picker selects two-page synthetic PDF; owned viewable native page dialog edited to2 and OK clicked after screenshot verification; selected rotated blue vector exact in saved MK.I/AP; subsequent original-menu chooser cancellation retains it. Strict original errors/console empty.",
       "manual_actions": "Full chosen file/owned PID/window, observed edit and OK bounds, before/after page2 screenshots and actual keyboard/pointer confirmations retained. Mixed automated/observed manual control, not unattended-driver claim."
-    }
+    },
+    "clean_reader": {
+      "report": "output/testing/reader-portrait-import-1794841912461292910/portrait.json",
+      "passed": true,
+      "states": 3,
+      "scope": "Fresh original active-widget focus/Space, exact offered popup, observed Select Image/Browse/Open filename controls; verified paste/live bounded WM_GETTEXT and actual uploaded PNG SHA. Import blue/yellow, cancel preserving both widgets, changed cold Reader reopen. All canonical values exact except declared Player Name/mirror change. Original scripts, positive console/error/timer/Unicode/checksum and both process closures pass.",
+      "readiness": "output/testing/readiness-1794841521.json:fresh restored/reconnected local preflight30 and exact2024 readiness12"
+    },
+    "further_native": {
+      "report": "output/testing/portrait-final-native-1794843630251634227/reopen.json",
+      "passed": true,
+      "fresh_changed_states": 3,
+      "scope": "Same sealed74189e candidate; Reader PNG self-copy forces new native AP, selected rotated green PDF page then cold self-copy after deleting source. Exact decoded media and native Icon Do appearance rebuilding checked; canonical values and full payloads retained except declared Player Name/mirror and raw CurrentEvals expression formatting.",
+      "current_evals_syntax": "output/testing/eval-syntax-qualification-1794843320790152260/qualification.json:Acorn8.15.0 all15 functions/data AST equal, statement/member/array order and literal Unicode preserved; locations/raw/comments/parenthesis spelling and equivalent object-key quoting normalized. Five source-mutation negatives detected. Not raw source API equality.",
+      "failed_raw_probe": "output/testing/portrait-final-native-1794842825664763830/reopen.json:raw CurrentEvals mismatch, no accepted phases; raw failure retained."
+    },
+    "reader_diagnostic_pilots": [
+      "portrait-reader-forward1794822645438617245 failed empty console before priming capture; retained/closed. Fresh primed forward1794822839282022731 PASS2 changed/cold Reader saves.",
+      "portrait-reader-original1794823269068853084 failed inactive widget-zero focus, then normalized/raw Browse caption guard. Recovered original import, positive capture and exact canonical values, retained/closed; terminal report remains failed with recovery_completed=true.",
+      "reader-portrait-import1794841364604530907 failed port2222 refused before PDF interaction. tools/acrobat/run up found running restored guest, preserved state, fresh preflight30/readiness1794841521 PASS12 before successful new run."
+    ]
   },
   "portable_native_font_test_fixtures": {
     "status": "PASS160 on local Fedora and independent Ubuntu; strict local all-target Clippy PASS",
@@ -3293,5 +3313,40 @@
     "failed_probe": "output/testing/bard-resources-final-native-1794823032514643770/reopen.json:missing scripted Changes dialog replies; caught control error retained, no cases counted",
     "memory_correction": "Comparison batch exceeded128MiB Node heap; retained process failure log and kept limit. Parse only7 small differing payloads; all other complete strings compared raw. Host oom_kill0. No host OOM or raising limit.",
     "remaining": "Other subclasses/levels/choices, actual spell selection and regeneration, feats/skills/HP/combat/multiclass and full native desktop input remain separate. Independent cloud Reader13 still incomplete."
+  },
+  "cloud_2024_candidate_regression": {
+    "status": "PASS160 tests/build/2024 acceptance,103 ordinary structural profiles and5 explicit sidekick profiles; not complete class behavior",
+    "root": "~/.cache/mpmb-workers/icon-import-1794822300170613779",
+    "source": "cfdee02 plus test-only portable-font source overlay, equivalent to3d5d656 production",
+    "binary_sha256": "ae65e073dd45a737ffd8d58631b6592e758a0099dfe80ccc989f04bf90b6f9bc",
+    "reports": [
+      "output/testing/validation-font-1794822772558618881/qualification.json",
+      "output/testing/native-subclasses-1794822829743832432/subclasses.json",
+      "output/testing/native-subclasses-1794841133512508929/subclasses.json",
+      "output/testing/native-sidekicks-1794841311551705812/sidekicks.json"
+    ],
+    "counts": {
+      "ordinary_pairs": 103,
+      "ordinary_creation_and_cold_reopen": 206,
+      "ordinary_level_checkpoints": 515,
+      "explicit_sidekick_profiles": 5,
+      "explicit_sidekick_level_checkpoints": 35
+    },
+    "scope": "Original all-source class/subclass dialogs, ordinary levels3/5/11/20/3 and cold reopens; sidekicks have explicit Yes conversion and2d8 Bandit base HD. Strict original caught-error/console checks in creation and reopen. Source-profile alternatives, arbitrary feature choices/skills/feats/spells/combat/HP and Reader equivalence remain unqualified. Swords original warnings excluded from clean structural counts; bounded Dueling/warning attribution remains separate.",
+    "memory": "Single-job build, oneCPU and3GiB worker cgroup, persistent tmux and verified inhibitor; host had15-16GiB available.",
+    "failed_launch": "validation-bard-sidekick1794827074580474677 failed folder creation before any probes; fresh1794841133275501068 completed6+5. Earlier144/16 font-fixture failure retained separately."
+  },
+  "cloud_bard_reader_13": {
+    "status": "PASS13 after prior retained/closed failures; independently qualified cloud environment",
+    "reference_root": "~/.cache/mpmb-reference/reader-1793688790884081293",
+    "readiness": "output/testing/readiness-1794810741.json:exact2024 scope12 under cloud fingerprint",
+    "report": "output/testing/reader-bard-2024-resources-1794820930808939129/resources.json",
+    "counts": {
+      "states": 13,
+      "positive_live_console_checks": 13,
+      "process_terminations": 2,
+      "console_reads_requiring_retry": 1
+    },
+    "scope": "Full captured states match native expected data; actual retained timer counts, saved ASCII Unicode/checksum/canonical/resource AP/script checks. One bounded read retry succeeds with failures retained; no replayed keyboard or mutations. Earlier failed profiles stay failed. No complete Bard or three-fixture readiness claim."
   }
 }
