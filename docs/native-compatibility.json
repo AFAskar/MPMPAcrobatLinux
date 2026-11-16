@@ -3271,5 +3271,27 @@
     "local": "output/testing/portable-font-tests-1794822984083187805/qualification.json",
     "source_manifest": "output/testing/cloud-font-test-portability-1794822772558618881/stage.json",
     "limits": "This qualifies native test portability only, not the cloud Reader or any untested character workflow."
+  },
+  "2024_bard_inspiration_progression_mixed": {
+    "status": "Bounded milestone COMPLETE; not complete Bard or2024 release",
+    "candidate_sha256": "74189e4340e8c16fb3cd8c966ef27b55316851f5c06a0e2ccbcc3a9c76f850fe",
+    "native": "output/testing/native-bard-2024-resources-1794823627703702212/resources.json",
+    "reader": "output/testing/reader-bard-2024-resources-1794820754464639346/resources.json",
+    "further_native": "output/testing/bard-resources-final-native-1794823135435369488/reopen.json",
+    "comparison": "output/testing/bard-resources-final-native-1794823135435369488/candidate-reader-comparison.json",
+    "counts": {
+      "native_states": 13,
+      "reader_states": 13,
+      "further_native_states": 13,
+      "reader_live_console_positive_checks": 13,
+      "reader_process_terminations": 2
+    },
+    "behavior": "Calculated Cha maxima5\u21922\u21925; spent uses/SR/LR, level9\u21924\u21925 removes/restores Font, d6/LR versus d8/SR/SS1+. Changed cold Reader save/reopen plus3 fresh further native runtimes. Full captured state, all64 actual resource fields/reactions, canonical/AP/script/retained timer/ASCII Unicode/checksum/error checks. Valid original Changes Close replies; no no-op/default class-choice qualification.",
+    "normalization": "Captured JSON object member order ignored; all members, values and array order strict. Raw stored spell source equality FAILS7 cases. Separate decoded comparison preserves all types/keys/Unicode/numeric values/array length/order/holes; normalizes expression whitespace/key quotes/parentheses/object-member order only.32 of39 payloads raw-equal,7 decoded-equal. No blanket exact API/raw payload claim.",
+    "raw_payload_report": "output/testing/bard-resources-final-native-1794823135435369488/payloads.json",
+    "decoded_payload_report": "output/testing/bard-resources-final-native-1794823135435369488/payload-semantics.json",
+    "failed_probe": "output/testing/bard-resources-final-native-1794823032514643770/reopen.json:missing scripted Changes dialog replies; caught control error retained, no cases counted",
+    "memory_correction": "Comparison batch exceeded128MiB Node heap; retained process failure log and kept limit. Parse only7 small differing payloads; all other complete strings compared raw. Host oom_kill0. No host OOM or raising limit.",
+    "remaining": "Other subclasses/levels/choices, actual spell selection and regeneration, feats/skills/HP/combat/multiclass and full native desktop input remain separate. Independent cloud Reader13 still incomplete."
   }
 }

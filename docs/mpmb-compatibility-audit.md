@@ -718,3 +718,7 @@ Local focus-cycle run1793736381362682993 entered Shield correctly but failed whe
 ## 2024 portrait import candidate — 2026-11-16
 
 Native candidate74189e implements the real missing Field.buttonImportIcon workflow.160 locked tests/build/strictClippy, six independently checked changed/cold media saves, genuine original menu/owned chooser PNG selection/cancel and visible Poppler crops pass. Evidence and exact limits: docs/native-compatibility.json `2024_portrait_import` and current handoff. Actual Reader and mixed-engine media qualification remain pending; this milestone is INCOMPLETE and default156 remains preserved. No full-format, page-annotation, cross-document or release claim.
+
+## Bounded2024 Bard resources/progression mixed saves — 2026-11-16
+
+Candidate74189e native13/actualReader13/further-native13 states PASS, complete captured state and actual64 resource fields/derived values/choices/reactions/calculation/errors compared, positive console/timer/Unicode controls and two Reader process closures. Milestone complete only for this defined Inspiration/Font/maxima/rest/level9→4→5 slice. Raw stored CurrentSpells source equality remains failed7 cases; separate all39 decoded payload comparison passes with explicit expression/member-order normalization and exact strings/types/arrays retained. Other32 payloads raw-equal. Full evidence and bounded-memory comparison correction in native-compatibility.json `2024_bard_inspiration_progression_mixed`; broader class/table readiness remains incomplete.
