@@ -123,6 +123,104 @@ fn bitmap(bytes: &[u8]) -> Result<Value> {
     let form=doc.add_object(Stream::new(dictionary! {"Type"=>"XObject","Subtype"=>"Form","BBox"=>vec![0.into(),0.into(),(w as i64).into(),(h as i64).into()],"Resources"=>dictionary! {"XObject"=>dictionary! {"Image"=>image}}},content));
     finish(doc, form)
 }
+// Flatten existing normal appearances into the imported page, without copying
+// interactive fields or document actions. Reader includes these in PDF icons.
+fn page_appearances(
+    source: &Document,
+    page: ObjectId,
+    target: &mut Document,
+    ids: &mut HashMap<ObjectId, ObjectId>,
+    resources: &mut Dictionary,
+    content: &mut Vec<u8>,
+) -> Result<()> {
+    let page = source.get_dictionary(page)?;
+    let Ok(annotations) = page.get(b"Annots") else {
+        return Ok(());
+    };
+    let annotations = source.dereference(annotations)?.1.as_array()?;
+    let mut xobjects = resources
+        .get(b"XObject")
+        .ok()
+        .map(|o| {
+            target
+                .dereference(o)
+                .and_then(|(_, v)| v.as_dict())
+                .cloned()
+        })
+        .transpose()?
+        .unwrap_or_default();
+    for (index, annotation) in annotations.iter().enumerate() {
+        let annotation = source.dereference(annotation)?.1.as_dict()?;
+        let flags = annotation
+            .get(b"F")
+            .ok()
+            .and_then(|v| v.as_i64().ok())
+            .unwrap_or(0);
+        if flags & (1 | 2 | 32) != 0 {
+            continue;
+        }
+        let Ok(ap) = annotation.get(b"AP") else {
+            continue;
+        };
+        let ap = source.dereference(ap)?.1.as_dict()?;
+        let Ok(normal) = ap.get(b"N") else { continue };
+        let normal = source.dereference(normal)?.1;
+        let normal = if let Ok(states) = normal.as_dict() {
+            let state = annotation.get(b"AS")?.as_name()?;
+            source.dereference(states.get(state)?)?.1
+        } else {
+            normal
+        };
+        let stream = normal.as_stream()?;
+        let numbers = |o: &Object, n: usize| -> Result<Vec<f32>> {
+            let values = source
+                .dereference(o)?
+                .1
+                .as_array()?
+                .iter()
+                .map(Object::as_float)
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            if values.len() != n || values.iter().any(|v| !v.is_finite()) {
+                bail!("Invalid icon annotation geometry")
+            }
+            Ok(values)
+        };
+        let r = numbers(annotation.get(b"Rect")?, 4)?;
+        let b = numbers(stream.dict.get(b"BBox")?, 4)?;
+        let m = stream
+            .dict
+            .get(b"Matrix")
+            .ok()
+            .map(|o| numbers(o, 6))
+            .transpose()?
+            .unwrap_or_else(|| vec![1., 0., 0., 1., 0., 0.]);
+        let points = [(b[0], b[1]), (b[0], b[3]), (b[2], b[1]), (b[2], b[3])]
+            .map(|(x, y)| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]));
+        let minx = points.iter().map(|p| p.0).fold(f32::INFINITY, f32::min);
+        let maxx = points.iter().map(|p| p.0).fold(f32::NEG_INFINITY, f32::max);
+        let miny = points.iter().map(|p| p.1).fold(f32::INFINITY, f32::min);
+        let maxy = points.iter().map(|p| p.1).fold(f32::NEG_INFINITY, f32::max);
+        if maxx <= minx || maxy <= miny || r[2] <= r[0] || r[3] <= r[1] {
+            bail!("Empty icon annotation bounds")
+        }
+        let sx = (r[2] - r[0]) / (maxx - minx);
+        let sy = (r[3] - r[1]) / (maxy - miny);
+        let tx = r[0] - sx * minx;
+        let ty = r[1] - sy * miny;
+        let mut name = format!("MPMBIconAnnotation{index}");
+        while xobjects.has(name.as_bytes()) {
+            name.push('_');
+        }
+        let copied = copy_object(source, target, normal, ids, 0)?;
+        let copied = target.add_object(copied);
+        xobjects.set(name.as_bytes(), copied);
+        content.extend(format!("q {sx} 0 0 {sy} {tx} {ty} cm /{name} Do Q\n").as_bytes());
+    }
+    if !xobjects.is_empty() {
+        resources.set("XObject", xobjects);
+    }
+    Ok(())
+}
 fn pdf_page(bytes: &[u8], page: usize) -> Result<Value> {
     let source = Document::load_mem(bytes)?;
     let pages = source.get_pages();
@@ -146,7 +244,18 @@ fn pdf_page(bytes: &[u8], page: usize) -> Result<Value> {
     let mut ids = HashMap::new();
     let resources = inherited(&source, id, b"Resources")
         .unwrap_or_else(|_| Object::Dictionary(Dictionary::new()));
-    let resources = copy_object(&source, &mut doc, &resources, &mut ids, 0)?;
+    let mut resources = copy_object(&source, &mut doc, &resources, &mut ids, 0)?
+        .as_dict()?
+        .clone();
+    let mut content = source.get_page_content_with_limit(id, MAX_BYTES)?;
+    page_appearances(
+        &source,
+        id,
+        &mut doc,
+        &mut ids,
+        &mut resources,
+        &mut content,
+    )?;
     let angle = inherited(&source, id, b"Rotate")
         .ok()
         .and_then(|o| o.as_i64().ok())
@@ -162,7 +271,7 @@ fn pdf_page(bytes: &[u8], page: usize) -> Result<Value> {
     .into_iter()
     .map(Object::Integer)
     .collect();
-    let form=doc.add_object(Stream::new(dictionary! {"Type"=>"XObject","Subtype"=>"Form","BBox"=>rect.clone(),"Matrix"=>matrix,"Resources"=>resources},source.get_page_content_with_limit(id, MAX_BYTES)?));
+    let form=doc.add_object(Stream::new(dictionary! {"Type"=>"XObject","Subtype"=>"Form","BBox"=>rect.clone(),"Matrix"=>matrix,"Resources"=>resources},content));
     finish(doc, form)
 }
 fn is_pdf(bytes: &[u8]) -> bool {
@@ -380,6 +489,72 @@ mod tests {
             .and_then(Object::as_name)
             .ok()
             == Some(b"Page".as_slice()))));
+        std::fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn pdf_widget_appearance_is_flattened_without_interactive_state() {
+        let p = folder();
+        let path = p.join("annotated.pdf");
+        test_pdf(&path);
+        let mut source = Document::load(&path).unwrap();
+        let page = source.get_pages()[&2];
+        let ap = source.add_object(Stream::new(
+            dictionary! {
+                "Type"=>"XObject", "Subtype"=>"Form",
+                "BBox"=>vec![10.into(),20.into(),30.into(),60.into()],
+                "Matrix"=>vec![0.into(),(-1).into(),1.into(),0.into(),0.into(),0.into()],
+                "Resources"=>dictionary!{}
+            },
+            b"1 1 1 rg 10 20 20 40 re f".to_vec(),
+        ));
+        let widget = source.add_object(dictionary! {
+            "Type"=>"Annot", "Subtype"=>"Widget", "FT"=>"Tx", "T"=>"Private",
+            "Rect"=>vec![2.into(),4.into(),22.into(),14.into()], "F"=>4,
+            "AP"=>dictionary!{"N"=>ap}, "AA"=>dictionary!{"U"=>dictionary!{"JS"=>"must not copy"}}
+        });
+        source
+            .get_object_mut(page)
+            .unwrap()
+            .as_dict_mut()
+            .unwrap()
+            .set("Annots", vec![widget.into()]);
+        source.save(&path).unwrap();
+        let result = request(&json!({"path":path,"page":1}), false, &p).unwrap();
+        assert_eq!(result["code"], 0);
+        std::fs::remove_file(&path).unwrap();
+        let mut target = Document::new();
+        let form = embed(&mut target, &result["asset"]).unwrap();
+        let stream = target.get_object(form).unwrap().as_stream().unwrap();
+        let content = String::from_utf8(stream.get_plain_content().unwrap()).unwrap();
+        assert!(content.contains("q 0.5 0 0 0.5 -8 19 cm /MPMBIconAnnotation0 Do Q"));
+        let copied = stream
+            .dict
+            .get(b"Resources")
+            .unwrap()
+            .as_dict()
+            .unwrap()
+            .get(b"XObject")
+            .unwrap()
+            .as_dict()
+            .unwrap()
+            .get(b"MPMBIconAnnotation0")
+            .unwrap()
+            .as_reference()
+            .unwrap();
+        assert_eq!(
+            target
+                .get_object(copied)
+                .unwrap()
+                .as_stream()
+                .unwrap()
+                .get_plain_content()
+                .unwrap(),
+            b"1 1 1 rg 10 20 20 40 re f"
+        );
+        assert!(!target
+            .objects
+            .values()
+            .any(|o| o.as_dict().is_ok_and(|d| d.has(b"AA") || d.has(b"FT"))));
         std::fs::remove_dir_all(p).unwrap();
     }
     #[test]

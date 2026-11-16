@@ -8,7 +8,7 @@ import argparse, hashlib, json, shutil, subprocess, sys, time
 from pathlib import Path
 from PIL import Image
 from pypdf import PdfReader, PdfWriter
-from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject, NumberObject
+from pypdf.generic import ArrayObject, DecodedStreamObject, DictionaryObject, NameObject, NumberObject
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT/'tools/acrobat'))
@@ -34,11 +34,14 @@ def media(path):
             assert b'/Icon Do' in ap.get_data()
             assert ap['/Resources']['/XObject']['/Icon'].get_object().get_data() == icon.get_data()
             images = []
-            for obj in icon.get('/Resources', {}).get('/XObject', {}).values():
+            annotations = []
+            for name, obj in icon.get('/Resources', {}).get('/XObject', {}).items():
                 obj = obj.get_object()
+                if str(name).startswith('/MPMBIconAnnotation'):
+                    annotations.append({'name': str(name), 'content': obj.get_data().decode('ascii')})
                 if obj.get('/Subtype') == '/Image':
                     images.append({'rgb': obj.get_data().hex(), 'width': int(obj['/Width']), 'height': int(obj['/Height']), 'alpha': obj['/SMask'].get_object().get_data().hex() if '/SMask' in obj else None})
-            widgets.append({'content': icon.get_data().decode('ascii'), 'matrix': list(icon.get('/Matrix', [1, 0, 0, 1, 0, 0])), 'images': images})
+            widgets.append({'content': icon.get_data().decode('ascii'), 'matrix': list(icon.get('/Matrix', [1, 0, 0, 1, 0, 0])), 'images': images, 'annotations': annotations})
     assert widgets, 'No projected portrait widgets'
     return widgets
 
@@ -102,6 +105,32 @@ def main():
         assert retained == vector
         final, retained = run('cold-vector', invalid, 'getField("Portrait").buttonSetIcon(getField("Portrait").buttonGetIcon());')
         assert retained == vector
+        # An existing printable widget normal AP is part of Reader's selected
+        # PDF-page icon. Copy that visual content, never interactive field actions.
+        annotated = folder/'annotated.pdf'
+        writer = PdfWriter()
+        page = writer.add_blank_page(160, 200)
+        page[NameObject('/Rotate')] = NumberObject(90)
+        background = DecodedStreamObject()
+        background.set_data(b'0 1 0 rg 0 0 160 200 re f\n')
+        page[NameObject('/Contents')] = writer._add_object(background)
+        page[NameObject('/Resources')] = DictionaryObject()
+        ap = DecodedStreamObject()
+        ap.set_data(b'1 1 1 rg 0 0 120 40 re f 0 0 0 rg 10 10 100 20 re f\n')
+        ap.update({NameObject('/Type'): NameObject('/XObject'), NameObject('/Subtype'): NameObject('/Form'),
+                   NameObject('/BBox'): ArrayObject([NumberObject(v) for v in [0,0,120,40]]),
+                   NameObject('/Resources'): DictionaryObject()})
+        widget = writer._add_object(DictionaryObject({NameObject('/Subtype'): NameObject('/Widget'),
+            NameObject('/FT'): NameObject('/Tx'), NameObject('/F'): NumberObject(4),
+            NameObject('/Rect'): ArrayObject([NumberObject(v) for v in [20,80,140,120]]),
+            NameObject('/AP'): DictionaryObject({NameObject('/N'): writer._add_object(ap)})}))
+        page[NameObject('/Annots')] = ArrayObject([widget])
+        writer.write(annotated)
+        imported, visual = run('pdf-widget', final, 'if(getField("Portrait").buttonImportIcon('+json.dumps(str(annotated))+',0)!==0)throw Error("Widget page import failed")')
+        assert all(len(v['annotations']) == 1 and '100 20 re f' in v['annotations'][0]['content'] for v in visual)
+        annotated.unlink()
+        final, retained = run('cold-widget', imported, 'getField("Portrait").buttonSetIcon(getField("Portrait").buttonGetIcon());')
+        assert retained == visual
         assert sha(source) == report['input_sha256']
         report.update(passed=True, pdf=str(final))
     except Exception as e:

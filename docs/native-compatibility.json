@@ -3211,7 +3211,7 @@
     "probe": "output/testing/2024-portrait-reachability-1794816326247724729/probe.json",
     "operation": "Original Portrait MouseUp menu\u2192Set any image/pdf file as Portrait",
     "failure": "Original MakeIconMenu_IconOptions reaches missing Field.buttonImportIcon and throws TypeError at Functions2:4259. Valid original offered button path; no scripted control rejection.",
-    "reader": "Actual import/page-picker qualification pending; documented Field API returns0 success,1 cancel,-1 open failure,-2 invalid page.",
+    "reader": "Clean PNG import/cancel/cold Reader PASS3. Two-page annotated PDF discovery retained and closed, with failed pilot/recovery explicitly separate.",
     "priority": "Bounded native implementation only; do not mark compatibility milestone or 2024 release complete. Tested default156 remains preserved while candidate is qualified.",
     "candidate_binary_sha256": "74189e4340e8c16fb3cd8c966ef27b55316851f5c06a0e2ccbcc3a9c76f850fe",
     "implementation": "Field.buttonImportIcon now opens a genuine native file picker or decodes an explicit local path, returns success/cancel/open/page codes, and gives the authoritative JavaScript field immutable opaque media. PNG alpha and selected PDF vector page resources project into MK.I/AP and survive file deletion, changed save and cold reopen. No successful no-op.",
@@ -3243,11 +3243,11 @@
       "prior_failure": "icon-picker-xvfb1794821627726080423 failed helper import before any PDF/picker launch; raw report preserved."
     },
     "remaining": [
-      "Real Reader original import and page-picker behavior; native-to-Reader and Reader-to-native media changes/reopens",
-      "JPEG/GIF/BMP/TIFF real-workflow format coverage; PCX unsupported",
-      "PDF page annotations/widget appearances, UserUnit and unusual page resources not implemented/qualified",
-      "Cross-document icon copying, non-normal icon faces and all icon-fit/alignment options remain incomplete",
-      "Default KDE portal and broader chooser behavior unqualified"
+      "JPEG/GIF/BMP/TIFF original workflows; PCX unsupported",
+      "PDF annotation flags/types/states beyond bounded existing normal AP, UserUnit and optional-content handling",
+      "Cross-document loaded icon identity/copy, non-normal faces and complete fit/alignment options",
+      "Default KDE portal and broader chooser behavior",
+      "Clean reproducible Reader PDF page-selection and mixed annotated-page changes; diagnostic recovery is not a clean workflow pass"
     ],
     "candidate_regression": {
       "report": "output/testing/icon-candidate-functional-regression-1794821841203944551/qualification.json",
@@ -3281,7 +3281,24 @@
       "portrait-reader-forward1794822645438617245 failed empty console before priming capture; retained/closed. Fresh primed forward1794822839282022731 PASS2 changed/cold Reader saves.",
       "portrait-reader-original1794823269068853084 failed inactive widget-zero focus, then normalized/raw Browse caption guard. Recovered original import, positive capture and exact canonical values, retained/closed; terminal report remains failed with recovery_completed=true.",
       "reader-portrait-import1794841364604530907 failed port2222 refused before PDF interaction. tools/acrobat/run up found running restored guest, preserved state, fresh preflight30/readiness1794841521 PASS12 before successful new run."
-    ]
+    ],
+    "annotation_repair": {
+      "status": "Implemented; broader milestone INCOMPLETE",
+      "qualification": "output/testing/icon-annotation-validation-1794849500/qualification.json",
+      "candidate_sha256": "78661940b2bba60f8394bf337f935a468a0d2ee7b1665a96c78fd08202c47e38",
+      "native_states": 8,
+      "rust_tests": 161,
+      "scope": "Selected PDF page existing normal annotation/widget appearances flattened into icon resources with BBox/Matrix-to-Rect placement. Does not import field actions or interactive state. Native cold after source deletion preserves actual marker AP.",
+      "reference": "Actual offered original portrait workflow, PDF chooser DataItem navigation to observed2 of2, rotated green ICON TWO screenshot; same document saved/positive console/retained timer/Unicode/checksum/full canonical/scripts verified and process terminated. Initial immediate debugger inspection raced opening; recovery completed without replay, terminal passed=false retained.",
+      "render_limits": "Both Poppler crops contain rotated green page and white/black widget AP. Marker glyphs appear as boxes in both Linux renders; actual Reader chooser screenshot shows ICON TWO. No Linux marker-glyph or pixel equality claim."
+    },
+    "vector_hp_mixed": {
+      "reader": "output/testing/portrait-vector-reader-hp-1794845378643525019/reader.json",
+      "reader_states": 4,
+      "further_native": "output/testing/portrait-vector-hp-final-native-1794847618984517408/reopen.json",
+      "further_native_states": 2,
+      "scope": "Original Con Blur wrapped once with guarded diagnostic input; actual Reader Con18/58,20/63,cold20/63,16/53 with Tough and fixed mapping; two further native changed Con20/63,18/58. Retains vector portrait, stored payloads/currentHP/temp/HDUsed, actual original traces. Not all HP modes/classes."
+    }
   },
   "portable_native_font_test_fixtures": {
     "status": "PASS160 on local Fedora and independent Ubuntu; strict local all-target Clippy PASS",
