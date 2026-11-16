@@ -83,3 +83,10 @@ Ampersand-safe adapter revision qualifies with29-check preflight continuation-am
 
 
 2026-11-02: initial current preflight continuation-nov02-up.log FAILED the pending Windows restart gate. Clean restart with no document open resolved it; continuation-nov02-up-after-restart.log PASSES29 checks. Fresh output/testing/readiness-1793598704.json PASSES24/24 with unchanged harness fingerprints and no new Reader crashes/resource exhaustion. The cloud Windows guest remains unqualified.
+
+
+## Observed startup barrier: current2024 environment (2026-11-16)
+
+Fresh preflight30 and readiness1794849842 pass all12 planned2024 environment cases with matching frozen fingerprint,389.134seconds. This is not the full24-case/three-fixture suite or native release qualification. Original functions/calculation flags can become ready before Startup.js's3000ms OpeningStatement; failed readiness1794849549 detected welcome blocking its keyboard paste. Its same document was retained/closed without replay. The adapter now retains a later3100ms document timer and acknowledges actual invocation count; host readiness requires exactly1 and enabled original calculations. startup-barrier1794849950/qualification.json records55 raw count observations/nine positive document paths, per-document timer retention/protocol tests, four host readiness controls and successful saved-output/environment checks.
+
+An operator temporarily added a host test under the frozen harness after readiness completed but during subsequent Fighter qualification. That Fighter attempt1794850232172128508 is invalidated/passed=false, all checkpoints excluded, same document retained/closed before fresh profile. The test now lives outside the frozen inputs at tools/native/test_reference_startup_readiness.py. Do not infer coverage from the interrupted attempt or silently erase its failure.

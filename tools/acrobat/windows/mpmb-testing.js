@@ -58,6 +58,17 @@ var MPMBTesting = {
             var value=d[q.name].apply(d,q.args || []);out.returnType=typeof value;if(value===null || typeof value==="string" || typeof value==="number" || typeof value==="boolean")out.value=value;out.pages=d.numPages;
         } else if (q.op === "functions") {
             var names=q.names || [];out.calculation={app:app.calculate,doc:d.calculate,delay:d.delay};out.functions={};
+            // Startup.js queues OpeningStatement after 3000ms. Function presence
+            // and enabled calculation can precede that modal welcome/source flow.
+            // Retain a later document-context timer and require its actual callback,
+            // rather than sleeping and assuming the desktop is ready for input.
+            if (typeof d.InitializeEverything === 'function' && typeof d.OpeningStatement === 'function') {
+                if (typeof d.__MPMBTestingStartupCount === 'undefined') {
+                    d.__MPMBTestingStartupCount=0;
+                    d.__MPMBTestingStartupTimer=app.setTimeOut('tDoc.__MPMBTestingStartupCount++;',3100);
+                }
+                out.startup={invocations:d.__MPMBTestingStartupCount};
+            }
             out.openDocuments=[];var active=app.activeDocs || [];
             for(var j=0;j<active.length;j++)out.openDocuments.push(String(active[j].path));
             for(var i=0;i<names.length;i++) out.functions[names[i]]=typeof d[names[i]];

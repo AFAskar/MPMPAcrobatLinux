@@ -3373,7 +3373,7 @@
     "states": 25,
     "fresh_runtimes": 3,
     "scope": "Champion class selection input from original source/class dialogs; original ApplyClasses and short/long rests, levels1/2/3/4/5/9/10/13/17/20, spend/recovery, partial Second Wind recovery and explicit zero on repeated rest, resource removal/reselection and cold changed saves. Exact canonical/resources/AP/scripts, caught errors, positive console, retained timer/checksum/Unicode observations. Native spending is programmatic Field.value; Reader profile requires actual verified typing.",
-    "reader_supervisor": "output/testing/fighter-2024-current-1794849950/reader-supervisor.json",
+    "reader_supervisor": "output/testing/fighter-2024-reader-clean-1794850500/reader.log:local tmux mpmb-fighter2024-reader-clean, fresh profile after invalidated attempt safely retained/closed",
     "limits": [
       "Not complete Fighter/Champion or every subclass",
       "Fighting style, mastery, feats, automatic HP and combat unqualified in this profile",
@@ -3388,5 +3388,15 @@
       "Private original profile incorrectly expected Second Wind to retain2 used after short rest. Original sheet explicitly restores1; corrected expectation, no runtime patch. Failed raw profile retained.",
       "Private broadened profile lacked13th valid Changes-dialog reply; caught control error retained; public16 offered OK replies complete25."
     ]
+  },
+  "reference_startup_timer_barrier": {
+    "status": "Bounded2024 environment milestone COMPLETE; no native release claim",
+    "proof": "output/testing/startup-barrier-1794849950/qualification.json",
+    "fresh_preflight": "output/testing/fighter-2024-reader-retry-1794850200/preflight.log:30 checks pass",
+    "readiness": "output/testing/readiness-1794849842.json:exact2024 completed12 cases,389.134 seconds,matching frozen fingerprint",
+    "scope": "Original Startup queues OpeningStatement after3000ms even while functions/calculation already available. Reference adapter retains one document-context3100ms barrier timer; functions replies acknowledge actual count. Host requires exactly1 plus original function/calculation/delay readiness.55 raw observations across9 positive document paths; pending/duplicate counts and disabled calculation negative controls.",
+    "failed_prior": "output/testing/readiness-1794849549.json:welcome appeared during keyboard paste; exact failed document saved and closed in fighter-2024-current1794849950/readiness-cleanup.json. No mutation replay.",
+    "invalidated_followup": "reader-fighter-2024-resources1794850232172128508 invalidated because an operator briefly added a host test under frozen tools/acrobat during its run. Test relocated outside frozen inputs, owned driver interrupted during local PDF parsing, same document retained/closed, raw passed=false and invalidated.json preserved. Count none of its checkpoints. Prior completed readiness remained valid.",
+    "host_tests": "tools/native/test_reference_startup_readiness.py:4 meaningful host readiness controls; tools/acrobat/tests/startup-barrier.js per-document retention/actual callbacks and existing result-delivery regression pass."
   }
 }

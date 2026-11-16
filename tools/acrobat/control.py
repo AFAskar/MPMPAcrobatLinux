@@ -146,7 +146,8 @@ def ensure_document(path):
         state=raw_script('functions',path=path,names=['InitializeEverything','CalcMod'])
         calculation=state.get('calculation',{})
         if (all(v=='function' for v in state['functions'].values())
-                and calculation.get('app') and calculation.get('doc') and not calculation.get('delay')):
+                and calculation.get('app') and calculation.get('doc') and not calculation.get('delay')
+                and state.get('startup',{}).get('invocations') == 1):
             return state
         if time.monotonic()>deadline:
             raise RuntimeError('MPMB initialization or calculations not ready: '+json.dumps(state))
