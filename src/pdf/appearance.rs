@@ -540,7 +540,8 @@ mod tests {
     }
     #[test]
     fn borderless_plain_text_uses_available_width_and_alignment() {
-        let bytes = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
+        let bytes =
+            std::fs::read(crate::pdf::installed_fonts::test_font_path("DejaVuSans")).unwrap();
         let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
         let layout = FontLayout {
             fonts: vec![RenderFont {
@@ -606,7 +607,8 @@ mod tests {
     }
     #[test]
     fn single_line_center_uses_pdf_descriptor_without_replacing_rich_metrics() {
-        let bytes = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
+        let bytes =
+            std::fs::read(crate::pdf::installed_fonts::test_font_path("DejaVuSans")).unwrap();
         let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
         // Reader's original generated spell description: height 10.48, size
         // 6.25, PDF ascent/descent 1159/-411, saved baseline 2.903 points.
@@ -653,7 +655,8 @@ mod tests {
 
     #[test]
     fn decoration_geometry_does_not_follow_suggested_font_stroke_metrics() {
-        let original = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
+        let original =
+            std::fs::read(crate::pdf::installed_fonts::test_font_path("DejaVuSans")).unwrap();
         let face = ttf_parser::Face::parse(&original, 0).unwrap();
         let offset = |tag| {
             let table = face
@@ -684,7 +687,8 @@ mod tests {
     }
     #[test]
     fn underline_modes_emit_double_and_word_segments_without_losing_text() {
-        let bytes = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
+        let bytes =
+            std::fs::read(crate::pdf::installed_fonts::test_font_path("DejaVuSans")).unwrap();
         let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
         for (mode, expected) in [("underline", 1), ("double", 2), ("word", 2), ("", 0)] {
             let state = json!({"textSize":7,"richRenderActive":true,"richValue":[{"text":"aa bb","underline":mode}]});
@@ -719,7 +723,8 @@ mod tests {
     }
     #[test]
     fn decorations_keep_run_colors_and_paint_outside_text_objects() {
-        let bytes = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
+        let bytes =
+            std::fs::read(crate::pdf::installed_fonts::test_font_path("DejaVuSans")).unwrap();
         let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
         let state = json!({"textSize":7,"richRenderActive":true,"richValue":[
             {"text":"plain "},
@@ -813,8 +818,12 @@ mod tests {
     }
     #[test]
     fn mixed_faces_use_distinct_resources_and_face_specific_advances() {
-        let regular = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
-        let bold = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf").unwrap();
+        let regular =
+            std::fs::read(crate::pdf::installed_fonts::test_font_path("DejaVuSans")).unwrap();
+        let bold = std::fs::read(crate::pdf::installed_fonts::test_font_path(
+            "DejaVuSans-Bold",
+        ))
+        .unwrap();
         let normal = ttf_parser::Face::parse(&regular, 0).unwrap();
         let heavy = ttf_parser::Face::parse(&bold, 0).unwrap();
         let layout = FontLayout {
@@ -863,7 +872,8 @@ mod tests {
     }
     #[test]
     fn mixed_size_rich_lines_use_typographic_ascent_with_explicit_or_normal_leading() {
-        let bytes = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
+        let bytes =
+            std::fs::read(crate::pdf::installed_fonts::test_font_path("DejaVuSans")).unwrap();
         let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
         let metrics = RichFontMetrics {
             bbox_height: 1.57,
@@ -899,7 +909,8 @@ mod tests {
     }
     #[test]
     fn rich_first_baseline_uses_source_pdf_font_bounds_independently_of_line_spacing() {
-        let bytes = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
+        let bytes =
+            std::fs::read(crate::pdf::installed_fonts::test_font_path("DejaVuSans")).unwrap();
         let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
         for spacing in [11, 14] {
             let state = json!({"textSize":7,"richRenderActive":true,"richValue":[{"text":"A","textSize":7,"linespacing":spacing}]});
@@ -921,7 +932,8 @@ mod tests {
     }
     #[test]
     fn existing_rich_paragraph_alignment_survives_changed_field_default() {
-        let bytes = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
+        let bytes =
+            std::fs::read(crate::pdf::installed_fonts::test_font_path("DejaVuSans")).unwrap();
         let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
         let state = json!({"textSize":9,"alignment":"right","richRenderActive":true,"richValue":[{"text":"style probe","textSize":7,"alignment":"left"}]});
         let output = String::from_utf8(
@@ -957,7 +969,8 @@ mod tests {
     }
     #[test]
     fn explicit_rich_indent_survives_start_and_paragraph_break() {
-        let bytes = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
+        let bytes =
+            std::fs::read(crate::pdf::installed_fonts::test_font_path("DejaVuSans")).unwrap();
         let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
         let glyphs = "  A\n  B"
             .chars()
@@ -978,7 +991,8 @@ mod tests {
     }
     #[test]
     fn explicit_empty_rich_display_does_not_fall_back_to_canonical_text() {
-        let bytes = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
+        let bytes =
+            std::fs::read(crate::pdf::installed_fonts::test_font_path("DejaVuSans")).unwrap();
         let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
         let output = content(
             &face,
@@ -994,7 +1008,8 @@ mod tests {
     }
     #[test]
     fn rich_paragraph_flags_and_explicit_spacing_control_baselines() {
-        let bytes = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
+        let bytes =
+            std::fs::read(crate::pdf::installed_fonts::test_font_path("DejaVuSans")).unwrap();
         let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
         let output = content(&face,100.,50.,&field(),&json!({"richRenderActive":true,"richValue":[{"text":"A","textSize":7,"linespacing":11,"endParagraph":true},{"text":"B","textSize":7,"linespacing":11}],"textSize":7}),"AB",None).unwrap();
         let decoded = lopdf::content::Content::decode(&output).unwrap();
@@ -1009,7 +1024,8 @@ mod tests {
     }
     #[test]
     fn blank_rich_lines_preserve_the_newline_font_size() {
-        let bytes = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
+        let bytes =
+            std::fs::read(crate::pdf::installed_fonts::test_font_path("DejaVuSans")).unwrap();
         let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
         let glyphs = [('A', 7.), ('\n', 7.), ('\n', 6.), ('B', 7.)]
             .into_iter()

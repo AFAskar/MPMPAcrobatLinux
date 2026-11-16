@@ -3262,5 +3262,14 @@
       "scope": "Original2024 Portrait/menu; genuine file picker selects two-page synthetic PDF; owned viewable native page dialog edited to2 and OK clicked after screenshot verification; selected rotated blue vector exact in saved MK.I/AP; subsequent original-menu chooser cancellation retains it. Strict original errors/console empty.",
       "manual_actions": "Full chosen file/owned PID/window, observed edit and OK bounds, before/after page2 screenshots and actual keyboard/pointer confirmations retained. Mixed automated/observed manual control, not unattended-driver claim."
     }
+  },
+  "portable_native_font_test_fixtures": {
+    "status": "PASS160 on local Fedora and independent Ubuntu; strict local all-target Clippy PASS",
+    "scope": "Test-only exact DejaVu face-path discovery across Fedora, Debian/Ubuntu and Arch directories. Verify actual PostScript identity; no runtime fallback or cosmetic renderer change.",
+    "initial_cloud_failure": "~/.cache/mpmb-workers/icon-import-1794822300170613779/output/testing/validation/qualification.json:144 passed/16 failed, tests hardcoded Fedora-only font paths despite real Ubuntu faces installed. Raw failures retained.",
+    "cloud_retry": "~/.cache/mpmb-workers/icon-import-1794822300170613779/output/testing/validation-font-1794822772558618881/tests.log:160 PASS; locked cloud build and2024 acceptance also PASS, structural regression still active",
+    "local": "output/testing/portable-font-tests-1794822984083187805/qualification.json",
+    "source_manifest": "output/testing/cloud-font-test-portability-1794822772558618881/stage.json",
+    "limits": "This qualifies native test portability only, not the cloud Reader or any untested character workflow."
   }
 }

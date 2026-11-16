@@ -215,12 +215,42 @@ fn matching_name(face: &ttf_parser::Face<'_>, requested: &str) -> Option<String>
         .find(|actual| actual == requested || *actual == requested.replace(',', "-"))
 }
 
+/// Tests require these exact faces, but their package directories vary by distro.
+#[cfg(test)]
+pub(super) fn test_font_path(face: &str) -> &'static Path {
+    let paths = match face {
+        "DejaVuSans" => [
+            "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        ],
+        "DejaVuSans-Bold" => [
+            "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+        ],
+        _ => panic!("Unknown required test face {face}"),
+    };
+    paths
+        .into_iter()
+        .map(Path::new)
+        .find(|path| {
+            std::fs::read(path).ok().is_some_and(|bytes| {
+                ttf_parser::Face::parse(&bytes, 0)
+                    .ok()
+                    .is_some_and(|font| matching_name(&font, face).as_deref() == Some(face))
+            })
+        })
+        .unwrap_or_else(|| panic!("Install the exact {face} TrueType face to run font tests"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
     fn family_lookup_checks_face_style_and_reuses_embedded_bytes_first() {
-        let bytes = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
+        let bytes =
+            std::fs::read(crate::pdf::installed_fonts::test_font_path("DejaVuSans")).unwrap();
         let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
         assert_eq!(
             matching_family(&face, "DejaVu Sans", 400, false).as_deref(),
@@ -249,17 +279,20 @@ mod tests {
     }
     #[test]
     fn installed_substitutes_cannot_masquerade_as_requested_faces() {
-        let bytes = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf").unwrap();
+        let bytes =
+            std::fs::read(crate::pdf::installed_fonts::test_font_path("DejaVuSans")).unwrap();
         assert_eq!(
-            default_font_at(Path::new(
-                "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf"
-            )),
+            default_font_at(Path::new(crate::pdf::installed_fonts::test_font_path(
+                "DejaVuSans"
+            ))),
             Some(bytes.clone())
         );
-        assert!(default_font_at(Path::new(
-            "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf"
-        ))
-        .is_none());
+        assert!(
+            default_font_at(Path::new(crate::pdf::installed_fonts::test_font_path(
+                "DejaVuSans-Bold"
+            )))
+            .is_none()
+        );
         let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
         assert_eq!(
             matching_name(&face, "DejaVuSans").as_deref(),
@@ -267,7 +300,10 @@ mod tests {
         );
         assert!(matching_name(&face, "SegoeUI-Italic").is_none());
         assert!(matching_name(&face, "DejaVuSans-Bold").is_none());
-        let bold = std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf").unwrap();
+        let bold = std::fs::read(crate::pdf::installed_fonts::test_font_path(
+            "DejaVuSans-Bold",
+        ))
+        .unwrap();
         let bold = ttf_parser::Face::parse(&bold, 0).unwrap();
         assert_eq!(
             matching_name(&bold, "DejaVuSans,Bold").as_deref(),

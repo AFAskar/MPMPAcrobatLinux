@@ -131,8 +131,10 @@ mod tests {
     use lopdf::dictionary;
     #[test]
     fn type0_appearance_faces_are_discovered_without_default_resources() {
-        let bytes =
-            std::fs::read("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf").unwrap();
+        let bytes = std::fs::read(crate::pdf::installed_fonts::test_font_path(
+            "DejaVuSans-Bold",
+        ))
+        .unwrap();
         let mut doc = Document::with_version("1.7");
         let form = doc.add_object(dictionary! {"DR"=>dictionary!{"Font"=>dictionary!{}}});
         let root = doc.add_object(dictionary! {"Type"=>"Catalog","AcroForm"=>form});
