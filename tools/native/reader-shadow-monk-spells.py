@@ -37,11 +37,13 @@ def main():
     parser.add_argument('--readiness', type=Path, required=True)
     parser.add_argument('--input', type=Path, help='Byte-identical relocation of the native input; SHA remains strict')
     parser.add_argument('--observer', type=Path, required=True)
+    parser.add_argument('--spent-regeneration', action='store_true', help='Three-state actual resource typing, regeneration and cold preservation against a spent native profile')
     args = parser.parse_args()
+    count=3 if args.spent_regeneration else 5
     native = json.loads(args.native.read_text())
-    assert native['passed'] and len(native['phases']) == 5
+    assert native['passed'] and len(native['phases']) == count
     wanted = {p['label']: p['state'] for p in native['phases']}
-    assert len(wanted) == 5
+    assert len(wanted) == count
     source = args.input or Path(native['input'])
     assert hashlib.sha256(source.read_bytes()).hexdigest() == native['input_sha256']
     observer = args.observer.read_text()
@@ -58,7 +60,7 @@ def main():
     base = c.remote_path('runs/shadow-monk-spells-'+str(time.time_ns()))
     remote = base+'.pdf'
     opened = False
-    report = {'passed': False, 'scope': __doc__, 'native': str(args.native.resolve()),
+    report = {'passed': False, 'scope': __doc__, 'native': str(args.native.resolve()), 'spent_regeneration':args.spent_regeneration,
               'readiness': str(args.readiness.resolve()), 'reference': reference,
               'input': str(source), 'input_sha256': native['input_sha256'],
               'phases': [], 'observations': [], 'inputs': [], 'console_checks': [],
@@ -159,6 +161,16 @@ def main():
         report['inputs'].append({'wisdom_edit':typing.commit(c,remote,'Wis',str(value))})
         c.ensure_document(remote)
 
+    def spend(label,value):
+        import re
+        names=[key for key in wanted['spent-before-generation17']['resources'] if re.fullmatch(r'Limited Feature [0-9]+',key)]
+        observed=c.script('read',path=remote,fields=names)['fields']
+        selected=[key for key,v in observed.items() if v.startswith(label)]
+        assert len(selected)==1, observed
+        field='Limited Feature Used '+selected[0].rsplit(' ',1)[-1]
+        report['inputs'].append({'resource':label,'labels':observed,'typing':typing.commit(c,remote,field,value)})
+        c.ensure_document(remote)
+
     def clean_mirrors(pdf):
         values=canonical_fields(PdfReader(pdf))
         expected={name:'Shadow Monk spells workflow' for name in values if name=='PC Name' or (name.endswith('zAdvLog.PC Name') and 'SSfront.' in name)}
@@ -206,22 +218,31 @@ def main():
             opened = True
             c.ensure_document(remote)
             installed()
-            generate()
-            capture('generated3')
-            level(17)
-            generate()
-            capture('generated17')
-            snapshot('generated17')
-            wisdom(16)
-            generate()
-            capture('cold-wis16-17')
-            level(3)
-            generate()
-            capture('lowered3-wis16')
-            snapshot('lowered3-wis16')
-            wisdom(18)
-            generate()
-            capture('final-cold-restored3')
+            if args.spent_regeneration:
+                spend('Focus Points','2')
+                spend('Uncanny Metabolism','1')
+                capture('spent-before-generation17')
+                generate()
+                capture('spent-after-generation17')
+                snapshot('spent-regenerated17')
+                capture('cold-spent-regenerated17')
+            else:
+                generate()
+                capture('generated3')
+                level(17)
+                generate()
+                capture('generated17')
+                snapshot('generated17')
+                wisdom(16)
+                generate()
+                capture('cold-wis16-17')
+                level(3)
+                generate()
+                capture('lowered3-wis16')
+                snapshot('lowered3-wis16')
+                wisdom(18)
+                generate()
+                capture('final-cold-restored3')
             c.script('set', path=remote, values={'User Script': '', 'PC Name': 'Shadow Monk spells workflow'})
             saved = base+'-final.pdf'
             c.script('save', path=remote, output=saved)
@@ -230,9 +251,9 @@ def main():
             opened = False
             report['pdf'] = str(c.fetch(remote, folder/'reader-final.pdf'))
             clean_mirrors(Path(report['pdf']))
-            assert len(report['phases']) == 5 and len(report['console_checks']) == 3
-            assert [p['timer']['invocation_count'] for p in report['phases']] == [1,2,1,2,1]
-            assert all(report[k]['process_terminated'] for k in ['generated17_close', 'lowered3-wis16_close', 'final_close'])
+            assert len(report['phases']) == count and len(report['console_checks']) == (2 if args.spent_regeneration else 3)
+            assert [p['timer']['invocation_count'] for p in report['phases']] == ([1,2,1] if args.spent_regeneration else [1,2,1,2,1])
+            assert all(report[k]['process_terminated'] for k in (['spent-regenerated17_close','final_close'] if args.spent_regeneration else ['generated17_close', 'lowered3-wis16_close', 'final_close']))
             assert c.harness_fingerprint() == ready['harness_sha256']
             assert hashlib.sha256(source.read_bytes()).hexdigest() == native['input_sha256']
             report['passed'] = True

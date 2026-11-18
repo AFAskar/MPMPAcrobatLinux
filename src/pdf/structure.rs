@@ -303,6 +303,7 @@ fn shared_spawn(
     fields: &mut BTreeMap<String, Field>,
     pages: &mut Vec<ObjectId>,
     template: &Template,
+    template_name: &str,
     index: usize,
 ) -> Result<()> {
     let page = d.new_object_id();
@@ -355,6 +356,10 @@ fn shared_spawn(
         new_annots.push(Object::Reference(new));
     }
     pd.set("Type", "Page");
+    pd.set(
+        "TemplateInstantiated",
+        Object::Name(template_name.as_bytes().to_vec()),
+    );
     pd.set("Parent", page_root(d)?);
     pd.set("Annots", new_annots);
     d.objects.insert(page, Object::Dictionary(pd));
@@ -384,7 +389,7 @@ impl Pdf {
                     }
                     let rename = op["rename"].as_bool().unwrap_or(true);
                     if !rename {
-                        shared_spawn(&mut doc, &mut fields, &mut pages, t, index)?;
+                        shared_spawn(&mut doc, &mut fields, &mut pages, t, name, index)?;
                         continue;
                     }
                     let mut map = HashMap::new();
@@ -422,6 +427,12 @@ impl Pdf {
                         }
                         if *id == t.page {
                             dict.set("Type", "Page");
+                            // Reader permits deleting spawned form pages. Preserve
+                            // their named-template origin across save/reopen too.
+                            dict.set(
+                                "TemplateInstantiated",
+                                Object::Name(name.as_bytes().to_vec()),
+                            );
                             dict.set("Parent", page_root(&doc)?);
                             dict.set(
                                 "Annots",
@@ -611,6 +622,42 @@ mod tests {
             info: json!({}),
             bookmarks: json!({}),
             path: PathBuf::new(),
+        }
+    }
+    #[test]
+    fn spawned_page_origin_survives_serialization_for_both_field_modes() {
+        for rename in [false, true] {
+            let pdf = fixture();
+            let (mut doc, _) = pdf
+                .structure_projection(&json!({"__structure":[{
+                    "op":"spawn","template":"AScomp","index":1,"rename":rename
+                }]}))
+                .unwrap();
+            let mut bytes = Vec::new();
+            doc.save_to(&mut bytes).unwrap();
+            let reopened = Document::load_mem(&bytes).unwrap();
+            let pages = reopened.get_pages();
+            assert!(reopened
+                .get_dictionary(pages[&1])
+                .unwrap()
+                .get(b"TemplateInstantiated")
+                .is_err());
+            assert_eq!(
+                reopened
+                    .get_dictionary(pages[&2])
+                    .unwrap()
+                    .get(b"TemplateInstantiated")
+                    .unwrap()
+                    .as_name()
+                    .unwrap(),
+                b"AScomp"
+            );
+            assert!(pdf
+                .doc
+                .get_dictionary(pdf.templates["AScomp"].page)
+                .unwrap()
+                .get(b"TemplateInstantiated")
+                .is_err());
         }
     }
     #[test]

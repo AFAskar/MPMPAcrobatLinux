@@ -77,6 +77,8 @@ Read `docs/testing-environment.md` before changing or testing PDF behavior.
 
 - Generated widgets must not reuse template appearances that can predate current field values. Qualify original generation after edited save/reopen, checking canonical and visible AP text separately; preserve live formatted display when cloning without introducing extra field events.
 
+- Preserve the actual named-template `/TemplateInstantiated` origin on newly spawned pages in both shared and renamed field modes. Reader regeneration must start from an already native-generated saved page and prove deletion/replacement across cold reopen; generation from a seed without that page cannot qualify this boundary. Do not stamp arbitrary imported/original pages as spawned templates.
+
 - A GTK tree-table role does not establish Table/Selection interfaces. Inspect offered actions. A list.select-all picker test is qualified only with exactly one known disposable file and must verify actual imported path/hash; keep default-portal/multiple-file coverage separate. JSON object-member order normalization must be disclosed while retaining all span properties and array order.
 
 - Doc.info custom conversion differs from Number(): qualify decimal and lowercase boolean literals separately from exponents, whitespace and other text. Read Authors/ContactEmail from namespaced XMP; fresh Authors arrays do not mutate document metadata. Sorted key-set/epoch comparisons do not establish raw enumeration or locale-date equality. Measure a Reader-saved input afresh when qualifying ModDate; do not compare a pre-save timestamp to a different file or normalize the change away.
