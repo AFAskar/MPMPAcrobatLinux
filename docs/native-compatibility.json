@@ -3496,5 +3496,12 @@
     ],
     "clean_name_mirrors": "Three clean saved stages independently verify character name and generated zAdvLog.PC Name exact, original scripts unchanged",
     "reader": "local tmux mpmb-shadow-reader; supervisor output/testing/monk-shadow-reader1795021200/supervisor.json; DO NOT count until terminal success and cleanup"
+  },
+  "strict_captured_json_comparison": {
+    "status": "Qualified bounded verification improvement; no new product/runtime behavior claim",
+    "tool": "tools/native/workflow_state_comparison.py",
+    "scope": "Object member order only ignored; boolean/number/string/null distinctions and array order preserved. Only optional rawPrefixes address omission allowed, requiring retained addresses and unchanged logical page/suffix maps. Complete successful report and exact unique case sequence required.",
+    "negative_controls": "tools/native/test_workflow_state_comparison.py:5 passing controls including False versus0, True versus1, NBSP versus space, array/case order and incomplete-report rejection",
+    "real_proof": "output/testing/strict-workflow-json1795022600/comparison.json:25 Fighter native/Reader +25 further-native +6 original Body/Mind +6 readded pending variant pairs PASS; raw reference states retained, no applied normalization. output/testing/monk-shadow-reader-preparation1795022000/strict-comparison.json adds5 complete Reader spell states."
   }
 }
