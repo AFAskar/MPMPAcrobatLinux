@@ -3414,7 +3414,7 @@
     "host_tests": "tools/native/test_reference_startup_readiness.py:4 meaningful host readiness controls; tools/acrobat/tests/startup-barrier.js per-document retention/actual callbacks and existing result-delivery regression pass."
   },
   "2024_monk_resource_candidate": {
-    "status": "Native22/Reader22 PASS; reviewed changed/cold native chain active, milestone INCOMPLETE",
+    "status": "COMPLETE bounded resource/attack/persistence milestone; full Monk and2024 table readiness incomplete",
     "report": "~/.cache/mpmb-workers/monk-traced22-1795012900/output/testing/native-monk-2024-resources-1795012791758389913/resources.json",
     "candidate_sha256": "a5d419adb6fe1368bbb7b7ed51d6328d5bc25650e52e747a5a733b4945862856",
     "scope": "Original2024 Shadow Monk Focus/Metabolism resources/rests/removal, original unarmed edit and attack/AC progression across three runtimes. Extra first checkpoint proves original nonempty25-byte Validate action executes before any class change; before/after trace, actual event value/type, no overflow, positive console/timer/Unicode/checksum and canonical/AP/scripts checked.",
@@ -3429,8 +3429,13 @@
       "positive_live_console_checks": 22,
       "process_terminations": 3
     },
-    "further_native": "output/testing/monk-further-reviewed-1795015700/further-native.json:active",
-    "prior_failed_mixed": "output/testing/monk-reader-traced-retry-1795013900/further-native.json:expected positive console before timer observer request; empty capture rejected, engine stages errors empty; not a runtime compatibility pass/failure"
+    "further_native": "output/testing/monk-further-canonical-1795016400/further-native.json:PASS; changed original class3 and actual native Quarterstaff edit/save before cold full22 restoring Unarmed strike",
+    "prior_failed_mixed": "output/testing/monk-reader-traced-retry-1795013900/further-native.json:expected positive console before timer observer request; empty capture rejected, engine stages errors empty; not a runtime compatibility pass/failure",
+    "further_native_report": "output/testing/native-monk-2024-resources-1795016041778854844/resources.json",
+    "blank_resources": "output/testing/monk-further-canonical-1795016400/blank-three/blank-resource-appearances.json:PASS582 visible empty resource widgets per stage",
+    "rendered_resources": "output/testing/monk-further-canonical-1795016400/resource-renders/renders.json:nine reviewed actual Poppler crops, Focus7 clears on short rest; Metabolism1 retained until long rest; all three engines",
+    "canonical_guard_regression": "output/testing/weapon-observer-mapping-regression-1795016900/qualification.json:PASS shared actions with distinct export /TM aliases; wrong fingerprint creates no output",
+    "prior_failed_guard": "output/testing/monk-further-reviewed-1795015700/further-native.json:KeyError from export mapping lookup, not field loss; failed intermediate flags not counted. Corrected logical canonical lookup and separate calculation settle, original artifacts retained"
   },
   "cloud_annotation_regression_2024_current": {
     "status": "Bounded native regression PASS; not complete class features or Reader qualification",

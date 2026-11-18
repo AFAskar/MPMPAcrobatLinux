@@ -1,5 +1,11 @@
 # Development handoff
 
+## Bounded Shadow Monk resource milestone COMPLETE — 2026-11-18
+
+Native22/Reader22/further-native22 pass; see2024_monk_resource_candidate for exact immutable report paths. Mixed supervisor monk-further-canonical1795016400/further-native.json passes changed original Monk3/Quarterstaff save before cold unarmed restoration.582 visible empty resource AP widgets per stage pass. Nine actual Poppler resource crops reviewed in monk-further-canonical1795016400/resource-renders/contact.png show7→empty Focus after short rest, Metabolism1 retained through short rest then cleared on long rest, all three engine stages. No whole-page pixel parity claim. Full captured data exact except separately retained raw weapon traces; class input still original parser, not actual Reader class-dropdown coverage. No full Monk/readiness claim.
+
+Body and Mind matched native six-state PASS in cloud bodymind-workflow1795016479934285080/bodymind.json, actual retained invocation markers1/2,1/2/3,1 verified. Ability application now runs via SAME original RunUserScript(false) entry point as Reader, retaining/reexecuting installed add-ons and recording script keys. Actual local Reader owner mpmb-bodymind-reader, supervisor monk-bodymind-reader1795017100; report reader-monk-bodymind1795016604792411323. No competing local commands. Observer/public tools under tools/native may develop without changing frozen harness. Reader/currentStats/cold changes must pass before bounded ability milestone complete. Cloud secondary readiness still active; inspect logs only. Goal active;2024 first.
+
 ## Canonical action lookup and completed Monk mixed chain — 2026-11-18
 
 The stopped mixed run monk-further-reviewed1795015700 failed its test guard: pypdf.get_fields uses export mapping /TM, which the actual Reader-saved weapon field sets to Quarterstaff. The logical /T field remains present. Both native resource action guards and observer preparation now resolve verify.canonical_fields references, not export aliases. No product/PDF repair was required. Synthetic shared-action plus distinct /TM alias regression and wrong-fingerprint/no-output negative control PASS in weapon-observer-mapping-regression1795016900/qualification.json. The prior no-alias test and failed artifacts remain intact.
