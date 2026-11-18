@@ -2,6 +2,29 @@
 import time
 
 
+def cancel_reading_preparation(c, path):
+    """Cancel only Reader's observed accessibility-preparation task, not PDF work."""
+    filename = str(path).replace('\\', '/').rsplit('/', 1)[-1]
+    rows = c.command('inspect')
+    documents = [w for w in rows if w.get('class') == 'AcrobatSDIWindow' and '.pdf' in w.get('name', '').lower()]
+    assert len(documents) == 1 and documents[0]['name'].startswith(filename+' -'), documents
+    dialogs = [w for w in rows if w.get('class') in ['#32770', 'AVL_AVDialog']]
+    assert len(dialogs) == 1 and dialogs[0]['class'] == '#32770' and dialogs[0]['name'] == 'Preparing document for reading', dialogs
+    owner = dialogs[0]['handle']
+    buttons = [w for w in rows if w.get('owner') == owner and w.get('class') == 'Button' and w.get('name') == 'Cancel' and w.get('enabled')]
+    assert len(buttons) == 1, buttons
+    result = {'scope':'Cancel accessibility preparation only; no document calculation, generation or save replay', 'before':rows,
+              'invocation':c.command('invoke', name='Cancel', owner=owner)}
+    deadline=time.monotonic()+30
+    while True:
+        after=c.command('inspect')
+        if not any(w['handle']==owner for w in after):
+            result['after']=after
+            return result
+        assert time.monotonic()<deadline, after
+        time.sleep(0.1)
+
+
 def close_saved(c, path):
     def normalize(value):
         value = str(value).replace('\\', '/')
