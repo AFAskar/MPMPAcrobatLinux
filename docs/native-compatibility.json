@@ -3414,16 +3414,23 @@
     "host_tests": "tools/native/test_reference_startup_readiness.py:4 meaningful host readiness controls; tools/acrobat/tests/startup-barrier.js per-document retention/actual callbacks and existing result-delivery regression pass."
   },
   "2024_monk_resource_candidate": {
-    "status": "Traced native22 PASS; actual Reader comparison active; milestone INCOMPLETE",
+    "status": "Native22/Reader22 PASS; reviewed changed/cold native chain active, milestone INCOMPLETE",
     "report": "~/.cache/mpmb-workers/monk-traced22-1795012900/output/testing/native-monk-2024-resources-1795012791758389913/resources.json",
     "candidate_sha256": "a5d419adb6fe1368bbb7b7ed51d6328d5bc25650e52e747a5a733b4945862856",
     "scope": "Original2024 Shadow Monk Focus/Metabolism resources/rests/removal, original unarmed edit and attack/AC progression across three runtimes. Extra first checkpoint proves original nonempty25-byte Validate action executes before any class change; before/after trace, actual event value/type, no overflow, positive console/timer/Unicode/checksum and canonical/AP/scripts checked.",
     "important_limit": "Initial structural input directly has18 ability fields. Level20 Body and Mind bonus remains pending, Dex/Wis stay18 and AC18. Explicit ability-dialog application/removal, initiative/Metabolism healing, spell choices, legal feat/ASI progression and actual Reader class dropdown are NOT qualified. Do not claim full Monk or automatic Body and Mind.",
     "native_local_copy": "output/testing/monk-reader-traced-retry-1795013900/native.json",
-    "reader": "output/testing/monk-reader-traced-retry-1795013900/supervisor.json:active local owner tmux mpmb-monk-reader-traced-retry",
+    "reader": "output/testing/reader-monk-2024-resources-1795013616613516195/resources.json",
     "reference": "output/testing/readiness-1795012548.json:complete exact2024 twelve-case plan,404.56 seconds; prior failed1795011738 retained/closed, not relabeled",
     "trace_scope": "Diagnostic INPUT wraps only Attack.1.Weapon Selection /V, preserves original25 bytes exactly once (SHA92a84010bdc2a82d1362723a396f1f558d5113149047582efd8647aef95d6ac3). Guarded logging never writes event/field values and catches unavailable getters locally. Reader compares captured data exactly except complete raw weaponTrace arrays, retained separately; no generic/per-keystroke sequence parity claim.",
-    "source_format": "output/testing/monk-traced-reviewed-1795012100/python-format.json:public native driver formatted after sealed cloud source, exact Python AST equality proved; original source hashes/artifacts retained"
+    "source_format": "output/testing/monk-traced-reviewed-1795012100/python-format.json:public native driver formatted after sealed cloud source, exact Python AST equality proved; original source hashes/artifacts retained",
+    "reader_counts": {
+      "states": 22,
+      "positive_live_console_checks": 22,
+      "process_terminations": 3
+    },
+    "further_native": "output/testing/monk-further-reviewed-1795015700/further-native.json:active",
+    "prior_failed_mixed": "output/testing/monk-reader-traced-retry-1795013900/further-native.json:expected positive console before timer observer request; empty capture rejected, engine stages errors empty; not a runtime compatibility pass/failure"
   },
   "cloud_annotation_regression_2024_current": {
     "status": "Bounded native regression PASS; not complete class features or Reader qualification",
@@ -3437,5 +3444,12 @@
     },
     "scope": "Locked build, strict all-target Clippy,2024 acceptance, strict original caught-error/console checks during all structural creation/reopens; sidekicks have explicit confirmation/base HD. Same Rust source as786619, separate Ubuntu toolchain. Earlier missing-Clippy failure preserved; installed matching package before lint retry.",
     "limits": "All default/structural pairs remain feature-choice/table-use gaps. No cloud Reader pass inferred. Actual capped-worker memory peak2,764,808,192bytes within3GiB; historical sampler reserve>11GiB/no new host OOM after earlier copy failure."
+  },
+  "weapon_validation_input_preparation": {
+    "status": "Bounded preparation checks PASS; no workflow completion inferred",
+    "tool": "tools/native/prepare-weapon-validation-observer.py",
+    "actual_input": "output/testing/weapon-validation-input-1795014394758465465/input.json",
+    "synthetic_controls": "output/testing/weapon-observer-generator-test-1795014500/qualification.json",
+    "scope": "Source SHA and exact existing nonempty Validate hash guards, original bytes exactly once, guarded event reads, explicit512-record overflow flag, detached shared AA/action objects, independent single-target action-diff and exact canonical values/types/scripts; only physical reference-ID differences ignored."
   }
 }
