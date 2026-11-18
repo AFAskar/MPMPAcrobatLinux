@@ -3414,10 +3414,28 @@
     "host_tests": "tools/native/test_reference_startup_readiness.py:4 meaningful host readiness controls; tools/acrobat/tests/startup-barrier.js per-document retention/actual callbacks and existing result-delivery regression pass."
   },
   "2024_monk_resource_candidate": {
-    "status": "Native21 PASS; Reader and mixed persistence pending; milestone INCOMPLETE",
-    "report": "output/testing/monk-2024-preparation-1794851400/resources.json",
-    "candidate_sha256": "78661940b2bba60f8394bf337f935a468a0d2ee7b1665a96c78fd08202c47e38",
-    "scope": "Shadow Monk Focus Points/Uncanny Metabolism maxima and separate rests, source-selected original subclass, unarmed attack die/to-hit and retained unarmored AC, levels1/2/3/5/10/11/15/17/20 plus removal/reselection and three fresh runtimes; original caught-error/positive-console/timer/Unicode/checksum/canonical/AP checks.",
-    "important_limit": "Initial structural input directly has18 ability fields. Level20 Body and Mind bonus remains pending, Dex/Wis stay18 and AC18. Explicit ability-dialog application/removal, initiative/Metabolism healing, spell choices, legal feat/ASI progression and actual Reader class dropdown are NOT qualified. Do not claim full Monk or automatic Body and Mind."
+    "status": "Traced native22 PASS; actual Reader comparison active; milestone INCOMPLETE",
+    "report": "~/.cache/mpmb-workers/monk-traced22-1795012900/output/testing/native-monk-2024-resources-1795012791758389913/resources.json",
+    "candidate_sha256": "a5d419adb6fe1368bbb7b7ed51d6328d5bc25650e52e747a5a733b4945862856",
+    "scope": "Original2024 Shadow Monk Focus/Metabolism resources/rests/removal, original unarmed edit and attack/AC progression across three runtimes. Extra first checkpoint proves original nonempty25-byte Validate action executes before any class change; before/after trace, actual event value/type, no overflow, positive console/timer/Unicode/checksum and canonical/AP/scripts checked.",
+    "important_limit": "Initial structural input directly has18 ability fields. Level20 Body and Mind bonus remains pending, Dex/Wis stay18 and AC18. Explicit ability-dialog application/removal, initiative/Metabolism healing, spell choices, legal feat/ASI progression and actual Reader class dropdown are NOT qualified. Do not claim full Monk or automatic Body and Mind.",
+    "native_local_copy": "output/testing/monk-reader-traced-retry-1795013900/native.json",
+    "reader": "output/testing/monk-reader-traced-retry-1795013900/supervisor.json:active local owner tmux mpmb-monk-reader-traced-retry",
+    "reference": "output/testing/readiness-1795012548.json:complete exact2024 twelve-case plan,404.56 seconds; prior failed1795011738 retained/closed, not relabeled",
+    "trace_scope": "Diagnostic INPUT wraps only Attack.1.Weapon Selection /V, preserves original25 bytes exactly once (SHA92a84010bdc2a82d1362723a396f1f558d5113149047582efd8647aef95d6ac3). Guarded logging never writes event/field values and catches unavailable getters locally. Reader compares captured data exactly except complete raw weaponTrace arrays, retained separately; no generic/per-keystroke sequence parity claim.",
+    "source_format": "output/testing/monk-traced-reviewed-1795012100/python-format.json:public native driver formatted after sealed cloud source, exact Python AST equality proved; original source hashes/artifacts retained"
+  },
+  "cloud_annotation_regression_2024_current": {
+    "status": "Bounded native regression PASS; not complete class features or Reader qualification",
+    "report": "~/.cache/mpmb-workers/annotation-1794850200/output/testing/validation-retry-1794850300/qualification.json",
+    "binary_sha256": "a5d419adb6fe1368bbb7b7ed51d6328d5bc25650e52e747a5a733b4945862856",
+    "counts": {
+      "unit_tests": 161,
+      "ordinary_structural_pairs": 97,
+      "separate_bard_pairs": 6,
+      "explicit_sidekick_profiles": 5
+    },
+    "scope": "Locked build, strict all-target Clippy,2024 acceptance, strict original caught-error/console checks during all structural creation/reopens; sidekicks have explicit confirmation/base HD. Same Rust source as786619, separate Ubuntu toolchain. Earlier missing-Clippy failure preserved; installed matching package before lint retry.",
+    "limits": "All default/structural pairs remain feature-choice/table-use gaps. No cloud Reader pass inferred. Actual capped-worker memory peak2,764,808,192bytes within3GiB; historical sampler reserve>11GiB/no new host OOM after earlier copy failure."
   }
 }
