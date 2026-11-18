@@ -3474,7 +3474,7 @@
     ]
   },
   "2024_shadow_monk_spell_candidate": {
-    "status": "INCOMPLETE: public native five-state PASS; actual Reader five-state run active, mixed/rendering proof pending",
+    "status": "COMPLETE bounded fixed Shadow Arts spell/progression/changed persistence milestone; not full Monk or2024 release",
     "scope": "Fixed original Shadow Arts Minor Illusion/Darkness; offered Continue/Generate confirmations, level3/17 spell DC/attack, actual native Wisdom edits and three runtime snapshots. Class/source dropdowns, arbitrary spell choice/slots/casting and other subclasses remain open.",
     "active_native": "cloud monk-shadow-spells-workflow1795019192740159401:generated3/generated17 canonical/selected AP evidence completed; remaining cold changes running",
     "verification": "tools/native/verify-generated-fields.py:all supplied canonical/API values strict except explicit PDF button export-name conversion; populated text/choice APs in fresh eight-field/768MiB-AS processes; exact44-byte original uppercase Format hash2e26e97cc0d3be3dae91797de20edcef7ea059d1e08b992de2dd5a6f103cc83a permits only separate ASCII display expectations; canonical /V never normalized or written",
@@ -3495,7 +3495,14 @@
       "final cold restored Wisdom18/Monk3 DC14/+6"
     ],
     "clean_name_mirrors": "Three clean saved stages independently verify character name and generated zAdvLog.PC Name exact, original scripts unchanged",
-    "reader": "local tmux mpmb-shadow-reader; supervisor output/testing/monk-shadow-reader1795021200/supervisor.json; DO NOT count until terminal success and cleanup"
+    "reader": "output/testing/reader-shadow-monk-spells1795020678313685179/spells.json:PASS5;3 positive consoles/retained counts1/2,1/2,1;3 process closures;1 observed guarded accessibility-reading cancellation",
+    "further_native": "cloud shadow-further1795023200/further-native.json:PASS5 strict typed comparison; changed actual Reader final to17/Wis16+regen/save then cold restore3/Wis18; report monk-shadow-spells-workflow1795022796454212892/spells.json",
+    "typed_reader_comparison": "output/testing/monk-shadow-reader-preparation1795022000/strict-comparison.json:5 full typed JSON pairs PASS",
+    "rendering": "output/testing/shadow-spell-renders-nine1795023800/renders.json:nine reviewed real Poppler crops from clean native/Reader/further-native saves, DC18/13/14, corresponding attack10/5/6, Minor Illusion/Darkness and original override text visible",
+    "appearance_boundary": "Existing inspect AP text checks apply NFKC/whitespace, choice-label and integer leading-plus normalization; canonical/API values remain exact. Native/further-native attack header visibly omits + while Reader includes it, and fonts/weights/pixels differ. This is disclosed appearance coverage, not exact AP/pixel equality.",
+    "resource_integration": "Separate native3 source-verified PASS in output/testing/shadow-spent-regeneration1795022300/public-native.json +strict-native.json:Focus2/Metabolism1 unchanged through original regeneration and cold reopen,102 populated APs. Reader/mixed resource-regeneration qualification still INCOMPLETE.",
+    "prior_reader_failure": "reader-shadow-monk-spells1795019689003217787 remains FAILED after4 matched states; same saved doc retained/closed via exact accessibility task cancellation in shadow-reading-preparation-recovery1795021800. Fresh full5 repeated independently.",
+    "prior_further_guard": "shadow-further1795022800 remains FAILED:What uses numeric-converting Field.value so+9 readsNumber9; corrected exact-string assertion uses valueAsString, no runtime repair required."
   },
   "strict_captured_json_comparison": {
     "status": "Qualified bounded verification improvement; no new product/runtime behavior claim",

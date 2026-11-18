@@ -7,7 +7,10 @@ parser = argparse.ArgumentParser(description='Original2024 Shadow Monk fixed-spe
 parser.add_argument('--input', type=Path, required=True)
 parser.add_argument('--binary', type=Path, default=root / 'target/debug/mpmb-reader')
 parser.add_argument('--pdfium', type=Path)
+parser.add_argument('--restore-baseline', action='store_true', help='After cold load, perform original Wisdom18 and Shadow Monk3 actions before generation; for changed mixed-engine input')
+parser.add_argument('--spent-regeneration', action='store_true', help='Three-state Focus2/Metabolism1 preservation through generation and cold reopen; requires an already generated level17/Wis18 source')
 args = parser.parse_args()
+assert not (args.restore_baseline and args.spent_regeneration)
 folder = root / 'output/testing' / ('monk-shadow-spells-workflow-' + str(time.time_ns()))
 folder.mkdir()
 print(folder, flush=True)
@@ -28,7 +31,7 @@ summary = module('shadow_summary', 'fighter-styles.py').SUMMARY
 observer = (root / 'tools/native/shadow-monk-spells-observer.js').read_text()
 source = args.input.resolve()
 binary = args.binary.resolve()
-report = {'passed': False, 'scope': 'Original2024 Shadow Monk fixed spell dialogs/generation, level3/17 DC/attack and Wisdom changes across three runtimes; explicit Continue and Generate offered controls. Native only until Reader and changed mixed validation. Initial structural18 abilities are not legal feat/ASI construction.', 'input': str(source), 'input_sha256': hashlib.sha256(source.read_bytes()).hexdigest(), 'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(), 'source_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), 'verifier_sha256': hashlib.sha256((root / 'tools/native/verify-generated-fields.py').read_bytes()).hexdigest(), 'observer_sha256': hashlib.sha256(observer.encode()).hexdigest(), 'phases': []}
+report = {'passed': False, 'restore_baseline': args.restore_baseline, 'scope': 'Original2024 Shadow Monk fixed spell dialogs/generation, level3/17 DC/attack and Wisdom changes across three runtimes; explicit Continue and Generate offered controls. Native only until Reader and changed mixed validation. Initial structural18 abilities are not legal feat/ASI construction.', 'input': str(source), 'input_sha256': hashlib.sha256(source.read_bytes()).hexdigest(), 'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(), 'source_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), 'verifier_sha256': hashlib.sha256((root / 'tools/native/verify-generated-fields.py').read_bytes()).hexdigest(), 'observer_sha256': hashlib.sha256(observer.encode()).hexdigest(), 'phases': []}
 steps = []
 captures = []
 dialogs = []
@@ -107,41 +110,70 @@ def clean_mirrors(pdf):
     checked = inspect(pdf, expected)
     assert checked['passed'], checked
     report.setdefault('clean_name_mirrors', []).append(checked)
+def spend(label, value):
+    code="var selected=[];for(var i=0;i<numFields;i++){var n=getNthFieldName(i);if(/^Limited Feature [0-9]+$/.test(n)&&getField(n).valueAsString.indexOf("+json.dumps(label)+")==0)selected.push('Limited Feature Used '+n.slice(16));}if(selected.length!==1)throw Error('Resource is not unique');__host.userEdit(selected[0],"+json.dumps(value)+");"
+    steps.extend([{'op':'eval','code':code},{'op':'advance','ms':1100}])
+def assert_spent(state):
+    rows=[]
+    for k,v in state['resources'].items():
+        if k.startswith('Limited Feature ') and k.rsplit(' ',1)[-1].isdigit() and (v.startswith('Focus Points') or v.startswith('Uncanny Metabolism')):
+            rows.append(state['resources']['Limited Feature Used '+k.rsplit(' ',1)[-1]])
+    assert rows==['2','1'],rows
 try:
-    steps = install()
-    captures = []
-    dialogs = []
-    generate()
-    capture('generated3', 3, 18, 14, 6)
-    level(17)
-    generate()
-    capture('generated17', 17, 18, 18, 10)
-    saved17 = clean('saved17')
-    run('generate3-17', source)
-    clean_mirrors(saved17)
-    steps = install()
-    captures = []
-    dialogs = []
-    wisdom(16)
-    generate()
-    capture('cold-wis16-17', 17, 16, 17, 9)
-    level(3)
-    generate()
-    capture('lowered3-wis16', 3, 16, 13, 5)
-    saved3 = clean('saved3-wis16')
-    run('cold-wis16', saved17)
-    clean_mirrors(saved3)
-    steps = install()
-    captures = []
-    dialogs = []
-    wisdom(18)
-    generate()
-    capture('final-cold-restored3', 3, 18, 14, 6)
-    final = clean('final')
-    run('final-restored', saved3)
-    clean_mirrors(final)
-    assert len(report['phases']) == 5
-    report.update(passed=True, pdf=str(final))
+    if args.spent_regeneration:
+        report['scope']='Native-only resource/spell generation integration discovery: spent Focus2 and Metabolism1 retained through original regeneration and cold snapshot; not Reader qualification.'
+        steps=install();captures=[];dialogs=[]
+        spend('Focus Points','2');spend('Uncanny Metabolism','1')
+        capture('spent-before-generation17',17,18,18,10)
+        generate();capture('spent-after-generation17',17,18,18,10)
+        saved=clean('spent-regenerated17');run('spent-regeneration',source);clean_mirrors(saved)
+        steps=install();captures=[];dialogs=[]
+        capture('cold-spent-regenerated17',17,18,18,10)
+        final=clean('final');run('cold-spent',saved);clean_mirrors(final)
+        assert len(report['phases'])==3
+        for p in report['phases']:assert_spent(p['state'])
+        comparable=lambda state:{k:v for k,v in state.items() if k!='rawPrefixes'}
+        assert all(comparable(p['state'])==comparable(report['phases'][0]['state']) for p in report['phases'])
+        report.update(passed=True,pdf=str(final))
+    else:
+        steps = install()
+        captures = []
+        dialogs = []
+        if args.restore_baseline:
+            wisdom(18)
+            level(3)
+        generate()
+        capture('generated3', 3, 18, 14, 6)
+        level(17)
+        generate()
+        capture('generated17', 17, 18, 18, 10)
+        saved17 = clean('saved17')
+        run('generate3-17', source)
+        clean_mirrors(saved17)
+        steps = install()
+        captures = []
+        dialogs = []
+        wisdom(16)
+        generate()
+        capture('cold-wis16-17', 17, 16, 17, 9)
+        level(3)
+        generate()
+        capture('lowered3-wis16', 3, 16, 13, 5)
+        saved3 = clean('saved3-wis16')
+        run('cold-wis16', saved17)
+        clean_mirrors(saved3)
+        steps = install()
+        captures = []
+        dialogs = []
+        wisdom(18)
+        generate()
+        capture('final-cold-restored3', 3, 18, 14, 6)
+        final = clean('final')
+        run('final-restored', saved3)
+        clean_mirrors(final)
+        assert len(report['phases']) == 5
+        report.update(passed=True, pdf=str(final))
+
 except Exception as e:
     report['error'] = str(e)
     raise
