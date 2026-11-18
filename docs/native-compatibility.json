@@ -3456,5 +3456,21 @@
     "actual_input": "output/testing/weapon-validation-input-1795014394758465465/input.json",
     "synthetic_controls": "output/testing/weapon-observer-generator-test-1795014500/qualification.json",
     "scope": "Source SHA and exact existing nonempty Validate hash guards, original bytes exactly once, guarded event reads, explicit512-record overflow flag, detached shared AA/action objects, independent single-target action-diff and exact canonical values/types/scripts; only physical reference-ID differences ignored."
+  },
+  "2024_monk_body_and_mind": {
+    "status": "COMPLETE bounded explicit feature-application/removal and changed mixed persistence; not full Monk or2024 release",
+    "native": "output/testing/monk-bodymind-workflow-1795016600/public-native.json:cloud public source PASS6 on a5d419",
+    "reader": "output/testing/reader-monk-bodymind-1795016768179518604/bodymind.json:PASS6, three positive live consoles and fresh process closures, retained timer counts1/2,1/2/3,1",
+    "further_native": "output/testing/bodymind-workflow-1795017470223848148/bodymind.json:PASS6 on786619 after actual Reader final1 changed by original Monk20 action, saved and cold reopened",
+    "reader_transition": "output/testing/reader-monk-bodymind-1795017693580135580/bodymind.json:PASS original class1-to20 full pending state, actual source hash verified, positive live console/retained timer/process closure",
+    "comparison": "output/testing/monk-bodymind-further-reviewed-1795018600/public-transition-comparison.json:PASS first further-native state equals actual Reader transition; subsequent five equal original Reader counterparts, every captured field/full CurrentStats/calculation/errors/installed script key retained; parsed JSON ignores object member order only",
+    "scope": "Structural base18 Shadow Monk20 pending18/18 AC18 attack+10/d12+4; observed original Apply yields22/22 AC22 +12/d12+6; cold22 retained; class1 retains22/22 AC22 +8/d6+6 until explicit original Apply restores18/18 AC18 +6/d6+4; cold18 retained. Original RunUserScript entry points match and reexecute installed add-on, script keys recorded. Independent Unicode/checksum, canonical/widget/AP and original scripts verified.",
+    "important_behavior": "CurrentStats.applied retains historical true after class removal/readdition; this does not mean newly pending class bonuses were applied. Raw false initial structural state and true readded pending state retained and independently qualified; no boolean dropping/normalization.",
+    "limitations": "Not legal feat/ASI character construction, maximum25 boundary, all Monk subclasses, initiative/Metabolism healing, spells, every ability-dialog control, HP/combat or whole-character payload qualification.",
+    "failed_attempts": [
+      "Reader1795016604792411323 omitted debugger-show request; rejected/retained/closed",
+      "further1795017800 wrongly required historical applied flag false; rejected, no runtime repair",
+      "private transition1795017478504249176 copied wrong input SHA metadata; raw report retained, explicit provenance-correction.json, replaced by independently repeated public transition1795017693580135580 with actual SHA"
+    ]
   }
 }

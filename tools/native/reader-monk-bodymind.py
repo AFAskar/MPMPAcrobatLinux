@@ -36,13 +36,24 @@ def main():
     parser.add_argument('--readiness', type=Path, required=True)
     parser.add_argument('--input', type=Path, help='Byte-identical relocation of the native input; SHA remains strict')
     parser.add_argument('--observer', type=Path, required=True)
+    parser.add_argument('--transition-from-reader-report', type=Path, help='One original class1-to20 transition from a completed six-state Reader final; compare the full pending state against the supplied native report')
     args = parser.parse_args()
     native = json.loads(args.native.read_text())
     assert native['passed'] and len(native['phases']) == 6
     wanted = {p['label']: p['state'] for p in native['phases']}
     assert len(wanted) == 6
-    source = args.input or Path(native['input'])
-    assert hashlib.sha256(source.read_bytes()).hexdigest() == native['input_sha256']
+    prior = None
+    if args.transition_from_reader_report:
+        prior = json.loads(args.transition_from_reader_report.read_text())
+        assert prior['passed'] and len(prior['phases']) == 6 and prior['final_close']['process_terminated']
+        assert not args.input, 'Transition input comes from the completed Reader report'
+        source = Path(prior['pdf'])
+        assert inspect(source, prior['phases'][-1]['state']['fields'])['passed']
+        assert script_hashes(source) == script_hashes(Path(native['input']))
+    else:
+        source = args.input or Path(native['input'])
+        assert hashlib.sha256(source.read_bytes()).hexdigest() == native['input_sha256']
+    source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
     observer = args.observer.read_text()
     assert hashlib.sha256(observer.encode()).hexdigest() == native['observer_sha256']
     ready = json.loads(args.readiness.read_text())
@@ -59,7 +70,8 @@ def main():
     opened = False
     report = {'passed': False, 'scope': __doc__, 'native': str(args.native.resolve()),
               'readiness': str(args.readiness.resolve()), 'reference': reference,
-              'input': str(source), 'input_sha256': native['input_sha256'],
+              'input': str(source), 'input_sha256': source_hash,
+              'transition_from_reader_report': str(args.transition_from_reader_report) if prior else None,
               'phases': [], 'observations': [], 'inputs': [], 'console_checks': [],
               'comparison_scope':'Complete captured fields, CurrentStats, flags, errors and installed script keys equal as parsed JSON; object member order ignored, arrays/property values retained exactly' ,
               'source_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
@@ -164,17 +176,20 @@ def main():
             opened = True
             c.ensure_document(remote)
             installed()
+            if prior:
+                level(20)
             capture('pending20')
-            apply_scores()
-            capture('applied20')
-            snapshot('applied20')
-            capture('cold20')
-            level(1)
-            capture('removed-before-score-apply1')
-            apply_scores()
-            capture('removed-applied1')
-            snapshot('removed1')
-            capture('final-cold1')
+            if not prior:
+                apply_scores()
+                capture('applied20')
+                snapshot('applied20')
+                capture('cold20')
+                level(1)
+                capture('removed-before-score-apply1')
+                apply_scores()
+                capture('removed-applied1')
+                snapshot('removed1')
+                capture('final-cold1')
             c.script('set', path=remote, values={'User Script': '', 'PC Name': '2024 Monk resource workflow'})
             saved = base+'-final.pdf'
             c.script('save', path=remote, output=saved)
@@ -182,11 +197,11 @@ def main():
             report['final_close'] = closing.close_saved(c, remote)
             opened = False
             report['pdf'] = str(c.fetch(remote, folder/'reader-final.pdf'))
-            assert len(report['phases']) == 6 and len(report['console_checks']) == 3
-            assert [p['timer']['invocation_count'] for p in report['phases']] == [1,2,1,2,3,1]
-            assert all(report[k]['process_terminated'] for k in ['applied20_close', 'removed1_close', 'final_close'])
+            assert len(report['phases']) == (1 if prior else 6) and len(report['console_checks']) == (1 if prior else 3)
+            assert [p['timer']['invocation_count'] for p in report['phases']] == ([1] if prior else [1,2,1,2,3,1])
+            assert all(report[k]['process_terminated'] for k in (['final_close'] if prior else ['applied20_close', 'removed1_close', 'final_close']))
             assert c.harness_fingerprint() == ready['harness_sha256']
-            assert hashlib.sha256(source.read_bytes()).hexdigest() == native['input_sha256']
+            assert hashlib.sha256(source.read_bytes()).hexdigest() == source_hash
             report['passed'] = True
     except Exception as error:
         report['error'] = str(error)
