@@ -3474,7 +3474,7 @@
     ]
   },
   "2024_shadow_monk_spell_candidate": {
-    "status": "INCOMPLETE: public native five-state profile active; Reader/mixed/rendering proof not yet complete",
+    "status": "INCOMPLETE: public native five-state PASS; actual Reader five-state run active, mixed/rendering proof pending",
     "scope": "Fixed original Shadow Arts Minor Illusion/Darkness; offered Continue/Generate confirmations, level3/17 spell DC/attack, actual native Wisdom edits and three runtime snapshots. Class/source dropdowns, arbitrary spell choice/slots/casting and other subclasses remain open.",
     "active_native": "cloud monk-shadow-spells-workflow1795019192740159401:generated3/generated17 canonical/selected AP evidence completed; remaining cold changes running",
     "verification": "tools/native/verify-generated-fields.py:all supplied canonical/API values strict except explicit PDF button export-name conversion; populated text/choice APs in fresh eight-field/768MiB-AS processes; exact44-byte original uppercase Format hash2e26e97cc0d3be3dae91797de20edcef7ea059d1e08b992de2dd5a6f103cc83a permits only separate ASCII display expectations; canonical /V never normalized or written",
@@ -3485,6 +3485,16 @@
       "monk-shadow-spells-workflow1795017966677580525:diagnostic carrier changed calculated mirror; no pass",
       "monk-shadow-spells-workflow1795018096820651642:execution stages pass but monolithic verification hit worker2GiB cgroup OOM; missing terminal report never accepted, scope run-p1304511-i1303544 resultoom-kill/peak2147483648. Host retained>12GiB available; limit not raised",
       "shadow-bounded-verify1795019900:98 batches, no OOM, failed canonical-vs-uppercase-display comparison; correct original Format identified, raw failure retained. Populated verifier makes guarded display rule explicit"
-    ]
+    ],
+    "native": "cloud monk-shadow-spells-workflow1795019192740159401/spells.json:PASS5, source SHA matches public driver; local copy output/testing/monk-shadow-reader1795021200/native.json",
+    "native_states": [
+      "generated3 DC14/+6",
+      "generated17 DC18/+10",
+      "cold Wisdom16/Monk17 DC17/+9",
+      "lowered Monk3/Wisdom16 DC13/+5",
+      "final cold restored Wisdom18/Monk3 DC14/+6"
+    ],
+    "clean_name_mirrors": "Three clean saved stages independently verify character name and generated zAdvLog.PC Name exact, original scripts unchanged",
+    "reader": "local tmux mpmb-shadow-reader; supervisor output/testing/monk-shadow-reader1795021200/supervisor.json; DO NOT count until terminal success and cleanup"
   }
 }
