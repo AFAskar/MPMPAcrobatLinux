@@ -75,7 +75,7 @@ def main():
     assert source_hash == manifest['input_sha256']
     before_reader = PdfReader(source)
     before_actions = preparation.field_actions(before_reader)
-    field = before_reader.get_fields()[args.field]
+    field = before_reader.get_object(canonical_fields(before_reader)[args.field]['reference'])
     action = field['/AA']['/V'].get_object()
     assert action['/S'] == '/JavaScript', 'Requires a genuine JavaScript Validate action'
     literal = action['/JS']
@@ -106,7 +106,8 @@ def main():
     target = args.field+' /V'
     changed_keys = [k for k in sorted(set(before_actions)|set(after_actions)) if before_actions.get(k) != after_actions.get(k)]
     assert changed_keys == [target], ('Unexpected field-action changes', changed_keys)
-    saved = str(after_reader.get_fields()[args.field]['/AA']['/V'].get_object()['/JS'])
+    saved_node = after_reader.get_object(canonical_fields(after_reader)[args.field]['reference'])
+    saved = str(saved_node['/AA']['/V'].get_object()['/JS'])
     assert saved == wrapped and saved.count(code) == 1
     assert digest(source) == source_hash
     manifest.update(input=str(output), input_sha256=digest(output),

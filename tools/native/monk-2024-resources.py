@@ -17,7 +17,7 @@ folder = root / 'output/testing' / ('native-monk-2024-resources-' + str(time.tim
 folder.mkdir()
 print(folder, flush=True)
 sys.path[:0] = [str(root / 'tools/acrobat'), str(root / 'tools/native')]
-from verify import inspect, script_hashes
+from verify import inspect, script_hashes, canonical_fields
 from pypdf import PdfReader
 import fighter_additional_diagnostics as diagnostics
 import subclass_audit_qualification as qualification
@@ -38,7 +38,9 @@ assert manifest['observer_sha256'] == hashlib.sha256((root / 'tools/native/monk-
 assert manifest['diagnostic_helper_sha256'] == hashlib.sha256(Path(diagnostics.__file__).read_bytes()).hexdigest()
 wrapper = manifest['field_action_wrapper']
 assert wrapper['original_sha256'] == '92a84010bdc2a82d1362723a396f1f558d5113149047582efd8647aef95d6ac3' and wrapper['original_occurrences'] == 1
-action = PdfReader(source).get_fields()['Attack.1.Weapon Selection']['/AA']['/V'].get_object()['/JS']
+action_reader = PdfReader(source)
+action_node = action_reader.get_object(canonical_fields(action_reader)['Attack.1.Weapon Selection']['reference'])
+action = action_node['/AA']['/V'].get_object()['/JS']
 assert hashlib.sha256(str(action).encode()).hexdigest() == wrapper['wrapped_sha256']
 binary = folder / 'mpmb-reader'
 shutil.copy2(args.binary.resolve(), binary)
