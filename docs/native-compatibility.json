@@ -3576,5 +3576,26 @@
     "change": "observed_console now calls the existing ownership-checked live getter retry, retaining each attempt and still requiring exact expected sentinel. At most three read-only queries, no cached text or mutation replay.",
     "tests": "tools/native/test_console_read_retry.py: five tests PASS; includes actual entry point transient-then-success, wrong sentinel, exhausted reads, unrelated failure and ownership change. Raw log output/testing/console-observer-retry-1795193600/tests.log.",
     "actual_recovery": "cloud monk-feature-console-recovery1795193211501579249 PASS: live expected sentinel read, owned debugger closed, same failed PDF saved/retained and Reader processes terminated. Fresh full workflow remains pending."
+  },
+  "2024_current_monk_subclass_audit": {
+    "status": "Bounded native structural progression PASS10; full class/table milestone INCOMPLETE",
+    "runtime": "sealed162 SHA512358edff59c7c5bdc471ed14d30898894abdffa0c15172ddf58b948091a684",
+    "report": "cloud-lab template-origin1795025300/output/testing/native-subclasses1795193693764645977/subclasses.json; local output/testing/current-monk-subclasses-1795194000/subclasses.json and bounded-scope.json",
+    "command": "tools/native/subclass-audit --fixture 2024 --class-key monk --binary output/testing/build-validation-1795025654129697535/mpmb-reader",
+    "coverage": "Fresh original all-source/source-element and class/subclass controls;10 candidates/10 cases/zero unattempted. Levels3/5/11/20/3, final canonical class/level/proficiency/AP and scripts, cold reopen identity and clean original diagnostics/console in both executions. No historical resume.",
+    "subclasses": [
+      "open hand",
+      "mercy",
+      "shadow",
+      "elements",
+      "way of the long death",
+      "way of the sun soul",
+      "way of the drunken master",
+      "way of the astral self",
+      "ascendant dragon",
+      "way of the kensei"
+    ],
+    "limits": "Feature replies remain default and unqualified. No real Reader, comprehensive derived statistics/resources/spells/combat/source configurations/legal ASIs/multiclass or all feature choices established by this audit. All non-Monk classes explicitly not exercised. 2024 not table-ready.",
+    "memory": "1536MiB MemoryMax/one CPU scope in tmux with verified sleep inhibitor; actual peak987369472 bytes, memory.events max/oom/oom_kill all0. Primary Reader independent single controller; host ~12GiB available."
   }
 }
