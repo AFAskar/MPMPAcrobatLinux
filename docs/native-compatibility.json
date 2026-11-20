@@ -3608,5 +3608,14 @@
     "raw_ids": "Mercy base at6, mercy-2 after11/17/reselection, base again at cold6. Original RunUserScript reexecutes installed addons; keep exact transitions, no ID normalization. Shadow uses shadow-2 in this matched entry-point profile.",
     "reader": "Local sole desktop owner tmux mpmb-local-mercy-reader; run.log/source under output/testing/mercy-feature-reader-1795195100. Fresh preflight PASS, existing exact12-case2024 readiness1795185564 still exact fingerprint-matched. Native/source/private artifacts preserved. Main tools/acrobat and reader-console helper frozen while active.",
     "limits": "Separate Reader desktop/controller from cloud-lab; local controller1GiB/one CPU, persistent tmux and verified actual sleep inhibitor. No new VM allocation or Cargo builds; host ~6GiB available. All failed reports remain separate."
+  },
+  "2024_paired_feature_display_verifier": {
+    "status": "Bounded checker repair qualified; full Monk feature milestones still incomplete",
+    "tool": "tools/native/verify-paired-feature-displays.py",
+    "positive": "cloud monk-paired-feature-visible1795195300/comparison.json PASS exact57 eight-field batches over original Native/Reader open6/open11/open17; source matches current public file. complete_report_pair=false, reference producer failed later. Raw captured state/canonical values exact; original script hashes and stable PDF digests checked; populated visible text present and paired text matches.",
+    "negative": "paired-feature-negative1795195039767264806/negative-controls.json PASS: genuine formatted markup positive; wrong canonical, missing Native AP and two empty disposable Native APs rejected. Reader outputs untouched. Maximum observed negative workerRSS393600KiB;768MiB-AS children/1GiB outer scopes.",
+    "counterexample": "Old both-empty false positive retained in paired-feature-negative1795194460017042630/both-empty-old-counterexample.json and old executed source archived in local monk-paired-feature-checker1795194500/previous. Do not treat old text-equality checks alone as a generic visible-presence verifier.",
+    "scope": "Captured fields/resources/notesAndActions only; exact canonical values and full captured typed JSON equality, recorded field Format hashes, original embedded script hashes when --original supplied. Paired visible AP text uses disclosed NFKC/whitespace and integer-leading-sign normalization; raw displays remain separate. Pushbutton/checkbox canonical only. No checkbox/button appearance, geometry, rich-span API, raw Stringified or pixel/full-character claim. Intentional blank formatter output for nonempty visible values is unqualified and rejected.",
+    "active": "Full six-state Mercy Native/Reader pair now running locally in mercy-feature-paired-displays1795195700; wait terminal report before claiming completed pair."
   }
 }
