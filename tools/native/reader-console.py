@@ -18,8 +18,10 @@ MESSAGE='MPMB console reference sentinel'
 def observed_console(expected):
     rows=c.command('inspect');roots=[r for r in rows if r.get('class')=='#32770' and r.get('name')=='JavaScript Debugger'];assert len(roots)==1,'Expected one observed console window'
     owner=roots[0]['handle'];edits=[r for r in rows if r.get('owner')==owner and r.get('class')=='RICHEDIT50W'];assert len(edits)==1,'Expected one observed console edit'
-    edit=edits[0];live=c.command('dialog_control',owner=owner,handle=edit['handle']);assert live['text'].rstrip('\r\n')==expected,live
-    return {'owner':owner,'edit':edit['handle'],'live':live,'rows':rows}
+    observed=read_console_text(owner,edits[0]['handle'])
+    assert observed['live']['text'].rstrip('\r\n')==expected,observed
+    observed['rows']=rows
+    return observed
 
 
 class ConsoleReadError(RuntimeError):

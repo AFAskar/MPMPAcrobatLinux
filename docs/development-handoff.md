@@ -1,5 +1,12 @@
 # Development handoff
 
+## Active Monk feature qualification and debugger recovery — 2026-11-20
+
+2024 remains NOT table-ready; goal ACTIVE. Second fresh Reader six-state attempt monk-feature-Reader-discovery1795192648334171355 FAILED after exact initial OpenHand6 capture: live debugger ControlText getter timed out. Cleanup save was correctly rejected while that debugger blocked the menu. Same observed positive sentinel/debugger and document recovered without class replay in monk-feature-console-recovery1795193211501579249/recovery.json: saved/retained, owned debugger closed and Reader process termination verified. Failed report remains false. A prematurely launched successor was terminated while waiting for the desktop lock, before any GUI operation; it is not qualification evidence. The unprivileged inhibitor launch did not start a Python recovery; the actual recovery ran under a verified systemd scope/inhibitor.
+
+reader-console.py observed_console now uses the existing three-attempt ownership-checked live getter, retains failed reads, requires exact sentinel and never replays mutations. Five focused tests PASS (output/testing/console-observer-retry1795193600/tests.log), including the entry point transient getter success and wrong-sentinel rejection. This repairs reference observation, not MPMB behavior. Root1 sole live owner mpmb-monk-feature-reference-retry2, log ~/.cache/mpmb-reference/monk-feature-reference-retry2.log, fresh unique six-state discovery; helper SHA recorded. Keep helpers frozen. Exact full state/caught-error/timer/console/save/reopen and paired AP qualification remain pending. Cloud ~12GiB available,1GiB worker scopes/inhibitors; secondary paused. Do not count diagnostic three-state prefix AP checks as a six-state workflow pass or complete Monk coverage.
+
+
 ## Next feature gate: recovered late switch; formatting is not canonical text (2026-11-20)
 
 Resource work committed9190d4a; worktree clean before this documentation update. Goal ACTIVE/2024 NOT ready. Broader private Native6 strict-ready discovery1795189192681643951 passes logical stats/choices/spells/definition/source/62 notes+actions. Actual cloud Reader discovery1795190660474073384 FAILED after exact open6/open11/open17 matches; original Shadow ApplyClasses request92e655186f2f4eecb28303c309257a78 exceeded45s result wait. Same request eventually completed, no mutation replay; recovered Shadow3 fields, saved/closed same document/process termination PASS in monk-feature-same-request-recovery1795192274971975926. Old failed report stays false.

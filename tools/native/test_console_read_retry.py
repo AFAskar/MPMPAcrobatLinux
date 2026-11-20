@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 spec=importlib.util.spec_from_file_location('console_observer',Path(__file__).with_name('reader-console.py'))
 console=importlib.util.module_from_spec(spec);spec.loader.exec_module(console)
@@ -19,6 +20,21 @@ class Controller:
         return {'owner':1,'handle':2,'class':'RICHEDIT50W','text':result}
 
 class ConsoleReadTests(unittest.TestCase):
+    def test_observed_console_uses_bounded_live_read(self):
+        c=Controller([RuntimeError('ControlText: Control query timed out'),'sentinel\r\n'])
+        with patch.object(console,'c',c):
+            result=console.observed_console('sentinel')
+        self.assertEqual(result['live']['text'],'sentinel\r\n')
+        self.assertEqual(len(result['read_attempts']),2)
+        self.assertEqual(result['owner'],1)
+        self.assertEqual(result['edit'],2)
+
+    def test_observed_console_rejects_wrong_sentinel(self):
+        c=Controller(['unrelated output'])
+        with patch.object(console,'c',c), self.assertRaises(AssertionError):
+            console.observed_console('sentinel')
+        self.assertEqual([action for action,_ in c.calls],['inspect','inspect','dialog_control'])
+
     def test_transient_getter_failure_is_retained_before_live_success(self):
         c=Controller([RuntimeError('Exception calling ControlText: Control query timed out'),'sentinel\r\n'])
         r=console.read_console_text(1,2,controller=c)
