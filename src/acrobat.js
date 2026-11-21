@@ -17,6 +17,8 @@ var __host = (function () {
   let clock=0, timerId=0, calculating=false, pending=false, revision=0, importBatch=0, importActive=0, paneState='';
   const applicationState=globalThis.__nativeApplicationState||(globalThis.__nativeApplicationState={});
   const iconTokens=applicationState.iconTokens||(applicationState.iconTokens=new WeakSet());
+  const docIcons=new Map();
+  function docIconToken(key,field){let token=docIcons.get(key);if(!token){token=Object.freeze({field,face:0});docIcons.set(key,token);}return token;}
   const iconImports=[];
   const consoleState=applicationState.console||(applicationState.console={visible:false,messages:[]});
   const unsupportedErrors=globalThis.__nativeApplicationState?(globalThis.__nativeApplicationState.unsupportedErrors||(globalThis.__nativeApplicationState.unsupportedErrors=new WeakSet())):new WeakSet();
@@ -32,6 +34,7 @@ var __host = (function () {
     if(typeof v==='string')return sourceString(v);
     if(typeof v==='function')return v.toString();
     if(v instanceof RegExp)return v.toString();
+    if(v instanceof Date)return '(new Date('+v.getTime()+'))';
     if(v instanceof Error){errors.push({stage:'original-caught-exception',error:String(v),stack:v.stack});return '(new '+v.name+'('+sourceString(v.message)+'))'}
     if(typeof v!=='object')return JSON.stringify(v);
     seen=seen||[];if(seen.indexOf(v)>=0)throw Error('cyclic toSource');
@@ -105,9 +108,9 @@ var __host = (function () {
       setAction(type,code){const key=({Calculate:'C',Validate:'V',Keystroke:'K',Format:'F',MouseUp:'U',MouseDown:'D',OnFocus:'Fo',OnBlur:'Bl'})[type];if(!key)return unsupported('Field.setAction '+type);code=String(code);if(key==='C'){const index=data.order.indexOf(n);if(code&&index<0){data.order.push(n);revision++;}else if(!code&&index>=0){data.order.splice(index,1);revision++;}}if(this._actions[key]!==code){this._actions[key]=code;this._modifiedActions=this._modifiedActions||{};this._modifiedActions[key]=code;revision++;}},
       setFocus(){focusField(n);},getArray(){return [this]},
       browseForFileToSubmit(){if(this.type!=='text'||!(x.flags&1048576))throw Error('File selection requires a file-select text field');if(typeof __browsePdf!=='function')return unsupported('Field.browseForFileToSubmit');const path=__browsePdf();if(path!==null)this.value=path;},
-      buttonGetIcon(face=0){if(face!==0)return unsupported('Field.buttonGetIcon non-normal face');return this._icon?Object.assign({},this._icon):{field:n,face:0}},
-      buttonSetIcon(icon,face=0){if(face!==0)return unsupported('Field.buttonSetIcon non-normal face');if(icon&&icon.asset&&iconTokens.has(icon.asset)){this._icon={asset:icon.asset};globalThis.dirty=true;revision++;return;}if(!icon||typeof icon.field!=='string')return unsupported('Field.buttonSetIcon external icon');this._icon=Object.assign({},icon);revision++},
-      buttonImportIcon(cPath,nPage=0){if(this.type!=='button')return unsupported('Field.buttonImportIcon on non-pushbutton');if(typeof __iconImport!=='function')return unsupported('Field.buttonImportIcon');if(cPath&&typeof cPath==='object'){nPage=cPath.nPage===undefined?0:cPath.nPage;cPath=cPath.cPath;}const result=JSON.parse(__iconImport(JSON.stringify({path:cPath===undefined?null:String(cPath),page:Number(nPage)})));iconImports.push({field:n,code:result.code,reason:result.reason});if(result.code===0){const asset=Object.freeze(result.asset);iconTokens.add(asset);this._icon={asset};globalThis.dirty=true;revision++;}return result.code;},
+      buttonGetIcon(face=0){if(face!==0)return unsupported('Field.buttonGetIcon non-normal face');if(this._icon)return this._icon;return docIconToken(x.icon_key?('hash:'+x.icon_key):('field:'+n),n)},
+      buttonSetIcon(icon,face=0){if(face!==0)return unsupported('Field.buttonSetIcon non-normal face');if(icon&&icon.asset&&iconTokens.has(icon.asset)){this._icon=Object.freeze({asset:icon.asset});globalThis.dirty=true;revision++;return;}if(!icon||typeof icon.field!=='string')return unsupported('Field.buttonSetIcon external icon');this._icon=Object.isFrozen(icon)?icon:Object.freeze(Object.assign({},icon));revision++},
+      buttonImportIcon(cPath,nPage=0){if(this.type!=='button')return unsupported('Field.buttonImportIcon on non-pushbutton');if(typeof __iconImport!=='function')return unsupported('Field.buttonImportIcon');if(cPath&&typeof cPath==='object'){nPage=cPath.nPage===undefined?0:cPath.nPage;cPath=cPath.cPath;}const result=JSON.parse(__iconImport(JSON.stringify({path:cPath===undefined?null:String(cPath),page:Number(nPage)})));iconImports.push({field:n,code:result.code,reason:result.reason});if(result.code===0){const asset=Object.freeze(result.asset);iconTokens.add(asset);this._icon=Object.freeze({asset});globalThis.dirty=true;revision++;}return result.code;},
       buttonSetCaption(c,face=0){if(![0,1,2].includes(face))throw Error('Invalid button face');this._captions=this._captions||{};this._captions[face]=String(c);if(face===0)this._caption=String(c);revision++},buttonGetCaption(face=0){return this._captions&&this._captions[face]!==undefined?this._captions[face]:this._caption===undefined?(x.caption||''):this._caption},
     };
     const initialStyle=copyData(x.rich_metadata&&x.rich_metadata.defaultStyle)||{alignment:f.alignment,fontFamily:[f.textFont,'sans-serif'],fontStretch:'normal',fontStyle:'normal',fontWeight:400,textColor:['RGB',0,0,0],textSize:f.textSize};
@@ -378,7 +381,7 @@ var app={viewerType:'Reader',viewerVersion:26,formsVersion:26,platform:'UNIX',la
   listMenuItems(){return [{cName:'File',oChildren:[{cName:'Open'},{cName:'Save'},{cName:'SaveAs'},{cName:'Close'}]},{cName:'Edit',oChildren:[]},{cName:'View',oChildren:[]},{cName:'Window',oChildren:[]},{cName:'Help',oChildren:[]}];},
   setTimeOut(code,ms){return __host.timer(code,ms)},clearTimeOut(id){__host.clear(id)},
   setInterval(){return __host.unsupported('app.setInterval')},clearInterval(id){__host.clear(id)},
-  alert(o){o=typeof o==='string'?{cMsg:o}:o;if(/error/i.test(o.cTitle||''))__host.recordError({stage:'original-alert',error:o.cMsg,title:o.cTitle});const r=JSON.parse(__alert(JSON.stringify(o)));if(o.oCheckbox)o.oCheckbox.bAfterValue=!!r.checked;return r.button},
+  alert(o,nIcon,nType,cTitle,oDoc,oCheckbox){if(typeof o!=='object'||o===null){o={cMsg:String(o),nIcon:nIcon===undefined?0:Number(nIcon),nType:nType===undefined?0:Number(nType)};if(cTitle!==undefined)o.cTitle=String(cTitle);if(oCheckbox)o.oCheckbox=oCheckbox;}if(/error/i.test(o.cTitle||''))__host.recordError({stage:'original-alert',error:o.cMsg,title:o.cTitle});const r=JSON.parse(__alert(JSON.stringify(o)));if(o.oCheckbox)o.oCheckbox.bAfterValue=!!r.checked;return r.button},
   response(question,title,defaultValue,password,label){const o=typeof question==='object'?question:{cQuestion:question,cTitle:title,cDefault:defaultValue,bPassword:password,cLabel:label};let answer=o.cDefault||'';const result=__host.execDialog({description:{name:o.cTitle||'MPMB response',elements:[{type:'static_text',name:o.cQuestion||''},{type:'edit_text',item_id:'answer',password:!!o.bPassword,char_width:50},{type:'ok_cancel'}]},initialize(d){d.load({answer:String(answer)})},commit(d){answer=d.store().answer}});return result==='ok'?answer:null},
   popUpMenuEx(...items){return __host.popup(items)},popUpMenu(...items){function convert(v){return Array.isArray(v)?{cName:v[0],oSubMenu:v.slice(1).map(convert)}:{cName:String(v)}}return __host.popup(items.map(convert))},
   addMenuItem(o){__host.menus[o.cName]=o},addSubMenu(o){__host.menus[o.cName]=o},
@@ -410,13 +413,91 @@ function MPMBOpenFile(doc,path,relative){
   global.docTo=doc;global.docFrom=app.openDoc(relative?{cPath:path,oDoc:doc}:path);doc.bringToFront();
 }
 function MPMBImportPage(){return __host.unsupported('MPMBImportPage');}
-var util={
-  printf(fmt,...args){let i=0;return fmt.replace(/%([+0 ,]*)(\d*)(?:\.(\d+))?([dfsxX])/g,(m,flags,width,prec,type)=>{let v=args[i++];let s=type==='s'?String(v):type==='d'?String(Math.trunc(Number(v))):type==='f'?Number(v).toFixed(prec===undefined?6:Number(prec)):Number(v).toString(16);if(flags.includes('+')&&Number(v)>=0)s='+'+s;return s.padStart(Number(width)||0,flags.includes('0')?'0':' ')})},
-  printd(fmt,date){let d=date||new Date();return String(fmt).replace(/yyyy|yy|mmmm|mmm|mm|dd|HH|MM|ss/g,t=>({yyyy:d.getFullYear(),yy:String(d.getFullYear()).slice(-2),mmmm:d.toLocaleString('en',{month:'long'}),mmm:['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()],mm:String(d.getMonth()+1).padStart(2,'0'),dd:String(d.getDate()).padStart(2,'0'),HH:d.getHours(),MM:d.getMinutes(),ss:d.getSeconds()})[t])},
-  scand(fmt,s){let d=new Date(s);return isNaN(d)?null:d},
-  readFileIntoStream(path){return JSON.parse(__file(path||''))},stringFromStream(stream){if(!stream||typeof stream.data!=='string')throw Error('Invalid text stream');return stream.data},
-  iconStreamFromIcon(icon){if(!icon||typeof icon!=='object')throw Error('Invalid icon');if(typeof __iconStream!=='function')return __host.unsupported('util.iconStreamFromIcon');const data=JSON.parse(__iconStream(JSON.stringify(icon)));return {count:0,width:data.width,height:data.height,read(n){const start=this.count,end=n===undefined?data.argb.length:Math.min(data.argb.length,start+Math.max(0,Number(n)||0));this.count=end;return data.argb.slice(start,end);}};},
-};
+var util=(function(){
+  const monthsFull=['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const monthsShort=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const daysFull=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const daysShort=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  return {
+    printf(fmt,...args){
+      let i=0;
+      return String(fmt).replace(/%([+0 #-]*)(?:,([0-3]))?(\d*)(?:\.(\d+))?([dfsxX])/g,(m,flags,sep,width,prec,type)=>{
+        let v=args[i++];
+        if(type==='s')return String(v).padStart(Number(width)||0,' ');
+        const num=Number(v);
+        if(type==='x'||type==='X'){
+          let hex=Math.trunc(num).toString(16);
+          if(type==='X')hex=hex.toUpperCase();
+          return hex.padStart(Number(width)||0,flags.includes('0')?'0':' ');
+        }
+        const neg=num<0,abs=Math.abs(num);
+        let s=type==='d'?String(Math.trunc(abs)):abs.toFixed(prec===undefined?6:Number(prec));
+        if(sep!==undefined){
+          const parts=s.split('.');
+          if(sep==='0'||sep==='2')parts[0]=parts[0].replace(/\B(?=(\d{3})+(?!\d))/g,sep==='0'?',':'.');
+          s=parts.join(sep==='2'||sep==='3'?',':'.');
+        }
+        const sign=neg?'-':flags.includes('+')?'+':flags.includes(' ')?' ':'';
+        const w=Number(width)||0;
+        if(flags.includes('0')&&w>sign.length+s.length)return sign+s.padStart(w-sign.length,'0');
+        return (sign+s).padStart(w,' ');
+      });
+    },
+    printd(fmt,date){
+      const d=date instanceof Date?date:new Date();
+      const pad=n=>String(n).padStart(2,'0');
+      const h24=d.getHours(),h12=h24%12||12;
+      return String(fmt).replace(/yyyy|yy|mmmm|mmm|mm|m|dddd|ddd|dd|d|HH|H|hh|h|MM|M|ss|s|tt|t/g,tok=>({
+        yyyy:String(d.getFullYear()).padStart(4,'0'),yy:String(d.getFullYear()).slice(-2),
+        mmmm:monthsFull[d.getMonth()],mmm:monthsShort[d.getMonth()],mm:pad(d.getMonth()+1),m:String(d.getMonth()+1),
+        dddd:daysFull[d.getDay()],ddd:daysShort[d.getDay()],dd:pad(d.getDate()),d:String(d.getDate()),
+        HH:pad(h24),H:String(h24),hh:pad(h12),h:String(h12),
+        MM:pad(d.getMinutes()),M:String(d.getMinutes()),ss:pad(d.getSeconds()),s:String(d.getSeconds()),
+        tt:h24<12?'am':'pm',t:h24<12?'a':'p'
+      })[tok]);
+    },
+    scand(fmt,s){
+      if(s===null||s===undefined)return null;
+      const input=String(s).trim();if(!input)return null;
+      const tokens=[],pattern=String(fmt).replace(/yyyy|yy|mmmm|mmm|mm|m|dd|d|HH|H|MM|M|ss|s|[\s]+|[-/\\^$*+?.()|[\]{}]/g,tok=>{
+        if(/^\s+$/.test(tok))return '\\s+';
+        if(tok==='yyyy'){tokens.push('yyyy');return '(\\d{4})';}
+        if(tok==='yy'){tokens.push('yy');return '(\\d{2,4})';}
+        if(tok==='mmmm'){tokens.push('mmmm');return '('+monthsFull.join('|')+')';}
+        if(tok==='mmm'){tokens.push('mmm');return '('+monthsShort.join('|')+')';}
+        if(tok==='mm'||tok==='m'){tokens.push('m');return '(\\d{1,2})';}
+        if(tok==='dd'||tok==='d'){tokens.push('d');return '(\\d{1,2})';}
+        if(tok==='HH'||tok==='H'){tokens.push('H');return '(\\d{1,2})';}
+        if(tok==='MM'||tok==='M'){tokens.push('M');return '(\\d{1,2})';}
+        if(tok==='ss'||tok==='s'){tokens.push('s');return '(\\d{1,2})';}
+        return '\\'+tok;
+      });
+      const match=new RegExp('^'+pattern+'$','i').exec(input);
+      if(!match)return null;
+      let year=2000,month=1,day=1,hour=0,minute=0,second=0;
+      for(let idx=0;idx<tokens.length;idx++){
+        const kind=tokens[idx],raw=match[idx+1];
+        if(kind==='yyyy')year=Number(raw);
+        else if(kind==='yy'){const n=Number(raw);year=raw.length<=2?(n>=50?1900+n:2000+n):n;}
+        else if(kind==='mmmm'){month=monthsFull.map(x=>x.toLowerCase()).indexOf(raw.toLowerCase())+1;if(month<=0)return null;}
+        else if(kind==='mmm'){month=monthsShort.map(x=>x.toLowerCase()).indexOf(raw.toLowerCase())+1;if(month<=0)return null;}
+        else if(kind==='m')month=Number(raw);
+        else if(kind==='d')day=Number(raw);
+        else if(kind==='H')hour=Number(raw);
+        else if(kind==='M')minute=Number(raw);
+        else if(kind==='s')second=Number(raw);
+      }
+      if(month<1||month>12||day<1||day>31||hour>23||minute>59||second>59)return null;
+      const out=new Date(year,month-1,day,hour,minute,second,0);
+      out.setFullYear(year);
+      if(out.getFullYear()!==year||out.getMonth()!==month-1||out.getDate()!==day)return null;
+      return out;
+    },
+    readFileIntoStream(path){return JSON.parse(__file(path||''))},
+    stringFromStream(stream){if(!stream||typeof stream.data!=='string')throw Error('Invalid text stream');return stream.data},
+    iconStreamFromIcon(icon){if(!icon||typeof icon!=='object')throw Error('Invalid icon');if(typeof __iconStream!=='function')return __host.unsupported('util.iconStreamFromIcon');const data=JSON.parse(__iconStream(JSON.stringify(icon)));return {count:0,width:data.width,height:data.height,read(n){const start=this.count,end=n===undefined?data.argb.length:Math.min(data.argb.length,start+Math.max(0,Number(n)||0));this.count=end;return data.argb.slice(start,end);}};},
+  };
+})();
 function __pdfInfoDate(value){
   const m=/^(?:D:)?(\d{4})(\d{2})?(\d{2})?(\d{2})?(\d{2})?(\d{2})?(?:([Z+-])(\d{2})?'?(\d{2})?'?)?$/.exec(String(value));
   if(!m)return new Date(NaN);

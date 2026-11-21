@@ -46,6 +46,8 @@ pub struct Field {
     pub items: Vec<Value>,
     pub export_values: Vec<String>,
     pub caption: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon_key: Option<String>,
 }
 // Non-leaf field entries can occupy real /CO slots without an executable
 // action. Preserve their references and positions; calcOrderIndex counts them.
@@ -316,6 +318,11 @@ fn walk(
     if kind == "Btn" && flags & 65536 == 0 && value.is_empty() {
         value = "Off".into();
     }
+    let icon_key = if kind == "Btn" && flags & 65536 != 0 {
+        widget_icon_key(d, &widgets)
+    } else {
+        None
+    };
     out.insert(
         name.clone(),
         Field {
@@ -345,9 +352,42 @@ fn walk(
             items,
             export_values,
             caption: widgets_caption(d, obj),
+            icon_key,
         },
     );
     Ok(())
+}
+fn widget_icon_key(d: &Document, widgets: &[Widget]) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let wd = widgets.first().and_then(|w| d.get_dictionary(w.id).ok())?;
+    let icon = wd
+        .get(b"MK")
+        .ok()
+        .and_then(|v| resolved(d, v).ok())
+        .and_then(|v| v.as_dict().ok())
+        .and_then(|mk| mk.get(b"I").ok())
+        .or_else(|| {
+            wd.get(b"AP")
+                .ok()
+                .and_then(|v| resolved(d, v).ok())
+                .and_then(|v| v.as_dict().ok())
+                .and_then(|ap| ap.get(b"N").ok())
+        })?;
+    let stream = resolved(d, icon).ok()?.as_stream().ok()?;
+    let content = stream
+        .decompressed_content()
+        .unwrap_or_else(|_| stream.content.clone());
+    let mut hasher = Sha256::new();
+    if let Ok(bbox) = stream.dict.get(b"BBox") {
+        hasher.update(format!("{bbox:?}").as_bytes());
+    }
+    hasher.update(&content);
+    let digest: String = hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    Some(digest)
 }
 fn widgets_caption(d: &Document, field: &Dictionary) -> String {
     let nodes = field

@@ -1358,4 +1358,26 @@ mod tests {
           seen.values.img1.width===2&&seen.values.img1.height===1&&seen.values.img1.argb==='ffff0000ff00ff00'"#,
         );
     }
+    #[test]
+    fn printf_separators_printd_scand_date_tosource_icon_identity_and_positional_alert() {
+        host(
+            r#"var p0=util.printf('%,0.2f',1234.5),p1=util.printf('%,1.2f',1234.5),p2=util.printf('%,2.2f',1234.5),p3=util.printf('%,3.2f',-1234.5);
+          var d1=util.scand('yy-mm-dd','2024-03-05'),d2=util.scand('d-m-yyyy','5-3-2024'),d3=util.scand('d mmm yyyy','5 Mar 2024'),d4=util.scand('yy-mm-dd','24-02-30');
+          var f1=util.printd('d-m-yyyy',d1),f2=util.printd('d mmm yyyy',d2),f3=util.printd('yyyy/m/d',d3);
+          var rtDate=eval(d1.toSource());
+          var a=getField('A'),b=getField('B');
+          var sameGet=a.buttonGetIcon()===a.buttonGetIcon();
+          b.buttonSetIcon(a.buttonGetIcon());
+          var sameAfterCopy=b.buttonGetIcon()===a.buttonGetIcon();
+          var seenAlert=null;
+          globalThis.__alert=function(s){seenAlert=JSON.parse(s);return JSON.stringify({button:1,checked:false})};
+          var btn=app.alert('Nothing found',1,0,'Nothing to Export');
+          p0==='1,234.50'&&p1==='1234.50'&&p2==='1.234,50'&&p3==='-1234,50'&&
+          d1!==null&&d2!==null&&d3!==null&&d4===null&&
+          f1==='5-3-2024'&&f2==='5 Mar 2024'&&f3==='2024/3/5'&&
+          rtDate instanceof Date&&rtDate.getTime()===d1.getTime()&&
+          sameGet&&sameAfterCopy&&
+          btn===1&&seenAlert.cMsg==='Nothing found'&&seenAlert.nIcon===1&&seenAlert.nType===0&&seenAlert.cTitle==='Nothing to Export'"#,
+        );
+    }
 }

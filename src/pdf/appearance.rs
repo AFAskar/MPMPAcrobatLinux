@@ -536,6 +536,7 @@ mod tests {
             items: vec![],
             export_values: vec![],
             caption: String::new(),
+            icon_key: None,
         }
     }
     #[test]

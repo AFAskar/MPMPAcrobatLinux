@@ -760,6 +760,7 @@ mod tests {
                 items: Vec::new(),
                 export_values: Vec::new(),
                 caption: String::new(),
+                icon_key: None,
             },
         )]);
         let pdf = crate::pdf::Pdf {
