@@ -156,6 +156,15 @@ def run_reader_profile(
 
     pending_ident = None
 
+    MPMB_MODAL_DIALOGS = {
+        "ASK USER DIALOG",
+        "CHANGES ALERT DIALOG",
+        "SOURCE SELECTION DIALOG",
+        "SPELL SELECTION DIALOG",
+        "SPELL LIST GENERATION DIALOG",
+        "CLASS SELECTION DIALOG",
+    }
+
     def dismiss_modal_dialogs():
         dismissed = []
         rows = c.command("inspect")
@@ -163,7 +172,7 @@ def run_reader_profile(
             r
             for r in rows
             if r["class"] == "#32770"
-            and r["name"] != "JavaScript Debugger"
+            and r["name"] in MPMB_MODAL_DIALOGS
         ]
         for dlg in dialogs:
             btns = [
