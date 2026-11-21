@@ -153,49 +153,63 @@ def run_reader_profile(
             observed["live"]["text"],
         )
 
-    def call_with_dialogs(fn, fn_args, timeout=180):
+    pending_ident = None
+
+    def dismiss_modal_dialogs():
+        dismissed = []
+        rows = c.command("inspect")
+        dialogs = [
+            r
+            for r in rows
+            if r["class"] == "#32770"
+            and r["name"] != "JavaScript Debugger"
+        ]
+        for dlg in dialogs:
+            btns = [
+                b
+                for b in rows
+                if b.get("owner") == dlg["handle"]
+                and b["class"] == "Button"
+                and b["name"] in ("OK", "Apply", "Continue", "Yes")
+            ]
+            if btns:
+                c.command("invoke", name=btns[0]["name"], owner=dlg["handle"])
+                dismissed.append({"dialog": dlg["name"], "button": btns[0]["name"]})
+                time.sleep(0.25)
+        return dismissed
+
+    def submit_with_dialogs(op, timeout=180, **params):
+        nonlocal pending_ident
         c.ensure_document(remote)
-        ident = c.script_submit("call", path=remote, name=fn, args=fn_args)
+        ident = c.script_submit(op, path=remote, **params)
+        pending_ident = ident
         deadline = time.monotonic() + timeout
         dismissed = []
         while True:
             try:
                 res = c.script_result(ident, timeout=2)
+                pending_ident = None
                 return {"result": res, "dismissed_dialogs": dismissed}
             except RuntimeError as err:
                 if time.monotonic() >= deadline:
                     raise
-                rows = c.command("inspect")
-                dialogs = [
-                    r
-                    for r in rows
-                    if r["class"] == "#32770"
-                    and r["name"] in ("ASK USER DIALOG", "CHANGES ALERT DIALOG", "SOURCE SELECTION DIALOG")
-                ]
-                for dlg in dialogs:
-                    ok_btns = [
-                        b
-                        for b in rows
-                        if b.get("owner") == dlg["handle"]
-                        and b["class"] == "Button"
-                        and b["name"] in ("OK", "Apply", "Continue")
-                    ]
-                    if ok_btns:
-                        c.command("invoke", name=ok_btns[0]["name"], owner=dlg["handle"])
-                        dismissed.append({"dialog": dlg["name"], "button": ok_btns[0]["name"]})
-                        time.sleep(0.25)
-                if "timed out" not in str(err).lower() and not dialogs:
+                found = dismiss_modal_dialogs()
+                dismissed.extend(found)
+                if "timed out" not in str(err).lower() and not found:
                     raise
 
     def execute_ops(ops, last_state):
         for op in ops:
             kind = op[0]
             if kind == "edit":
-                reply = c.script("set", path=remote, values={op[1]: op[2]})
+                if op[1] in ("Str", "Dex", "Con", "Int", "Wis", "Cha"):
+                    reply = c.script("set", path=remote, values={op[1]: op[2]})
+                else:
+                    reply = submit_with_dialogs("set", timeout=120, values={op[1]: op[2]})
                 report["inputs"].append({"edit": [op[1], op[2]], "reply": reply})
             elif kind == "cmd":
                 fn, fn_args = parse_cmd_call(op[1])
-                reply = call_with_dialogs(fn, fn_args, timeout=180)
+                reply = submit_with_dialogs("call", timeout=180, name=fn, args=fn_args)
                 report["inputs"].append({"call": fn, "args": fn_args, "reply": reply})
             elif kind == "eval":
                 prefix, amt = parse_spend_eval(op[1])
@@ -359,6 +373,15 @@ def run_reader_profile(
         if opened:
             try:
                 with c.desktop_lock():
+                    if pending_ident:
+                        for _ in range(6):
+                            dismiss_modal_dialogs()
+                            try:
+                                report["cleanup_collected"] = c.script_result(pending_ident, timeout=5)
+                                pending_ident = None
+                                break
+                            except RuntimeError:
+                                time.sleep(0.5)
                     rows = c.command("inspect")
                     if any(r["name"] == "JavaScript Debugger" for r in rows):
                         try:

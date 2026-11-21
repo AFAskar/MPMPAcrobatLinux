@@ -44,7 +44,7 @@
  var wsParts=(r.templates.WSfront||'').split(',');
  if(wsParts.length>1){var wsPre=wsParts[1];['Wildshape.Race.1','Wildshape.1.AC','Wildshape.1.Ability.Str.Score'].forEach(function(n){readField(r.notesAndActions,wsPre+n);});}
  var compParts=(r.templates.AScomp||'').split(',').slice(1);
- if(compParts.length){var compPre=compParts[compParts.length-1];['Comp.Race','Comp.Desc.Name','Comp.Use.AC','Comp.Use.HP'].forEach(function(n){readField(r.notesAndActions,compPre+n);});}
+ if(compParts.length){var compPre=compParts[compParts.length-1];['Comp.Race','Comp.Desc.Name','Comp.Use.AC','Comp.Use.HP.Max'].forEach(function(n){readField(r.notesAndActions,compPre+n);});}
  for(var i=0;i<d.numFields;i++){
   var name=d.getNthFieldName(i);
   var m=/^Limited Feature (\d+)$/.exec(name);
