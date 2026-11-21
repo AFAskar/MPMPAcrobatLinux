@@ -210,7 +210,11 @@ fn select_dialog_button(request: &Value, reply: &mut Value) -> Result<()> {
             return;
         }
         let remaining = if name.is_empty() { path } else { &path[1..] };
-        if element["type"] == "button" && remaining.is_empty() && available && !id.is_empty() {
+        if matches!(element["type"].as_str(), Some("button" | "link_text"))
+            && remaining.is_empty()
+            && available
+            && !id.is_empty()
+        {
             found.push(id.to_owned());
         }
         if let Some(children) = element["elements"].as_array() {
@@ -379,6 +383,39 @@ impl Runtime {
                         print_output_dir.as_deref(),
                     )
                     .map(|v| v.to_string())
+                    .map_err(|e| Exception::throw_message(&ctx, &format!("{e:#}")))
+                },
+            )?,
+        )?;
+        ctx.globals().set(
+            "__launchUrl",
+            Function::new(
+                ctx.clone(),
+                move |ctx: Ctx, url: String, new_frame: bool| -> rquickjs::Result<String> {
+                    (|| -> Result<String> {
+                        let lower = url.to_ascii_lowercase();
+                        if (!lower.starts_with("http://") && !lower.starts_with("https://"))
+                            || url.len() > 4096
+                            || url.bytes().any(|b| b < 0x20 || b == 0x7f)
+                        {
+                            bail!("Unsupported URL for app.launchURL")
+                        }
+                        let mut launched = false;
+                        if interactive {
+                            std::process::Command::new("xdg-open")
+                                .arg(&url)
+                                .stdin(std::process::Stdio::null())
+                                .stdout(std::process::Stdio::null())
+                                .stderr(std::process::Stdio::null())
+                                .spawn()
+                                .context("launch URL with xdg-open")?;
+                            launched = true;
+                        }
+                        Ok(
+                            json!({"url":url,"new_frame":new_frame,"launched":launched})
+                                .to_string(),
+                        )
+                    })()
                     .map_err(|e| Exception::throw_message(&ctx, &format!("{e:#}")))
                 },
             )?,
@@ -1270,6 +1307,26 @@ mod tests {
           seen[2][0]===''&&seen[2][1]===undefined&&seen[2][2]==='Other'&&
           seen[3][0]===''&&seen[3][1]===''&&seen[3][2]===''&&
           mons.length===1&&mons[0].rect[3]===1080&&!/hamburger/i.test(menuSrc)"#,
+        );
+    }
+    #[test]
+    fn link_text_red_dialog_controls_launch_url_and_document_pane() {
+        host(
+            r#"var seenReq=null,clicked=false;
+          globalThis.__dialog=function(s){seenReq=JSON.parse(s);return JSON.stringify(clicked?{result:'ok'}:{event:'bLin'})};
+          __host.execDialog({
+            description:{name:'Sources',elements:[{type:'link_text',item_id:'bLin',name:'Visit'}]},
+            initialize(d){d.load({bLin:'Open source'});d.setForeColorRed('bLin')},
+            bLin(d){clicked=true;app.launchURL('https://www.flapkan.com/',true)}
+          });
+          var badUrl=false;try{app.launchURL('javascript:alert(1)',true)}catch(e){badUrl=/Unsupported URL/.test(String(e))}
+          var badPane=false;try{pane='bogus'}catch(e){badPane=/Invalid document pane/.test(String(e))}
+          pane='Bookmarks';
+          var diag=JSON.parse(__host.diagnostics());
+          clicked&&seenReq.values.bLin==='Open source'&&seenReq.red.bLin===true&&
+          diag.gaps.indexOf('Dialog.setForeColorRed visual')===-1&&
+          diag.launchedUrls.length===1&&diag.launchedUrls[0].url==='https://www.flapkan.com/'&&diag.launchedUrls[0].new_frame===true&&
+          badUrl&&badPane&&pane==='bookmarks'&&diag.pane==='bookmarks'"#,
         );
     }
 }

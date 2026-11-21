@@ -246,6 +246,7 @@ pub fn main() -> Result<()> {
         edit_dirty: false,
         status: String::new(),
         last_tick: std::time::Instant::now(),
+        bookmarks_pane_applied: false,
         save_path: format!(
             "output/testing/native-{}.pdf",
             std::time::SystemTime::now()
@@ -286,6 +287,7 @@ struct Reader {
     edit_dirty: bool,
     status: String,
     last_tick: std::time::Instant,
+    bookmarks_pane_applied: bool,
     save_path: String,
 }
 fn bookmark_items(ui: &mut egui::Ui, node: &Value, path: &str, action: &mut Option<String>) {
@@ -758,7 +760,22 @@ impl eframe::App for Reader {
         egui::SidePanel::left("fields")
             .default_width(310.)
             .show(ctx, |ui| {
-                egui::CollapsingHeader::new("Bookmarks").default_open(std::env::var_os("MPMB_UI_SMOKE_BOOKMARK").is_some()).show(ui,|ui|{
+                let want_bookmarks = !self.bookmarks_pane_applied
+                    && self
+                        .rt
+                        .eval("pane")
+                        .ok()
+                        .and_then(|v| v.as_str().map(|s| s == "bookmarks"))
+                        .unwrap_or(false);
+                if want_bookmarks {
+                    self.bookmarks_pane_applied = true;
+                }
+                let mut bookmarks_header = egui::CollapsingHeader::new("Bookmarks")
+                    .default_open(std::env::var_os("MPMB_UI_SMOKE_BOOKMARK").is_some());
+                if want_bookmarks {
+                    bookmarks_header = bookmarks_header.open(Some(true));
+                }
+                bookmarks_header.show(ui,|ui|{
                     if let Ok(tree)=self.rt.eval("JSON.parse(JSON.stringify(bookmarkRoot))"){
                         let mut action=None;
                         egui::ScrollArea::vertical().id_salt("bookmarks").max_height(220.).show(ui,|ui|{bookmark_items(ui,&tree,"bookmarkRoot",&mut action);});
@@ -910,6 +927,7 @@ fn dialog_process() -> Result<()> {
             .collect(),
         enabled: data["enabled"].clone(),
         visible: data["visible"].clone(),
+        red: data["red"].clone(),
         result: result.clone(),
         images: BTreeMap::new(),
         capture_requested: false,
@@ -932,6 +950,7 @@ struct Dialog {
     values: BTreeMap<String, Value>,
     enabled: Value,
     visible: Value,
+    red: Value,
     result: Arc<Mutex<Value>>,
     images: BTreeMap<String, egui::TextureHandle>,
     capture_requested: bool,
@@ -1080,10 +1099,29 @@ impl Dialog {
             } else {
                 self.values.entry(id.into()).or_insert(json!(""))
             };
+            let is_red = self.red[id] == true;
+            let styled_text = |s: &str| {
+                let mut text = egui::RichText::new(s);
+                if is_red {
+                    text = text.color(egui::Color32::from_rgb(200, 32, 32));
+                }
+                text
+            };
             match kind {
                 "static_text" => {
                     let s = value.as_str().filter(|s| !s.is_empty()).unwrap_or(name);
-                    ui.label(s);
+                    ui.label(styled_text(s));
+                }
+                "link_text" => {
+                    let s = value.as_str().filter(|s| !s.is_empty()).unwrap_or(name);
+                    let response = ui.link(styled_text(s));
+                    if wants_focus {
+                        response.request_focus();
+                        *focus_requested = true;
+                    }
+                    if response.clicked() {
+                        reply = Some(json!({"event":id}));
+                    }
                 }
                 "edit_text" | "popup" | "list_box" | "hier_list_box" if value.is_object() => {
                     let mut leaves = Vec::new();
@@ -1154,14 +1192,17 @@ impl Dialog {
                     }
                 }
                 "radio" => {
-                    if ui.radio(value.as_bool().unwrap_or(false), name).clicked() {
+                    if ui
+                        .radio(value.as_bool().unwrap_or(false), styled_text(name))
+                        .clicked()
+                    {
                         *value = json!(true);
                         reply = Some(json!({"event":id}));
                     }
                 }
                 "check_box" => {
                     let mut selected = value.as_bool().unwrap_or(false);
-                    if ui.checkbox(&mut selected, name).changed() {
+                    if ui.checkbox(&mut selected, styled_text(name)).changed() {
                         *value = json!(selected);
                         reply = Some(json!({"event":id}));
                     }
@@ -1410,6 +1451,7 @@ mod dialog_tests {
             values: BTreeMap::from([("ckbx".into(), json!(true))]),
             enabled: json!({}),
             visible: json!({}),
+            red: json!({}),
             result: Arc::new(Mutex::new(json!({"result":"pending"}))),
             images: BTreeMap::new(),
             capture_requested: false,
@@ -1564,6 +1606,7 @@ mod dialog_tests {
             values: BTreeMap::from([("read".into(), json!("locked"))]),
             enabled: json!({}),
             visible: json!({}),
+            red: json!({}),
             result: Arc::new(Mutex::new(json!({}))),
             images: BTreeMap::new(),
             capture_requested: false,
@@ -1669,6 +1712,7 @@ mod dialog_tests {
             values: BTreeMap::from([("text".into(), json!(""))]),
             enabled: json!({}),
             visible: json!({}),
+            red: json!({}),
             result: Arc::new(Mutex::new(json!({}))),
             images: BTreeMap::new(),
             capture_requested: false,
@@ -1717,5 +1761,22 @@ mod dialog_tests {
             frame(vec![]).1.is_none(),
             "A committed edit must not repeat its event"
         );
+    }
+
+    #[test]
+    fn link_text_control_accepts_focus_enter_and_red_styling() {
+        let ctx = egui::Context::default();
+        let mut dialog = alert_dialog(None);
+        dialog.values.insert("bLin".into(), json!("Source Link"));
+        dialog.red = json!({"bLin": true});
+        dialog.focus = Some("bLin".into());
+        let link = json!({"type":"link_text","item_id":"bLin","name":"Fallback"});
+        assert_eq!(button_frame(&ctx, &mut dialog, &link, None), None);
+        assert!(dialog.focus_requested);
+        assert_eq!(
+            button_frame(&ctx, &mut dialog, &link, Some(egui::Key::Enter)),
+            Some(json!({"event":"bLin"}))
+        );
+        assert_eq!(dialog.values["bLin"], json!("Source Link"));
     }
 }

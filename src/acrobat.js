@@ -13,8 +13,8 @@ String.prototype.replace=function(pattern,replacement){
 };
 var __host = (function () {
   const data=JSON.parse(__initial), fields={}, names=[], journal=[];
-  const timers=new Map(), menus={}, gaps=[], errors=[], repairs=[], printJobs=[], attachmentExports=[], xfdfImports=[], assigning=new Set(), formatDirty=new Set(), formatting=new Set();
-  let clock=0, timerId=0, calculating=false, pending=false, revision=0, importBatch=0, importActive=0;
+  const timers=new Map(), menus={}, gaps=[], errors=[], repairs=[], printJobs=[], attachmentExports=[], xfdfImports=[], launchedUrls=[], assigning=new Set(), formatDirty=new Set(), formatting=new Set();
+  let clock=0, timerId=0, calculating=false, pending=false, revision=0, importBatch=0, importActive=0, paneState='';
   const applicationState=globalThis.__nativeApplicationState||(globalThis.__nativeApplicationState={});
   const iconTokens=applicationState.iconTokens||(applicationState.iconTokens=new WeakSet());
   const iconImports=[];
@@ -292,22 +292,22 @@ var __host = (function () {
   }
   function execDialog(def) {
 
-    const store={},enabled={},visible={},controls=[];let ended=null,focus=null;
+    const store={},enabled={},visible={},red={},controls=[];let ended=null,focus=null;
     // Acrobat popup-edit combos retain an option map for display, but store()
     // returns the selected key as text. Ordinary popups/lists return maps.
     function storedValues(){const result=JSON.parse(JSON.stringify(store));for(const c of controls){if(c.type==='edit_text'&&c.PopupEdit){const v=result[c.item_id];if(v&&typeof v==='object'){result[c.item_id]=c.SpinEdit?(Object.keys(v).filter(k=>Number(v[k])>0)[0]||''):'';}}}return result;}
     const dialog={load(x){for(const key of Object.keys(x)){const c=controls.filter(c=>c.item_id===key)[0],v=x[key];if(c&&c.type==='edit_text'&&c.PopupEdit&&((c.SpinEdit&&typeof v==='string')||(!c.SpinEdit&&v&&typeof v==='object'))){if(store[key]===undefined)store[key]='';continue;}store[key]=v;}},store:storedValues,enable(x){Object.assign(enabled,x)},visible(x){Object.assign(visible,x)},end(x){ended=x},
-      setForeColorRed(id){gap('Dialog.setForeColorRed visual')},focus(id){focus=id},setFocus(id){focus=id},insertEntryInList(o){for(const id of Object.keys(o))store[id]=Object.assign(store[id]||{},o[id])},removeAllEntriesFromList(id){store[id]={}},
+      setForeColorRed(id){red[String(id)]=true},focus(id){focus=id},setFocus(id){focus=id},insertEntryInList(o){for(const id of Object.keys(o))store[id]=Object.assign(store[id]||{},o[id])},removeAllEntriesFromList(id){store[id]={}},
     };
     // Reader constructs control values before initialize runs. Spin edits have
     // an intrinsic zero; plain/readonly edits ignore the descriptor's name.
-    function collect(e){if(e.item_id){controls.push(e);if(e.type==='edit_text')store[e.item_id]=e.SpinEdit&&!e.PopupEdit&&!e.readonly?'0':'';else if(e.type==='static_text')store[e.item_id]=e.name===undefined?'':String(e.name);else if(e.type==='radio'||e.type==='check_box')store[e.item_id]=false;}(e.elements||[]).forEach(collect)}collect(def.description||{});
+    function collect(e){if(e.item_id){controls.push(e);if(e.type==='edit_text')store[e.item_id]=e.SpinEdit&&!e.PopupEdit&&!e.readonly?'0':'';else if(e.type==='static_text'||e.type==='link_text')store[e.item_id]=e.name===undefined?'':String(e.name);else if(e.type==='radio'||e.type==='check_box')store[e.item_id]=false;}(e.elements||[]).forEach(collect)}collect(def.description||{});
     if(def.initialize)def.initialize(dialog);
     function finish(result){if(def.destroy)def.destroy(dialog);return result;}
     for(let i=0;i<1000;i++) {
       const rendered=Object.assign({},store);
       for(const key of Object.keys(rendered)){const icon=iconData(rendered[key]);if(icon)rendered[key]=icon;}
-      const reply=JSON.parse(__dialog(JSON.stringify({description:def.description,values:rendered,enabled,visible,focus})));
+      const reply=JSON.parse(__dialog(JSON.stringify({description:def.description,values:rendered,enabled,visible,red,focus})));
       if(reply.values)for(const key of Object.keys(reply.values)){if(!store[key]||typeof store[key].read!=='function')store[key]=reply.values[key];}
       const control=reply.event&&controls.filter(c=>c.item_id===reply.event)[0];if(control&&control.type==='radio'){for(const c of controls)if(c.type==='radio'&&c.group_id===control.group_id)store[c.item_id]=c.item_id===control.item_id;}
       if(reply.result==='other'){if(def.other)def.other(dialog);if(ended!==null)return finish(ended);continue;}
@@ -349,7 +349,9 @@ var __host = (function () {
     ready(){let n=0;while(!globalThis.calculate||!app.calculate||globalThis.delay){let t=Array.from(timers.values()).sort((a,b)=>a.at-b.at)[0];if(!t||++n>100)throw Error('Document calculations suspended without a resumable timer');advance(Math.max(0,t.at-clock));}return true},
     snapshot(){let o={__structure:journal,__order:data.order},assets={};if(data.bookmarksChanged)o.__bookmarks=bookmarkRoot;for(const n of names){let f=fields[n];o[n]={value:Array.isArray(f.value)?f.value:f.valueAsString,icon:f._icon&&f._icon.asset?{asset:f._icon.asset.id}:f._icon,caption:f._caption,captions:f._captions,actions:f._modifiedActions,widgets:f._widgets,currentValueIndices:f.currentValueIndices,textSize:f.textSize,alignment:f.alignment,multiline:f.multiline,textColor:f.textColor,textFont:f.textFont,richText:f.richText,rawRichValue:copyData(f._richRaw),richValueChanged:!sameRich(f._richRaw,f._initialRichRaw),appearanceDirty:!!f._appearanceDirty,richValue:f.richText?(f._formattedRichValue===null?[]:copyData(f._formattedRichValue===undefined?f._richRaw:f._formattedRichValue)):[],richRenderActive:!!f.richText&&f._formattedRichValue!==null,defaultStyle:copyData(f._defaultStyle),formatted:f._formatted===undefined?f.valueAsString:f._formatted,display:f.display,userName:f.userName,submitName:f.submitName,readonly:f.readonly,editable:f.editable,items:f.items};if(f._icon&&f._icon.asset)assets[f._icon.asset.id]=f._icon.asset;}if(Object.keys(assets).length)o.__iconAssets=assets;return JSON.stringify(o)},
     timer(code,ms){let id=++timerId;timers.set(id,{id,code:String(code),at:clock+Math.max(1,Number(ms)||1)});return id},clear(id){timers.delete(id)},
-    diagnostics(){return JSON.stringify({gaps,errors,repairs,printJobs,attachmentExports,xfdfImports,iconImports,console:consoleState,timers:timers.size,field_count:names.length,menus:Object.keys(menus)})}
+    launchURL(url,newFrame=false){const target=String(url||'');if(!/^https?:\/\/[^\s\x00-\x1f]{1,4080}$/i.test(target))throw Error('Unsupported URL scheme: '+target);const record=typeof __launchUrl==='function'?JSON.parse(__launchUrl(target,!!newFrame)):{url:target,new_frame:!!newFrame,launched:false};launchedUrls.push(record);return undefined;},
+    get pane(){return paneState},set pane(v){const next=String(v||'').toLowerCase();if(!['','bookmarks','thumbnails','layers','attachments','signatures'].includes(next))throw Error('Invalid document pane: '+v);paneState=next;},
+    diagnostics(){return JSON.stringify({gaps,errors,repairs,printJobs,attachmentExports,xfdfImports,iconImports,launchedUrls,pane:paneState,console:consoleState,timers:timers.size,field_count:names.length,menus:Object.keys(menus)})}
   };
 })();
 var display={visible:0,hidden:1,noPrint:2,noView:3};
@@ -372,6 +374,7 @@ var __monitors=(function(){
 })();
 var app={viewerType:'Reader',viewerVersion:26,formsVersion:26,platform:'UNIX',language:'ENU',calculate:true,runtimeHighlight:false,monitors:__monitors,
   execDialog:__host.execDialog,
+  launchURL(url,newFrame=false){return __host.launchURL(url,newFrame)},
   listMenuItems(){return [{cName:'File',oChildren:[{cName:'Open'},{cName:'Save'},{cName:'SaveAs'},{cName:'Close'}]},{cName:'Edit',oChildren:[]},{cName:'View',oChildren:[]},{cName:'Window',oChildren:[]},{cName:'Help',oChildren:[]}];},
   setTimeOut(code,ms){return __host.timer(code,ms)},clearTimeOut(id){__host.clear(id)},
   setInterval(){return __host.unsupported('app.setInterval')},clearInterval(id){__host.clear(id)},
@@ -457,6 +460,7 @@ Object.assign(globalThis,{
 });
 
 Object.defineProperty(globalThis,'dataObjects',{get:__host.dataObjects});
+Object.defineProperty(globalThis,'pane',{enumerable:true,get(){return __host.pane},set(v){__host.pane=v}});
 
 function AFRange_Validate(lower,minimum,upper,maximum){let n=Number(event.value);if(event.value!==''&&((lower&&n<minimum)||(upper&&n>maximum)))event.rc=false;}
 function AFDate_Format(format){if(event.value){let d=util.scand(format,event.value);if(d)event.value=util.printd(format,d);}}
