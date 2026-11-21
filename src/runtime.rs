@@ -349,6 +349,20 @@ impl Runtime {
                 Ok(result.to_string())
             })().map_err(|e| Exception::throw_message(&ctx, &format!("{e:#}")))
         })?)?;
+        let icon_stream_pdf = Arc::clone(pdf);
+        ctx.globals().set(
+            "__iconStream",
+            Function::new(
+                ctx.clone(),
+                move |ctx: Ctx, input: String| -> rquickjs::Result<String> {
+                    (|| -> Result<String> {
+                        let icon: Value = serde_json::from_str(&input)?;
+                        Ok(crate::icon_import::icon_stream(&icon_stream_pdf, &icon)?.to_string())
+                    })()
+                    .map_err(|e| Exception::throw_message(&ctx, &format!("{e:#}")))
+                },
+            )?,
+        )?;
         let attachments = crate::attachments::read(&pdf.doc)?;
         let attachment_metadata: Vec<_> = attachments.values().cloned().collect();
         let exporter = std::cell::RefCell::new(crate::attachments::Exporter::default());
@@ -1327,6 +1341,21 @@ mod tests {
           diag.gaps.indexOf('Dialog.setForeColorRed visual')===-1&&
           diag.launchedUrls.length===1&&diag.launchedUrls[0].url==='https://www.flapkan.com/'&&diag.launchedUrls[0].new_frame===true&&
           badUrl&&badPane&&pane==='bookmarks'&&diag.pane==='bookmarks'"#,
+        );
+    }
+    #[test]
+    fn icon_stream_from_icon_feeds_dialog_image_controls() {
+        host(
+            r#"var seen=null;
+          globalThis.__iconStream=function(s){var req=JSON.parse(s);return JSON.stringify({width:2,height:1,argb:req.field==='A'?'ffff0000ff00ff00':'0000000000000000'})};
+          globalThis.__dialog=function(s){seen=JSON.parse(s);return JSON.stringify({result:'ok'})};
+          var stream=util.iconStreamFromIcon(getField('A').buttonGetIcon());
+          __host.execDialog({
+            description:{name:'Icon test',elements:[{type:'image',item_id:'img1',width:2,height:1}]},
+            initialize(d){d.load({img1:stream})}
+          });
+          stream.width===2&&stream.height===1&&stream.read(8)==='ffff0000'&&stream.read(8)==='ff00ff00'&&
+          seen.values.img1.width===2&&seen.values.img1.height===1&&seen.values.img1.argb==='ffff0000ff00ff00'"#,
         );
     }
 }

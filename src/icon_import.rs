@@ -377,6 +377,139 @@ pub fn embed(target: &mut Document, asset: &Value) -> Result<ObjectId> {
         .map_err(Into::into)
 }
 
+pub fn icon_stream_pdf(pdf: &crate::pdf::Pdf, icon: &Value) -> Result<(usize, Vec<u8>)> {
+    let owned_source;
+    let (source_doc, form_object): (&Document, Object) =
+        if let Some(hex_str) = icon["asset"]["pdf_hex"].as_str() {
+            let bytes = unhex(hex_str)?;
+            if icon["asset"]["id"].as_str() != Some(hex(&Sha256::digest(&bytes)).as_str()) {
+                bail!("Icon payload fingerprint differs")
+            }
+            owned_source = Document::load_mem(&bytes)?;
+            let form = owned_source.catalog()?.get(b"MPMBIcon")?.clone();
+            (&owned_source, form)
+        } else {
+            let field_name = icon["field"]
+                .as_str()
+                .context("util.iconStreamFromIcon requires a button icon")?;
+            let field = pdf
+                .fields
+                .get(field_name)
+                .with_context(|| format!("Icon source field not found: {field_name}"))?;
+            let widget = field
+                .widgets
+                .first()
+                .context("Icon source field has no widget")?;
+            let wd = pdf.doc.get_dictionary(widget.id)?;
+            let found = wd
+                .get(b"MK")
+                .ok()
+                .and_then(|v| pdf.doc.dereference(v).ok().map(|(_, o)| o))
+                .and_then(|v| v.as_dict().ok())
+                .and_then(|v| v.get(b"I").ok())
+                .or_else(|| {
+                    wd.get(b"AP")
+                        .ok()
+                        .and_then(|v| pdf.doc.dereference(v).ok().map(|(_, o)| o))
+                        .and_then(|v| v.as_dict().ok())
+                        .and_then(|v| v.get(b"N").ok())
+                })
+                .cloned()
+                .context("Button field has no normal icon")?;
+            (&pdf.doc, found)
+        };
+    let stream = source_doc.dereference(&form_object)?.1.as_stream()?;
+    let b: Vec<f32> = stream
+        .dict
+        .get(b"BBox")?
+        .as_array()?
+        .iter()
+        .map(|v| v.as_float().unwrap_or(0.))
+        .collect();
+    if b.len() != 4 || b[2] <= b[0] || b[3] <= b[1] {
+        bail!("Invalid icon form BBox")
+    }
+    let m = stream
+        .dict
+        .get(b"Matrix")
+        .ok()
+        .and_then(|v| v.as_array().ok())
+        .map(|a| {
+            a.iter()
+                .map(|v| v.as_float().unwrap_or(0.))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| vec![1., 0., 0., 1., 0., 0.]);
+    if m.len() != 6 {
+        bail!("Invalid icon form Matrix")
+    }
+    let corners = [(b[0], b[1]), (b[2], b[1]), (b[0], b[3]), (b[2], b[3])]
+        .map(|(x, y)| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]));
+    let minx = corners.iter().map(|p| p.0).fold(f32::INFINITY, f32::min);
+    let maxx = corners
+        .iter()
+        .map(|p| p.0)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let miny = corners.iter().map(|p| p.1).fold(f32::INFINITY, f32::min);
+    let maxy = corners
+        .iter()
+        .map(|p| p.1)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let src_w = maxx - minx;
+    let src_h = maxy - miny;
+    if !src_w.is_finite() || !src_h.is_finite() || src_w <= 0. || src_h <= 0. {
+        bail!("Degenerate icon bounds")
+    }
+    let max_dim = 256.0f32;
+    let fit = (max_dim / src_w).min(max_dim / src_h).min(1.0);
+    let page_w = (src_w * fit).ceil().max(1.);
+    let page_h = (src_h * fit).ceil().max(1.);
+    let tx = -minx * fit;
+    let ty = -miny * fit;
+    let mut doc = Document::with_version("1.7");
+    let copied = copy_object(source_doc, &mut doc, &form_object, &mut HashMap::new(), 0)?;
+    let form_ref = match copied {
+        Object::Reference(id) => id,
+        other => doc.add_object(other),
+    };
+    let content = doc.add_object(Stream::new(
+        dictionary! {},
+        format!("q {fit} 0 0 {fit} {tx} {ty} cm /Icon Do Q\n").into_bytes(),
+    ));
+    let pages = doc.new_object_id();
+    let page = doc.add_object(dictionary! {
+        "Type" => "Page",
+        "Parent" => pages,
+        "MediaBox" => vec![0.into(), 0.into(), Object::Real(page_w), Object::Real(page_h)],
+        "Resources" => dictionary! {"XObject" => dictionary! {"Icon" => form_ref}},
+        "Contents" => content,
+    });
+    doc.objects.insert(
+        pages,
+        Object::Dictionary(dictionary! {"Type"=>"Pages","Kids"=>vec![page.into()],"Count"=>1}),
+    );
+    let root = doc.add_object(dictionary! {"Type"=>"Catalog","Pages"=>pages});
+    doc.trailer.set("Root", root);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes)?;
+    Ok((page_w as usize, bytes))
+}
+
+pub fn icon_stream(pdf: &crate::pdf::Pdf, icon: &Value) -> Result<Value> {
+    let (width, pdf_bytes) = icon_stream_pdf(pdf, icon)?;
+    let (w, h, rgba) = crate::render::Renderer::new()?.render(&pdf_bytes, 0, width)?;
+    let mut argb = String::with_capacity(w * h * 8);
+    for px in rgba.chunks_exact(4) {
+        use std::fmt::Write;
+        let _ = write!(
+            &mut argb,
+            "{:02x}{:02x}{:02x}{:02x}",
+            px[3], px[0], px[1], px[2]
+        );
+    }
+    Ok(json!({"width": w, "height": h, "argb": argb}))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -574,6 +707,78 @@ mod tests {
             request(&json!({"path":source,"page":0}), false, &p).unwrap()["asset"].clone();
         value["id"] = json!("changed");
         assert!(embed(&mut Document::new(), &value).is_err());
+        std::fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn icon_stream_pdf_wraps_button_and_imported_assets_with_transformed_bounds() {
+        let p = folder();
+        let source = p.join("icon.png");
+        let rgba = image::RgbaImage::from_raw(4, 2, vec![255; 32]).unwrap();
+        rgba.save(&source).unwrap();
+        let imported = request(&json!({"path":source,"page":0}), false, &p).unwrap();
+        let mut doc = Document::with_version("1.7");
+        let form = doc.add_object(Stream::new(
+            dictionary! {
+                "Type" => "XObject",
+                "Subtype" => "Form",
+                "BBox" => vec![3.into(), 4.into(), 60.into(), 59.into()],
+                "Matrix" => vec![1.into(), 0.into(), 0.into(), 1.into(), (-31).into(), (-31).into()],
+                "Resources" => dictionary! {}
+            },
+            b"1 0 0 rg 3 4 57 55 re f".to_vec(),
+        ));
+        let widget = doc.add_object(dictionary! {
+            "Type" => "Annot", "Subtype" => "Widget", "FT" => "Btn", "Ff" => 65536,
+            "T" => Object::string_literal("SaveIMG.Patreon"),
+            "Rect" => vec![0.into(), 0.into(), 20.into(), 20.into()],
+            "MK" => dictionary! {"I" => form}
+        });
+        let fields = std::collections::BTreeMap::from([(
+            "SaveIMG.Patreon".into(),
+            crate::pdf::Field {
+                name: "SaveIMG.Patreon".into(),
+                id: widget,
+                value: json!(""),
+                default_value: json!(""),
+                kind: "Btn".into(),
+                user_name: String::new(),
+                submit_name: String::new(),
+                flags: 65536,
+                alignment: 0,
+                display: 0,
+                text_size: 0.,
+                text_font: "Helvetica".into(),
+                text_color: json!(["G", 0]),
+                rich_metadata: json!({}),
+                widgets: vec![crate::pdf::Widget {
+                    id: widget,
+                    page: 0,
+                    rect: vec![0., 0., 20., 20.],
+                    flags: 4,
+                }],
+                actions: std::collections::BTreeMap::new(),
+                items: Vec::new(),
+                export_values: Vec::new(),
+                caption: String::new(),
+            },
+        )]);
+        let pdf = crate::pdf::Pdf {
+            doc,
+            fields,
+            scripts: Vec::new(),
+            order: Vec::new(),
+            info: json!({}),
+            bookmarks: json!({"name":"Root","children":[]}),
+            path: p.join("sheet.pdf"),
+            templates: std::collections::BTreeMap::new(),
+        };
+        let (w1, bytes1) =
+            icon_stream_pdf(&pdf, &json!({"field":"SaveIMG.Patreon","face":0})).unwrap();
+        assert_eq!(w1, 57);
+        assert_eq!(Document::load_mem(&bytes1).unwrap().get_pages().len(), 1);
+        let (w2, bytes2) = icon_stream_pdf(&pdf, &json!({"asset":imported["asset"]})).unwrap();
+        assert_eq!(w2, 4);
+        assert_eq!(Document::load_mem(&bytes2).unwrap().get_pages().len(), 1);
         std::fs::remove_dir_all(p).unwrap();
     }
 }

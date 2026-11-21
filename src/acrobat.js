@@ -415,6 +415,7 @@ var util={
   printd(fmt,date){let d=date||new Date();return String(fmt).replace(/yyyy|yy|mmmm|mmm|mm|dd|HH|MM|ss/g,t=>({yyyy:d.getFullYear(),yy:String(d.getFullYear()).slice(-2),mmmm:d.toLocaleString('en',{month:'long'}),mmm:['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()],mm:String(d.getMonth()+1).padStart(2,'0'),dd:String(d.getDate()).padStart(2,'0'),HH:d.getHours(),MM:d.getMinutes(),ss:d.getSeconds()})[t])},
   scand(fmt,s){let d=new Date(s);return isNaN(d)?null:d},
   readFileIntoStream(path){return JSON.parse(__file(path||''))},stringFromStream(stream){if(!stream||typeof stream.data!=='string')throw Error('Invalid text stream');return stream.data},
+  iconStreamFromIcon(icon){if(!icon||typeof icon!=='object')throw Error('Invalid icon');if(typeof __iconStream!=='function')return __host.unsupported('util.iconStreamFromIcon');const data=JSON.parse(__iconStream(JSON.stringify(icon)));return {count:0,width:data.width,height:data.height,read(n){const start=this.count,end=n===undefined?data.argb.length:Math.min(data.argb.length,start+Math.max(0,Number(n)||0));this.count=end;return data.argb.slice(start,end);}};},
 };
 function __pdfInfoDate(value){
   const m=/^(?:D:)?(\d{4})(\d{2})?(\d{2})?(\d{2})?(\d{2})?(\d{2})?(?:([Z+-])(\d{2})?'?(\d{2})?'?)?$/.exec(String(value));
