@@ -17,8 +17,10 @@ var __host = (function () {
   let clock=0, timerId=0, calculating=false, pending=false, revision=0, importBatch=0, importActive=0, paneState='';
   const applicationState=globalThis.__nativeApplicationState||(globalThis.__nativeApplicationState={});
   const iconTokens=applicationState.iconTokens||(applicationState.iconTokens=new WeakSet());
+  const assetIcons=applicationState.assetIcons||(applicationState.assetIcons=new WeakMap());
   const docIcons=new Map();
   function docIconToken(key,field){let token=docIcons.get(key);if(!token){token=Object.freeze({field,face:0});docIcons.set(key,token);}return token;}
+  function assetIconToken(asset){let token=assetIcons.get(asset);if(!token){token=Object.freeze({asset});assetIcons.set(asset,token);}return token;}
   const iconImports=[];
   const consoleState=applicationState.console||(applicationState.console={visible:false,messages:[]});
   const unsupportedErrors=globalThis.__nativeApplicationState?(globalThis.__nativeApplicationState.unsupportedErrors||(globalThis.__nativeApplicationState.unsupportedErrors=new WeakSet())):new WeakSet();
@@ -109,8 +111,8 @@ var __host = (function () {
       setFocus(){focusField(n);},getArray(){return [this]},
       browseForFileToSubmit(){if(this.type!=='text'||!(x.flags&1048576))throw Error('File selection requires a file-select text field');if(typeof __browsePdf!=='function')return unsupported('Field.browseForFileToSubmit');const path=__browsePdf();if(path!==null)this.value=path;},
       buttonGetIcon(face=0){if(face!==0)return unsupported('Field.buttonGetIcon non-normal face');if(this._icon)return this._icon;return docIconToken(x.icon_key?('hash:'+x.icon_key):('field:'+n),n)},
-      buttonSetIcon(icon,face=0){if(face!==0)return unsupported('Field.buttonSetIcon non-normal face');if(icon&&icon.asset&&iconTokens.has(icon.asset)){this._icon=Object.freeze({asset:icon.asset});globalThis.dirty=true;revision++;return;}if(!icon||typeof icon.field!=='string')return unsupported('Field.buttonSetIcon external icon');this._icon=Object.isFrozen(icon)?icon:Object.freeze(Object.assign({},icon));revision++},
-      buttonImportIcon(cPath,nPage=0){if(this.type!=='button')return unsupported('Field.buttonImportIcon on non-pushbutton');if(typeof __iconImport!=='function')return unsupported('Field.buttonImportIcon');if(cPath&&typeof cPath==='object'){nPage=cPath.nPage===undefined?0:cPath.nPage;cPath=cPath.cPath;}const result=JSON.parse(__iconImport(JSON.stringify({path:cPath===undefined?null:String(cPath),page:Number(nPage)})));iconImports.push({field:n,code:result.code,reason:result.reason});if(result.code===0){const asset=Object.freeze(result.asset);iconTokens.add(asset);this._icon=Object.freeze({asset});globalThis.dirty=true;revision++;}return result.code;},
+      buttonSetIcon(icon,face=0){if(face!==0)return unsupported('Field.buttonSetIcon non-normal face');if(icon&&icon.asset&&iconTokens.has(icon.asset)){this._icon=assetIconToken(icon.asset);globalThis.dirty=true;revision++;return;}if(!icon||typeof icon.field!=='string')return unsupported('Field.buttonSetIcon external icon');this._icon=Object.isFrozen(icon)?icon:Object.freeze(Object.assign({},icon));revision++},
+      buttonImportIcon(cPath,nPage=0){if(this.type!=='button')return unsupported('Field.buttonImportIcon on non-pushbutton');if(typeof __iconImport!=='function')return unsupported('Field.buttonImportIcon');if(cPath&&typeof cPath==='object'){nPage=cPath.nPage===undefined?0:cPath.nPage;cPath=cPath.cPath;}const result=JSON.parse(__iconImport(JSON.stringify({path:cPath===undefined?null:String(cPath),page:Number(nPage)})));iconImports.push({field:n,code:result.code,reason:result.reason});if(result.code===0){const asset=Object.freeze(result.asset);iconTokens.add(asset);this._icon=assetIconToken(asset);globalThis.dirty=true;revision++;}return result.code;},
       buttonSetCaption(c,face=0){if(![0,1,2].includes(face))throw Error('Invalid button face');this._captions=this._captions||{};this._captions[face]=String(c);if(face===0)this._caption=String(c);revision++},buttonGetCaption(face=0){return this._captions&&this._captions[face]!==undefined?this._captions[face]:this._caption===undefined?(x.caption||''):this._caption},
     };
     const initialStyle=copyData(x.rich_metadata&&x.rich_metadata.defaultStyle)||{alignment:f.alignment,fontFamily:[f.textFont,'sans-serif'],fontStretch:'normal',fontStyle:'normal',fontWeight:400,textColor:['RGB',0,0,0],textSize:f.textSize};
@@ -120,7 +122,7 @@ var __host = (function () {
     Object.defineProperty(f,'defaultStyle',{enumerable:true,get(){if(x.kind!=='Tx'||!f.richText)return invalidFieldGet();return copyData(f._defaultStyle)},set(v){if(x.kind!=='Tx'||!f.richText)return unsupported('Field.defaultStyle assignment on plain field');if(!v||typeof v!=='object'||Array.isArray(v))throw Error('Invalid default style');const next=Object.assign({alignment:'left',fontFamily:['Helvetica'],fontStretch:'normal',fontStyle:'normal',fontWeight:400,textColor:['RGB',0,0,0],textSize:12},copyData(v));if(!Array.isArray(next.fontFamily)||!next.fontFamily.length||!Number.isFinite(Number(next.textSize))||Number(next.textSize)<0||!['left','center','right'].includes(next.alignment))throw Error('Invalid default style');next.textColor=richStyleColor(next.textColor);for(const key of ['underline','strikethrough']){if(next[key]===true||typeof next[key]==='number'&&next[key]!==0||next[key]==='true'||next[key]==='1')next[key]=key==='underline'?'underline':true;else delete next[key];}const font=fontName(next);styleBatch=true;try{f.textSize=Object.prototype.hasOwnProperty.call(v,'textSize')?Number(next.textSize):0;f.textFont=font;f.textColor=Object.prototype.hasOwnProperty.call(v,'textColor')?next.textColor:['G',0];f.alignment=next.alignment;f._defaultStyle=next;}finally{styleBatch=false;}reformat(f);}});
     for(const prop of ['textSize','textFont','richText','textColor','fillColor','strokeColor','alignment','lineWidth','borderStyle']){
 
-      let stored=f[prop];Object.defineProperty(f,prop,{enumerable:true,get(){return (prop==='textColor'||prop==='fillColor'||prop==='strokeColor')?copyData(stored):stored},set(v){let next=prop==='richText'?!!v:v;let styleUpdate=null;if(prop==='textSize'){next=Number(v);if(!Number.isFinite(next)||next<0)throw Error('Invalid text size');styleUpdate={textSize:next};}else if(prop==='textFont'){next=String(v);const info=fontInfo(next);styleUpdate={fontFamily:[info.family,...f._defaultStyle.fontFamily.slice(1)],fontWeight:info.weight,style:info.style};}else if(prop==='textColor'){next=copyData(v);styleUpdate={textColor:richStyleColor(next)};}else if(prop==='fillColor'||prop==='strokeColor'){next=copyData(v);}else if(prop==='lineWidth'){next=Number(v);if(!Number.isFinite(next)||next<0)throw Error('Invalid line width');}else if(prop==='borderStyle'){next=String(v);}else if(prop==='alignment'){next=String(v);if(!['left','center','right'].includes(next))throw Error('Invalid alignment');styleUpdate={alignment:next};}if(JSON.stringify(next)!==JSON.stringify(stored)){revision++;}stored=next;if(styleUpdate){Object.assign(f._defaultStyle,styleUpdate);if(!styleBatch)reformat(f);}if(prop==='richText'){if(stored)f.value=f.valueAsString;else reformat(f);}}});
+      let stored=f[prop];Object.defineProperty(f,prop,{enumerable:true,get(){return (prop==='textColor'||prop==='fillColor'||prop==='strokeColor')?copyData(stored):stored},set(v){let next=prop==='richText'?!!v:v;let styleUpdate=null;if(prop==='textSize'){next=Number(v);if(!Number.isFinite(next)||next<0)throw Error('Invalid text size');styleUpdate={textSize:next};}else if(prop==='textFont'){next=String(v);const info=fontInfo(next);styleUpdate={fontFamily:[info.family,...f._defaultStyle.fontFamily.slice(1)],fontWeight:info.weight,fontStyle:info.style};}else if(prop==='textColor'){next=copyData(v);styleUpdate={textColor:richStyleColor(next)};}else if(prop==='fillColor'||prop==='strokeColor'){next=copyData(v);}else if(prop==='lineWidth'){next=Number(v);if(!Number.isFinite(next)||next<0)throw Error('Invalid line width');}else if(prop==='borderStyle'){next=String(v);}else if(prop==='alignment'){next=String(v);if(!['left','center','right'].includes(next))throw Error('Invalid alignment');styleUpdate={alignment:next};}if(JSON.stringify(next)!==JSON.stringify(stored)){revision++;}stored=next;if(styleUpdate){Object.assign(f._defaultStyle,styleUpdate);if(!styleBatch)reformat(f);}if(prop==='richText'){if(stored)f.value=f.valueAsString;else reformat(f);}}});
     }
     for(const prop of ['userName','submitName']){let stored=f[prop];Object.defineProperty(f,prop,{enumerable:true,get(){return stored},set(v){stored=String(v)}})}
     Object.defineProperty(f,'display',{enumerable:true,get(){return widgetDisplay(f,0)},set(v){displayFlags(v,4);f._fallbackDisplay=Number(v);for(let i=0;i<f._widgets.length;i++)setWidgetDisplay(f,i,v);}});
@@ -194,8 +196,8 @@ var __host = (function () {
       if(hadWidgets&&!f._widgets.length){names.splice(i,1);delete fields[n];let c=data.order.indexOf(n);if(c>=0)data.order.splice(c,1);}}
     journal.push({op:'deletePages',start,end});globalThis.numPages-=end-start+1;globalThis.pageNum=Math.min(globalThis.pageNum,globalThis.numPages-1);globalThis.numFields=names.length;revision++;
   }
-  function choiceEventFields(f,value){
-    if(f.type!=='combobox'&&f.type!=='listbox')return {};
+  function choiceItemMatch(f,value){
+    if(f.type!=='combobox'&&f.type!=='listbox')return null;
     const target=String(value);
     for(const item of f.items){
       if(Array.isArray(item)){
@@ -205,12 +207,11 @@ var __host = (function () {
         return {change:target,changeEx:target};
       }
     }
-    return {};
+    return null;
   }
   function eventRun(f,key,value,extra,richInput) {
     let previous=globalThis.event;
-    const choice=key==='K'?choiceEventFields(f,value):{};
-    let e=Object.assign({target:f,targetName:f.name,source:importActive?null:(fields[data.focus]||f),name:({C:'Calculate',V:'Validate',K:'Keystroke',F:'Format',U:'Mouse Up',D:'Mouse Down',Fo:'Focus',Bl:'Blur'})[key]||key,type:'Field',value:['K','V','C','F'].includes(key)?String(value):value,rc:true,willCommit:key==='K',change:'',selStart:0,selEnd:0},choice,extra||{});
+    let e=Object.assign({target:f,targetName:f.name,source:importActive?null:(fields[data.focus]||f),name:({C:'Calculate',V:'Validate',K:'Keystroke',F:'Format',U:'Mouse Up',D:'Mouse Down',Fo:'Focus',Bl:'Blur'})[key]||key,type:'Field',value:['K','V','C','F'].includes(key)?String(value):value,rc:true,willCommit:key==='K',change:'',selStart:0,selEnd:0},extra||{});
     let eventValue=e.value,valueWritten=false,richWritten=false;
     let richData=richInput===undefined?((key==='K'||key==='V')?(String(value)?richChanges(value):null):copyData(f._richRaw||[])):copyData(richInput);
     Object.defineProperty(e,'value',{enumerable:true,get(){return eventValue},set(v){if(['K','V','C','F'].includes(key)){if(typeof v!=='string'&&typeof v!=='number'){const error=new Error('Set not possible, invalid or unknown.');error.name='InvalidSetError';throw error;}v=String(v);}eventValue=v;valueWritten=true;}});
@@ -278,6 +279,22 @@ var __host = (function () {
     focusField(n,index);edit(n,v);focusField(null);
     if(globalThis.calculate&&app.calculate)calculateNow();return true;
   }
+  // Interactive popup selection on combobox/listbox fields fires a non-commit
+  // Keystroke carrying change/changeEx before committing the selected export value.
+  function selectChoice(n,v){
+    const f=fields[n];if(!f)throw Error('Unknown field '+n);if(f.readonly)throw Error('Read-only field '+n);
+    const match=choiceItemMatch(f,v);
+    if(!match)throw Error('Choice item not offered by '+n+': '+v);
+    const index=data.focus===n?(data.focusWidget||0):undefined;
+    focusField(n,index);
+    const k=eventRun(f,'K',f.valueAsString,{willCommit:false,change:match.change,changeEx:match.changeEx});
+    if(!k.rc){focusField(null);return false;}
+    f.value=match.changeEx;
+    globalThis.dirty=true;
+    focusField(null);
+    if(globalThis.calculate&&app.calculate)calculateNow();
+    return true;
+  }
   function activate(n,index=0,modifiers={}){
     const f=fields[n];if(!f)throw Error('Unknown field '+n);focusField(n,index);
     const mouse={shift:!!modifiers.shift,modifier:!!modifiers.modifier};
@@ -341,7 +358,7 @@ var __host = (function () {
     const repair={id:'mpmb-2024-261023-wildshape-pop-typo',scope:'runtime only',embedded_scripts_modified:false,reason:'Original ApplyWildshape reads pop instead of its local prop variable'};
     repairs.push(repair);__log('Applied qualified runtime repair: '+repair.id);
   }
-  return {activate,focusField,userEdit,pageWidgets,widgetDisplay,setWidgetDisplay,widgetRect,setWidgetRect,menuItems,popup,applyQualifiedRepairs,get revision(){return revision},recordError(e){errors.push(e)},fields,names,data,menus,gaps,errors,source,unsupported,gap,calculateNow,edit,advance,execDialog,invokeMenu,command,spawn,removeField,deletePages,importXFDF,
+  return {activate,focusField,userEdit,selectChoice,pageWidgets,widgetDisplay,setWidgetDisplay,widgetRect,setWidgetRect,menuItems,popup,applyQualifiedRepairs,get revision(){return revision},recordError(e){errors.push(e)},fields,names,data,menus,gaps,errors,source,unsupported,gap,calculateNow,edit,advance,execDialog,invokeMenu,command,spawn,removeField,deletePages,importXFDF,
     consoleView(){return copyData(consoleState)},
     consoleVisible(visible){consoleState.visible=!!visible},
     consolePrint(message){consoleState.messages.push({document:data.file,text:message});__log(message)},
@@ -421,24 +438,33 @@ var util=(function(){
   return {
     printf(fmt,...args){
       let i=0;
-      return String(fmt).replace(/%([+0 #-]*)(?:,([0-3]))?(\d*)(?:\.(\d+))?([dfsxX])/g,(m,flags,sep,width,prec,type)=>{
+      return String(fmt).replace(/%((?:,[0-3]|[+0 #-])*)(\d*)(?:\.(\d+))?([dfsxX])/g,(m,rawFlags,width,prec,type)=>{
+        let sep;
+        const flags=rawFlags.replace(/,([0-3])/g,(_,d)=>{sep=d;return '';});
+        const left=flags.includes('-'),alt=flags.includes('#'),w=Number(width)||0;
         let v=args[i++];
-        if(type==='s')return String(v).padStart(Number(width)||0,' ');
+        if(type==='s'){const str=String(v);return left?str.padEnd(w,' '):str.padStart(w,' ');}
         const num=Number(v);
         if(type==='x'||type==='X'){
-          let hex=Math.trunc(num).toString(16);
+          const trunc=Math.trunc(num);
+          let hex=Math.abs(trunc).toString(16);
           if(type==='X')hex=hex.toUpperCase();
-          return hex.padStart(Number(width)||0,flags.includes('0')?'0':' ');
+          const prefix=(trunc<0?'-':'')+(alt&&trunc!==0?(type==='X'?'0X':'0x'):'');
+          if(left)return (prefix+hex).padEnd(w,' ');
+          if(flags.includes('0')&&w>prefix.length+hex.length)return prefix+hex.padStart(w-prefix.length,'0');
+          return (prefix+hex).padStart(w,' ');
         }
         const neg=num<0,abs=Math.abs(num);
-        let s=type==='d'?String(Math.trunc(abs)):abs.toFixed(prec===undefined?6:Number(prec));
+        const p=prec===undefined?6:Number(prec);
+        let s=type==='d'?String(Math.trunc(abs)):abs.toFixed(p);
+        if(type==='f'&&alt&&p===0&&!s.includes('.'))s+='.';
         if(sep!==undefined){
           const parts=s.split('.');
           if(sep==='0'||sep==='2')parts[0]=parts[0].replace(/\B(?=(\d{3})+(?!\d))/g,sep==='0'?',':'.');
           s=parts.join(sep==='2'||sep==='3'?',':'.');
         }
         const sign=neg?'-':flags.includes('+')?'+':flags.includes(' ')?' ':'';
-        const w=Number(width)||0;
+        if(left)return (sign+s).padEnd(w,' ');
         if(flags.includes('0')&&w>sign.length+s.length)return sign+s.padStart(w-sign.length,'0');
         return (sign+s).padStart(w,' ');
       });
@@ -459,22 +485,27 @@ var util=(function(){
     scand(fmt,s){
       if(s===null||s===undefined)return null;
       const input=String(s).trim();if(!input)return null;
-      const tokens=[],pattern=String(fmt).replace(/yyyy|yy|mmmm|mmm|mm|m|dd|d|HH|H|MM|M|ss|s|[\s]+|[-/\\^$*+?.()|[\]{}]/g,tok=>{
+      const tokens=[],pattern=String(fmt).replace(/yyyy|yy|mmmm|mmm|mm|m|dddd|ddd|dd|d|HH|H|hh|h|MM|M|ss|s|tt|t|[\s]+|[-/\\^$*+?.()|[\]{}]/g,tok=>{
         if(/^\s+$/.test(tok))return '\\s+';
         if(tok==='yyyy'){tokens.push('yyyy');return '(\\d{4})';}
         if(tok==='yy'){tokens.push('yy');return '(\\d{2,4})';}
         if(tok==='mmmm'){tokens.push('mmmm');return '('+monthsFull.join('|')+')';}
         if(tok==='mmm'){tokens.push('mmm');return '('+monthsShort.join('|')+')';}
         if(tok==='mm'||tok==='m'){tokens.push('m');return '(\\d{1,2})';}
+        if(tok==='dddd'){tokens.push('dddd');return '('+daysFull.join('|')+')';}
+        if(tok==='ddd'){tokens.push('ddd');return '('+daysShort.join('|')+')';}
         if(tok==='dd'||tok==='d'){tokens.push('d');return '(\\d{1,2})';}
         if(tok==='HH'||tok==='H'){tokens.push('H');return '(\\d{1,2})';}
+        if(tok==='hh'||tok==='h'){tokens.push('h');return '(\\d{1,2})';}
         if(tok==='MM'||tok==='M'){tokens.push('M');return '(\\d{1,2})';}
         if(tok==='ss'||tok==='s'){tokens.push('s');return '(\\d{1,2})';}
+        if(tok==='tt'){tokens.push('tt');return '(am|pm)';}
+        if(tok==='t'){tokens.push('t');return '([ap])';}
         return '\\'+tok;
       });
       const match=new RegExp('^'+pattern+'$','i').exec(input);
       if(!match)return null;
-      let year=2000,month=1,day=1,hour=0,minute=0,second=0;
+      let year=2000,month=1,day=1,hour=0,minute=0,second=0,hour12=null,meridiem=null;
       for(let idx=0;idx<tokens.length;idx++){
         const kind=tokens[idx],raw=match[idx+1];
         if(kind==='yyyy')year=Number(raw);
@@ -484,8 +515,16 @@ var util=(function(){
         else if(kind==='m')month=Number(raw);
         else if(kind==='d')day=Number(raw);
         else if(kind==='H')hour=Number(raw);
+        else if(kind==='h')hour12=Number(raw);
         else if(kind==='M')minute=Number(raw);
         else if(kind==='s')second=Number(raw);
+        else if(kind==='tt'||kind==='t')meridiem=raw.toLowerCase()[0];
+      }
+      if(hour12!==null){
+        if(hour12<1||hour12>12)return null;
+        if(meridiem==='p')hour=hour12===12?12:hour12+12;
+        else if(meridiem==='a')hour=hour12===12?0:hour12;
+        else hour=hour12%12;
       }
       if(month<1||month>12||day<1||day>31||hour>23||minute>59||second>59)return null;
       const out=new Date(year,month-1,day,hour,minute,second,0);

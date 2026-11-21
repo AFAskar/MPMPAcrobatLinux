@@ -151,11 +151,72 @@ fn width(face: &ttf_parser::Face<'_>, g: &Glyph) -> f32 {
     if g.c == '\n' {
         return 0.;
     }
-    face.glyph_index(g.c)
+    let ch = appearance_char(face, g.c);
+    face.glyph_index(ch)
         .and_then(|id| face.glyph_hor_advance(id))
         .unwrap_or(face.units_per_em() / 2) as f32
         * g.size
         / face.units_per_em() as f32
+}
+fn appearance_char(face: &ttf_parser::Face<'_>, c: char) -> char {
+    let ch = bmp_appearance_char(c);
+    if face.glyph_index(ch).is_none() && !ch.is_control() && c as u32 > 0xFFFF {
+        '?'
+    } else {
+        ch
+    }
+}
+fn pdf_color_op(v: &Value, stroke: bool) -> Option<String> {
+    let arr = v.as_array()?;
+    match arr.first()?.as_str()? {
+        "G" if arr.len() == 2 => Some(format!(
+            "{} {}",
+            arr[1].as_f64()?,
+            if stroke { "G" } else { "g" }
+        )),
+        "RGB" if arr.len() == 4 => Some(format!(
+            "{} {} {} {}",
+            arr[1].as_f64()?,
+            arr[2].as_f64()?,
+            arr[3].as_f64()?,
+            if stroke { "RG" } else { "rg" }
+        )),
+        "CMYK" if arr.len() == 5 => Some(format!(
+            "{} {} {} {} {}",
+            arr[1].as_f64()?,
+            arr[2].as_f64()?,
+            arr[3].as_f64()?,
+            arr[4].as_f64()?,
+            if stroke { "K" } else { "k" }
+        )),
+        _ => None,
+    }
+}
+pub(super) fn paint_box(width: f32, height: f32, state: &Value) -> String {
+    let mut out = String::new();
+    if let Some(fill) = pdf_color_op(&state["fillColor"], false) {
+        out.push_str(&format!("q {fill} 0 0 {width} {height} re f Q "));
+    }
+    let lw = state["lineWidth"].as_f64().unwrap_or(1.) as f32;
+    if lw > 0. {
+        if let Some(stroke) = pdf_color_op(&state["strokeColor"], true) {
+            let half = lw / 2.;
+            let sw = (width - lw).max(0.);
+            let sh = (height - lw).max(0.);
+            match state["borderStyle"].as_str() {
+                Some("dashed") => out.push_str(&format!(
+                    "q {stroke} {lw} w [3] 0 d {half} {half} {sw} {sh} re S Q "
+                )),
+                Some("underline") => {
+                    out.push_str(&format!("q {stroke} {lw} w 0 {half} m {width} {half} l S Q "))
+                }
+                _ => out.push_str(&format!(
+                    "q {stroke} {lw} w {half} {half} {sw} {sh} re S Q "
+                )),
+            }
+        }
+    }
+    out
 }
 fn lines(
     measure: &impl Fn(&Glyph) -> f32,
@@ -375,7 +436,10 @@ pub(super) fn content_with_fonts(
             laid = lines(&measure, make(size), available, wrap);
         }
     }
-    let mut out = format!("/Tx BMC q 0 0 {width_box} {height} re W n BT ");
+    let mut out = format!(
+        "{}/Tx BMC q 0 0 {width_box} {height} re W n BT ",
+        paint_box(width_box, height, state)
+    );
     let mut decorations = String::new();
     let line_sizes: Vec<f32> = laid
         .iter()
@@ -442,17 +506,13 @@ pub(super) fn content_with_fonts(
             let first = &run[0];
             let mut encoded = String::new();
             for g in run {
-                let mut ch = bmp_appearance_char(g.c);
+                let ch = appearance_char(&layout.fonts[g.font].face, g.c);
                 if layout.fonts[g.font].face.glyph_index(ch).is_none() && !ch.is_control() {
-                    if g.c as u32 > 0xFFFF {
-                        ch = '?';
-                    } else {
-                        bail!(
-                            "appearance font lacks glyph U+{:04X} in {}",
-                            g.c as u32,
-                            field.name
-                        )
-                    }
+                    bail!(
+                        "appearance font lacks glyph U+{:04X} in {}",
+                        g.c as u32,
+                        field.name
+                    )
                 }
                 encoded.push_str(&format!("{:04X}", ch as u32));
             }
@@ -1076,5 +1136,22 @@ mod tests {
         assert_eq!(layout[1][0].c, '\n');
         assert_eq!(layout[1][0].size, 6.);
         assert_eq!(width(&face, &layout[1][0]), 0.);
+    }
+    #[test]
+    fn non_bmp_measurement_matches_mapped_appearance_glyphs() {
+        let bytes =
+            std::fs::read(crate::pdf::installed_fonts::test_font_path("DejaVuSans")).unwrap();
+        let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
+        let mk = |c| Glyph {
+            c,
+            size: 10.,
+            color: [0.; 3],
+            spacing: None,
+            alignment: None,
+            font: 0,
+            decoration: 0,
+        };
+        assert!((width(&face, &mk('\u{1D400}')) - width(&face, &mk('A'))).abs() < 1e-5);
+        assert!((width(&face, &mk('\u{1F525}')) - width(&face, &mk('?'))).abs() < 1e-5);
     }
 }

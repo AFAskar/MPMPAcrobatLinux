@@ -7,15 +7,15 @@ pub(super) fn project(
     fields: &BTreeMap<String, Field>,
     widget: &Widget,
     rect: &[f64],
-    state_and_assets: (&Value, &Value),
+    state_and_assets: (&Value, &Value, bool),
     font: (&ttf_parser::Face<'_>, ObjectId),
 ) -> Result<()> {
-    let (state, assets) = state_and_assets;
+    let (state, assets, rebuild_style) = state_and_assets;
     let (face, font) = font;
     let icon = state["icon"]["field"].as_str();
     let external = state["icon"]["asset"].as_str();
     let caption = state["caption"].as_str();
-    if icon.is_none() && external.is_none() && caption.is_none() {
+    if icon.is_none() && external.is_none() && caption.is_none() && !rebuild_style {
         return Ok(());
     }
     if rect.len() != 4 {
@@ -27,18 +27,25 @@ pub(super) fn project(
         .get_dictionary(widget.id)?
         .get(b"MK")
         .ok()
-        .and_then(|v| resolved(source_doc, v).ok())
+        .and_then(|v| resolved(doc, v).ok())
         .and_then(|v| v.as_dict().ok())
         .cloned()
         .unwrap_or_default();
     let mut resources = dictionary! {"Font"=>dictionary!{"Helv"=>font}};
     let mut content = Vec::new();
-    if icon.is_some() || external.is_some() {
+    let box_paint = appearance::paint_box(width, height, state);
+    if !box_paint.is_empty() {
+        content.extend(box_paint.as_bytes());
+    }
+    let preserve_existing_icon = icon.is_none() && external.is_none() && mk.has(b"I");
+    if icon.is_some() || external.is_some() || preserve_existing_icon {
         let source_icon = if let Some(asset) = external {
             Some(Object::Reference(crate::icon_import::embed(
                 doc,
                 &assets[asset],
             )?))
+        } else if preserve_existing_icon {
+            mk.get(b"I").ok().cloned()
         } else {
             let name = icon.context("Missing icon source")?;
             let field = fields.get(name).context("Icon source field not found")?;
@@ -106,17 +113,34 @@ pub(super) fn project(
             mk.remove(b"I");
         }
     }
-    if let Some(caption) = caption {
-        mk.set("CA", pdf_string(caption));
-        if !caption.is_empty() {
+    let effective_caption = caption.map(str::to_owned).or_else(|| {
+        if rebuild_style {
+            mk.get(b"CA").ok().map(|v| text(doc, v))
+        } else {
+            None
+        }
+    });
+    if let Some(caption_text) = effective_caption {
+        if caption.is_some() {
+            mk.set("CA", pdf_string(&caption_text));
+        }
+        if !caption_text.is_empty() {
             let mut s = state.clone();
-            s["formatted"] = json!(caption);
+            s["formatted"] = json!(caption_text);
+            s["fillColor"] = json!(["T"]);
+            s["strokeColor"] = json!(["T"]);
             let target = fields
                 .values()
                 .find(|f| f.widgets.iter().any(|w| w.id == widget.id))
                 .context("Button field missing")?;
             content.extend(appearance::content(
-                face, width, height, target, &s, caption, None,
+                face,
+                width,
+                height,
+                target,
+                &s,
+                &caption_text,
+                None,
             )?);
         }
     }
@@ -174,6 +198,7 @@ mod tests {
             (
                 &json!({"icon":{"field":"Empty"},"caption":"","captions":{"0":"","1":"","2":""}}),
                 &Value::Null,
+                false,
             ),
             (&face, (999, 0)),
         )

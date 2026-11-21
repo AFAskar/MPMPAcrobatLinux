@@ -497,7 +497,7 @@ pub fn icon_stream_pdf(pdf: &crate::pdf::Pdf, icon: &Value) -> Result<(usize, Ve
 
 pub fn icon_stream(pdf: &crate::pdf::Pdf, icon: &Value) -> Result<Value> {
     let (width, pdf_bytes) = icon_stream_pdf(pdf, icon)?;
-    let (w, h, rgba) = crate::render::Renderer::new()?.render(&pdf_bytes, 0, width)?;
+    let (w, h, rgba) = crate::render::Renderer::new()?.render_transparent(&pdf_bytes, 0, width)?;
     let mut argb = String::with_capacity(w * h * 8);
     for px in rgba.chunks_exact(4) {
         use std::fmt::Write;

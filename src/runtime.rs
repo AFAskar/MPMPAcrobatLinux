@@ -720,6 +720,14 @@ impl Runtime {
         ))?;
         Ok(())
     }
+    pub fn select_choice(&self, n: &str, v: &Value) -> Result<()> {
+        self.eval(&format!(
+            "__host.selectChoice({},{})",
+            serde_json::to_string(n)?,
+            v
+        ))?;
+        Ok(())
+    }
     pub fn advance(&self, ms: u64) -> Result<()> {
         self.eval(&format!("__host.advance({ms})"))?;
         Ok(())
@@ -1308,18 +1316,18 @@ mod tests {
           try{a.editable=true}catch(e){rejected=/Field\.editable/.test(String(e))}
           c.setItems(['',['harpers','The Harpers'],'Custom']);
           c.setAction('Keystroke',"seen.push([event.change,event.changeEx,event.value,event.willCommit])");
-          c.value='harpers';
           c.value='Custom';
-          c.value='Other';
-          c.value='';
+          __host.selectChoice('Choice','harpers');
+          __host.userEdit('Choice','Other');
           var mons=app.monitors.primary();
           var menuSrc=app.listMenuItems().toSource();
           var snap=JSON.parse(__host.snapshot());
           initialEditable&&c.editable===true&&snap.Choice.editable===true&&rejected&&
-          seen.length===4&&seen[0][0]==='The Harpers'&&seen[0][1]==='harpers'&&seen[0][2]==='harpers'&&seen[0][3]===true&&
-          seen[1][0]==='Custom'&&seen[1][1]==='Custom'&&seen[1][2]==='Custom'&&
-          seen[2][0]===''&&seen[2][1]===undefined&&seen[2][2]==='Other'&&
-          seen[3][0]===''&&seen[3][1]===''&&seen[3][2]===''&&
+          seen.length===4&&
+          seen[0][0]===''&&seen[0][1]===undefined&&seen[0][2]==='Custom'&&seen[0][3]===true&&
+          seen[1][0]==='The Harpers'&&seen[1][1]==='harpers'&&seen[1][2]==='Custom'&&seen[1][3]===false&&
+          seen[2][0]===''&&seen[2][1]===undefined&&seen[2][2]==='harpers'&&seen[2][3]===true&&
+          seen[3][0]===''&&seen[3][1]===undefined&&seen[3][2]==='Other'&&seen[3][3]===true&&
           mons.length===1&&mons[0].rect[3]===1080&&!/hamburger/i.test(menuSrc)"#,
         );
     }
@@ -1362,21 +1370,34 @@ mod tests {
     fn printf_separators_printd_scand_date_tosource_icon_identity_and_positional_alert() {
         host(
             r#"var p0=util.printf('%,0.2f',1234.5),p1=util.printf('%,1.2f',1234.5),p2=util.printf('%,2.2f',1234.5),p3=util.printf('%,3.2f',-1234.5);
+          var pFlag=util.printf('%,0+010.2f',1234.5),pAlt=util.printf('%#.0f',1),pLeft=util.printf('%-6s','hi');
           var d1=util.scand('yy-mm-dd','2024-03-05'),d2=util.scand('d-m-yyyy','5-3-2024'),d3=util.scand('d mmm yyyy','5 Mar 2024'),d4=util.scand('yy-mm-dd','24-02-30');
+          var d5=util.scand('dddd, yyyy-mm-dd hh:MM tt','Tuesday, 2024-03-05 01:30 pm'),d6=util.scand('ddd yyyy-mm-dd h:MM t','Tue 2024-03-05 12:05 a');
           var f1=util.printd('d-m-yyyy',d1),f2=util.printd('d mmm yyyy',d2),f3=util.printd('yyyy/m/d',d3);
           var rtDate=eval(d1.toSource());
           var a=getField('A'),b=getField('B');
+          a.richText=true;a.textFont='Helvetica-Oblique';
+          var italicStyle=a.defaultStyle.fontStyle==='italic'&&a.defaultStyle.style===undefined;
           var sameGet=a.buttonGetIcon()===a.buttonGetIcon();
           b.buttonSetIcon(a.buttonGetIcon());
           var sameAfterCopy=b.buttonGetIcon()===a.buttonGetIcon();
+          globalThis.__iconImport=function(){return JSON.stringify({code:0,reason:'ok',asset:{id:'a1',kind:'png',bytes:[]}})};
+          var btn1=getField('Unchecked');
+          btn1.type='button';
+          var importedCode=btn1.buttonImportIcon('/tmp/a.png',0);
+          b.buttonSetIcon(btn1.buttonGetIcon());
+          var sameImported=b.buttonGetIcon()===btn1.buttonGetIcon();
           var seenAlert=null;
           globalThis.__alert=function(s){seenAlert=JSON.parse(s);return JSON.stringify({button:1,checked:false})};
           var btn=app.alert('Nothing found',1,0,'Nothing to Export');
           p0==='1,234.50'&&p1==='1234.50'&&p2==='1.234,50'&&p3==='-1234,50'&&
+          pFlag==='+01,234.50'&&pAlt==='1.'&&pLeft==='hi    '&&
           d1!==null&&d2!==null&&d3!==null&&d4===null&&
+          d5!==null&&d5.getHours()===13&&d5.getMinutes()===30&&
+          d6!==null&&d6.getHours()===0&&d6.getMinutes()===5&&
           f1==='5-3-2024'&&f2==='5 Mar 2024'&&f3==='2024/3/5'&&
           rtDate instanceof Date&&rtDate.getTime()===d1.getTime()&&
-          sameGet&&sameAfterCopy&&
+          italicStyle&&sameGet&&sameAfterCopy&&importedCode===0&&sameImported&&
           btn===1&&seenAlert.cMsg==='Nothing found'&&seenAlert.nIcon===1&&seenAlert.nType===0&&seenAlert.cTitle==='Nothing to Export'"#,
         );
     }

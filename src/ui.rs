@@ -101,6 +101,9 @@ pub fn main() -> Result<()> {
                         "user-edit" => runtime
                             .user_edit(step["field"].as_str().unwrap_or(""), &step["value"])
                             .map(|_| Value::Null),
+                        "select-choice" => runtime
+                            .select_choice(step["field"].as_str().unwrap_or(""), &step["value"])
+                            .map(|_| Value::Null),
                         "eval" => runtime.eval(step["code"].as_str().unwrap_or("")),
                         "advance" => runtime
                             .advance(step["ms"].as_u64().unwrap_or(0))
@@ -365,6 +368,16 @@ impl Reader {
                     .collect()
             })
             .unwrap_or_default();
+        Ok(())
+    }
+
+    fn commit_choice(&mut self, value: &str) -> Result<()> {
+        self.rt
+            .select_choice(&self.edit_name, &json!(value))?;
+        self.refresh_editor()?;
+        self.edit_dirty = false;
+        self.unsaved = true;
+        self.texture = None;
         Ok(())
     }
 
@@ -839,8 +852,8 @@ impl eframe::App for Reader {
                             }
                         });
                     if let Some(exp) = chosen {
-                        self.edit_value = exp;
-                        let r = self.commit_editor();
+                        self.edit_value = exp.clone();
+                        let r = self.commit_choice(&exp);
                         self.result(r);
                     }
                 }
@@ -960,14 +973,21 @@ fn dialog_process() -> Result<()> {
     std::io::stdin().read_to_string(&mut input)?;
     let data: Value = serde_json::from_str(&input)?;
     let result = Arc::new(Mutex::new(json!({"result":"cancel"})));
+    let values: BTreeMap<String, Value> = data["values"]
+        .as_object()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    let popup_options: BTreeMap<String, Value> = values
+        .iter()
+        .filter(|(_, v)| v.is_object())
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
     let app = Dialog {
         description: data["description"].clone(),
-        values: data["values"]
-            .as_object()
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .collect(),
+        values,
+        popup_options,
         enabled: data["enabled"].clone(),
         visible: data["visible"].clone(),
         red: data["red"].clone(),
@@ -991,6 +1011,7 @@ fn dialog_process() -> Result<()> {
 struct Dialog {
     description: Value,
     values: BTreeMap<String, Value>,
+    popup_options: BTreeMap<String, Value>,
     enabled: Value,
     visible: Value,
     red: Value,
@@ -1185,14 +1206,29 @@ impl Dialog {
                         reply = Some(json!({"event":id}));
                     }
                 }
-                "edit_text" if value.is_object() && e["PopupEdit"].as_bool().unwrap_or(false) => {
+                "edit_text"
+                    if e["PopupEdit"].as_bool().unwrap_or(false)
+                        && (value.is_object() || self.popup_options.contains_key(id)) =>
+                {
+                    if value.is_object() {
+                        self.popup_options.insert(id.to_owned(), value.clone());
+                    }
+                    let mut opts = self
+                        .popup_options
+                        .get(id)
+                        .cloned()
+                        .unwrap_or_else(|| json!({}));
                     let mut leaves = Vec::new();
-                    option_leaves(value, &mut Vec::new(), &mut leaves);
-                    let mut text = leaves
-                        .iter()
-                        .find(|(_, v)| *v > 0)
-                        .map(|(p, _)| p.last().cloned().unwrap_or_default())
-                        .unwrap_or_default();
+                    option_leaves(&opts, &mut Vec::new(), &mut leaves);
+                    let mut text = if let Some(typed) = value.as_str() {
+                        typed.to_owned()
+                    } else {
+                        leaves
+                            .iter()
+                            .find(|(_, v)| *v > 0)
+                            .map(|(p, _)| p.last().cloned().unwrap_or_default())
+                            .unwrap_or_default()
+                    };
                     let width =
                         (e["char_width"].as_f64().unwrap_or(20.) as f32 * 7.).clamp(40., 600.);
                     ui.horizontal(|ui| {
@@ -1212,7 +1248,7 @@ impl Dialog {
                         if response.lost_focus() && self.edited_controls.remove(id) {
                             reply = Some(json!({"event":id}));
                         }
-                        if value.is_object() {
+                        if !leaves.is_empty() {
                             egui::ComboBox::from_id_salt(("popup-edit", id))
                                 .width(24.)
                                 .selected_text("")
@@ -1222,7 +1258,9 @@ impl Dialog {
                                             .selectable_label(*selection > 0, path.join(" › "))
                                             .clicked()
                                         {
-                                            select_option(value, path, false);
+                                            select_option(&mut opts, path, false);
+                                            self.popup_options.insert(id.to_owned(), opts.clone());
+                                            *value = opts.clone();
                                             reply = Some(json!({"event":id}));
                                         }
                                     }
@@ -1307,11 +1345,11 @@ impl Dialog {
                                 .and_then(|s| s.trim().parse::<i64>().ok())
                                 .unwrap_or(0);
                             if ui.small_button("−").clicked() {
-                                *value = json!((current - 1).to_string());
+                                *value = json!(current.saturating_sub(1).to_string());
                                 reply = Some(json!({"event":id}));
                             }
                             if ui.small_button("+").clicked() {
-                                *value = json!((current + 1).to_string());
+                                *value = json!(current.saturating_add(1).to_string());
                                 reply = Some(json!({"event":id}));
                             }
                         }
@@ -1586,6 +1624,7 @@ mod dialog_tests {
         Dialog {
             description: json!({}),
             values: BTreeMap::from([("ckbx".into(), json!(true))]),
+            popup_options: BTreeMap::new(),
             enabled: json!({}),
             visible: json!({}),
             red: json!({}),
@@ -1741,6 +1780,7 @@ mod dialog_tests {
         let mut dialog = Dialog {
             description: json!({}),
             values: BTreeMap::from([("read".into(), json!("locked"))]),
+            popup_options: BTreeMap::new(),
             enabled: json!({}),
             visible: json!({}),
             red: json!({}),
@@ -1847,6 +1887,7 @@ mod dialog_tests {
         let mut dialog = Dialog {
             description: json!({}),
             values: BTreeMap::from([("text".into(), json!(""))]),
+            popup_options: BTreeMap::new(),
             enabled: json!({}),
             visible: json!({}),
             red: json!({}),
@@ -1971,5 +2012,9 @@ mod dialog_tests {
             modifiers: egui::Modifiers::NONE,
         }]);
         assert_eq!(ev, Some(json!({"event":"sp01"})));
+        assert_eq!(
+            dialog.popup_options.get("sp01"),
+            Some(&json!({"Fireball": -1, "Shield": 2}))
+        );
     }
 }

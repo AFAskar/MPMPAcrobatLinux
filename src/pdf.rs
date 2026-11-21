@@ -448,6 +448,104 @@ fn widget_border(d: &Document, wd: &Dictionary) -> (f64, String) {
         .to_owned();
     (width, style)
 }
+fn hash_pdf_object(
+    doc: &Document,
+    obj: &Object,
+    hasher: &mut sha2::Sha256,
+    seen: &mut std::collections::BTreeSet<ObjectId>,
+    depth: usize,
+) {
+    use sha2::Digest;
+    if depth > 32 {
+        hasher.update(b"DEPTH");
+        return;
+    }
+    match obj {
+        Object::Reference(id) => {
+            if !seen.insert(*id) {
+                hasher.update(b"CYCLE");
+                return;
+            }
+            if let Ok(target) = doc.get_object(*id) {
+                hash_pdf_object(doc, target, hasher, seen, depth + 1);
+            } else {
+                hasher.update(b"MISSING");
+            }
+            seen.remove(id);
+        }
+        Object::Null => hasher.update(b"N"),
+        Object::Boolean(b) => hasher.update([b'B', u8::from(*b)]),
+        Object::Integer(i) => {
+            hasher.update(b"I");
+            hasher.update(i.to_le_bytes());
+        }
+        Object::Real(r) => {
+            hasher.update(b"R");
+            hasher.update(r.to_bits().to_le_bytes());
+        }
+        Object::Name(n) => {
+            hasher.update(b"M");
+            hasher.update((n.len() as u64).to_le_bytes());
+            hasher.update(n);
+        }
+        Object::String(s, _) => {
+            hasher.update(b"S");
+            hasher.update((s.len() as u64).to_le_bytes());
+            hasher.update(s);
+        }
+        Object::Array(items) => {
+            hasher.update(b"A");
+            hasher.update((items.len() as u64).to_le_bytes());
+            for item in items {
+                hash_pdf_object(doc, item, hasher, seen, depth + 1);
+            }
+        }
+        Object::Dictionary(dict) => {
+            hasher.update(b"D");
+            let mut entries: Vec<_> = dict
+                .iter()
+                .filter(|(k, _)| k.as_slice() != b"Parent" && k.as_slice() != b"Length")
+                .collect();
+            entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+            hasher.update((entries.len() as u64).to_le_bytes());
+            for (k, v) in entries {
+                hasher.update((k.len() as u64).to_le_bytes());
+                hasher.update(k);
+                hash_pdf_object(doc, v, hasher, seen, depth + 1);
+            }
+        }
+        Object::Stream(stream) => {
+            hasher.update(b"X");
+            let (decompressed, bytes) = match stream.decompressed_content() {
+                Ok(raw) => (true, raw),
+                Err(_) => (false, stream.content.clone()),
+            };
+            let mut entries: Vec<_> = stream
+                .dict
+                .iter()
+                .filter(|(k, _)| {
+                    let k = k.as_slice();
+                    if k == b"Parent" || k == b"Length" {
+                        return false;
+                    }
+                    if decompressed && (k == b"Filter" || k == b"DecodeParms") {
+                        return false;
+                    }
+                    true
+                })
+                .collect();
+            entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+            hasher.update((entries.len() as u64).to_le_bytes());
+            for (k, v) in entries {
+                hasher.update((k.len() as u64).to_le_bytes());
+                hasher.update(k);
+                hash_pdf_object(doc, v, hasher, seen, depth + 1);
+            }
+            hasher.update((bytes.len() as u64).to_le_bytes());
+            hasher.update(&bytes);
+        }
+    }
+}
 fn widget_icon_key(d: &Document, widgets: &[Widget]) -> Option<String> {
     use sha2::{Digest, Sha256};
     let wd = widgets.first().and_then(|w| d.get_dictionary(w.id).ok())?;
@@ -464,15 +562,10 @@ fn widget_icon_key(d: &Document, widgets: &[Widget]) -> Option<String> {
                 .and_then(|v| v.as_dict().ok())
                 .and_then(|ap| ap.get(b"N").ok())
         })?;
-    let stream = resolved(d, icon).ok()?.as_stream().ok()?;
-    let content = stream
-        .decompressed_content()
-        .unwrap_or_else(|_| stream.content.clone());
+    let _ = resolved(d, icon).ok()?.as_stream().ok()?;
     let mut hasher = Sha256::new();
-    if let Ok(bbox) = stream.dict.get(b"BBox") {
-        hasher.update(format!("{bbox:?}").as_bytes());
-    }
-    hasher.update(&content);
+    let mut seen = std::collections::BTreeSet::new();
+    hash_pdf_object(d, icon, &mut hasher, &mut seen, 0);
     let digest: String = hasher
         .finalize()
         .iter()
@@ -801,13 +894,27 @@ impl Pdf {
             let alignment_changed = style_field && alignment != f.alignment;
             let style_changed = da_changed || alignment_changed;
             let da = if da_changed {
-                Some(
-                    field_style::appearance(&doc, font_name, font_size, text_color)
-                        .with_context(|| format!("Persist appearance defaults in {name}"))?,
-                )
+                if f.kind == "Btn" {
+                    Some(
+                        field_style::button_appearance(
+                            &mut doc,
+                            f.widgets.first().map(|w| w.id),
+                            font_name,
+                            font_size,
+                            text_color,
+                        )
+                        .with_context(|| format!("Persist button appearance defaults in {name}"))?,
+                    )
+                } else {
+                    Some(
+                        field_style::appearance(&doc, font_name, font_size, text_color)
+                            .with_context(|| format!("Persist appearance defaults in {name}"))?,
+                    )
+                }
             } else {
                 None
             };
+            let visual_box_changed = fill_changed || stroke_changed || border_changed;
             let dict = doc.get_dictionary_mut(f.id)?;
             if f.kind == "Tx"
                 && rich_enabled
@@ -1007,7 +1114,7 @@ impl Pdf {
                         &fields,
                         w,
                         &rect,
-                        (s, &state["__iconAssets"]),
+                        (s, &state["__iconAssets"], visual_box_changed || da_changed),
                         (&face, font),
                     )?;
                     continue;
@@ -1016,6 +1123,7 @@ impl Pdf {
                     && !rich_changed
                     && !rich_mode_changed
                     && !style_changed
+                    && !visual_box_changed
                     && s["appearanceDirty"] != true
                 {
                     continue;
@@ -1477,5 +1585,125 @@ mod action_tests {
         assert_eq!(out_fields["Styled"].line_width, 2.0);
         assert_eq!(out_fields["Styled"].border_style, "dashed");
         assert!(reloaded.get_dictionary(field).unwrap().has(b"AP"));
+        let ap_ref = reloaded
+            .get_dictionary(field)
+            .unwrap()
+            .get(b"AP")
+            .unwrap()
+            .as_dict()
+            .unwrap()
+            .get(b"N")
+            .unwrap();
+        let ap_text = String::from_utf8(
+            resolved(&reloaded, ap_ref)
+                .unwrap()
+                .as_stream()
+                .unwrap()
+                .decompressed_content()
+                .unwrap_or_else(|_| {
+                    resolved(&reloaded, ap_ref)
+                        .unwrap()
+                        .as_stream()
+                        .unwrap()
+                        .content
+                        .clone()
+                }),
+        )
+        .unwrap();
+        assert!(ap_text.contains("0.1 0.2 0.3 0.4 k"));
+        assert!(ap_text.contains("0.5 0 0 RG 2 w [3] 0 d"));
+    }
+    #[test]
+    fn icon_keys_distinguish_embedded_images_and_button_style_handles_missing_fonts() {
+        let mut doc = Document::with_version("1.7");
+        let pages = doc.new_object_id();
+        let img_red = doc.add_object(Stream::new(
+            dictionary! {"Type"=>"XObject","Subtype"=>"Image","Width"=>1,"Height"=>1,"BitsPerComponent"=>8,"ColorSpace"=>"DeviceRGB"},
+            vec![255, 0, 0],
+        ));
+        let img_blue = doc.add_object(Stream::new(
+            dictionary! {"Type"=>"XObject","Subtype"=>"Image","Width"=>1,"Height"=>1,"BitsPerComponent"=>8,"ColorSpace"=>"DeviceRGB"},
+            vec![0, 0, 255],
+        ));
+        let form_a = doc.add_object(Stream::new(
+            dictionary! {"Type"=>"XObject","Subtype"=>"Form","BBox"=>vec![0.into(),0.into(),10.into(),10.into()],"Resources"=>dictionary!{"XObject"=>dictionary!{"Im"=>img_red}}},
+            b"q 10 0 0 10 0 0 cm /Im Do Q".to_vec(),
+        ));
+        let form_b = doc.add_object(Stream::new(
+            dictionary! {"Type"=>"XObject","Subtype"=>"Form","BBox"=>vec![0.into(),0.into(),10.into(),10.into()],"Resources"=>dictionary!{"XObject"=>dictionary!{"Im"=>img_blue}}},
+            b"q 10 0 0 10 0 0 cm /Im Do Q".to_vec(),
+        ));
+        let form_a_copy = doc.add_object(Stream::new(
+            dictionary! {"Type"=>"XObject","Subtype"=>"Form","BBox"=>vec![0.into(),0.into(),10.into(),10.into()],"Resources"=>dictionary!{"XObject"=>dictionary!{"Im"=>img_red}}},
+            b"q 10 0 0 10 0 0 cm /Im Do Q".to_vec(),
+        ));
+        let btn_a = doc.add_object(dictionary! {
+            "Type"=>"Annot","Subtype"=>"Widget","FT"=>"Btn","Ff"=>65536,
+            "T"=>Object::string_literal("BtnA"),
+            "Rect"=>vec![0.into(),0.into(),20.into(),20.into()],
+            "MK"=>dictionary!{"I"=>form_a}
+        });
+        let btn_b = doc.add_object(dictionary! {
+            "Type"=>"Annot","Subtype"=>"Widget","FT"=>"Btn","Ff"=>65536,
+            "T"=>Object::string_literal("BtnB"),
+            "Rect"=>vec![30.into(),0.into(),50.into(),20.into()],
+            "MK"=>dictionary!{"I"=>form_b}
+        });
+        let btn_c = doc.add_object(dictionary! {
+            "Type"=>"Annot","Subtype"=>"Widget","FT"=>"Btn","Ff"=>65536,
+            "T"=>Object::string_literal("BtnC"),
+            "Rect"=>vec![60.into(),0.into(),80.into(),20.into()],
+            "MK"=>dictionary!{"I"=>form_a_copy}
+        });
+        let box_only = doc.add_object(dictionary! {
+            "Type"=>"Annot","Subtype"=>"Widget","FT"=>"Tx",
+            "T"=>Object::string_literal("BoxOnly"),
+            "Rect"=>vec![0.into(),30.into(),100.into(),50.into()],
+            "MK"=>dictionary!{"BG"=>vec![Object::Real(1.),Object::Real(1.),Object::Real(1.)]}
+        });
+        let page = doc.add_object(dictionary! {
+            "Type"=>"Page","Parent"=>pages,
+            "MediaBox"=>vec![0.into(),0.into(),200.into(),100.into()],
+            "Annots"=>vec![btn_a.into(),btn_b.into(),btn_c.into(),box_only.into()]
+        });
+        doc.objects.insert(
+            pages,
+            Object::Dictionary(dictionary! {"Type"=>"Pages","Kids"=>vec![page.into()],"Count"=>1}),
+        );
+        let acro = doc.add_object(dictionary! {
+            "Fields"=>vec![btn_a.into(),btn_b.into(),btn_c.into(),box_only.into()]
+        });
+        let root = doc.add_object(dictionary! {"Type"=>"Catalog","Pages"=>pages,"AcroForm"=>acro});
+        doc.trailer.set("Root", root);
+        let mut fields = BTreeMap::new();
+        let page_map = BTreeMap::from([(btn_a, 0), (btn_b, 0), (btn_c, 0), (box_only, 0)]);
+        for id in [btn_a, btn_b, btn_c, box_only] {
+            walk(&doc, &id.into(), "", &Dictionary::new(), &page_map, &mut fields).unwrap();
+        }
+        assert_ne!(fields["BtnA"].icon_key, fields["BtnB"].icon_key);
+        assert_eq!(fields["BtnA"].icon_key, fields["BtnC"].icon_key);
+        let pdf = Pdf {
+            doc,
+            fields,
+            scripts: Vec::new(),
+            order: Vec::new(),
+            info: json!({}),
+            bookmarks: json!({"name":"Root","children":[]}),
+            path: PathBuf::from("synthetic-icons.pdf"),
+            templates: BTreeMap::new(),
+        };
+        let bytes = pdf
+            .project(&json!({
+                "__structure": [],
+                "__order": [],
+                "BtnA": {"value":"","formatted":"","readonly":false,"display":0,"textColor":["RGB",0.1,0.2,0.3],"fillColor":["RGB",0.8,0.85,1.0]},
+                "BtnB": {"value":"","formatted":"","readonly":false,"display":0},
+                "BtnC": {"value":"","formatted":"","readonly":false,"display":0},
+                "BoxOnly": {"value":"","formatted":"","readonly":false,"display":0,"fillColor":["RGB",0.8,0.85,1.0]}
+            }))
+            .unwrap();
+        let reloaded = Document::load_mem(&bytes).unwrap();
+        assert!(reloaded.get_dictionary(btn_a).unwrap().has(b"DA"));
+        assert!(reloaded.get_dictionary(box_only).unwrap().has(b"AP"));
     }
 }

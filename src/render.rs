@@ -127,6 +127,23 @@ impl Renderer {
         }
     }
     pub fn render(&self, bytes: &[u8], page: i32, width: usize) -> Result<(usize, usize, Vec<u8>)> {
+        self.render_with_alpha(bytes, page, width, false)
+    }
+    pub fn render_transparent(
+        &self,
+        bytes: &[u8],
+        page: i32,
+        width: usize,
+    ) -> Result<(usize, usize, Vec<u8>)> {
+        self.render_with_alpha(bytes, page, width, true)
+    }
+    fn render_with_alpha(
+        &self,
+        bytes: &[u8],
+        page: i32,
+        width: usize,
+        transparent: bool,
+    ) -> Result<(usize, usize, Vec<u8>)> {
         unsafe {
             macro_rules! call { ($name:literal, $ty:ty $(,$a:expr)*) => { (self.lib.get::<$ty>(concat!($name,"\0").as_bytes())?)($($a),*) }; }
             let doc = call!(
@@ -192,7 +209,7 @@ impl Renderer {
                 unsafe extern "C" fn(i32, i32, i32) -> Handle,
                 width as i32,
                 height as i32,
-                0
+                i32::from(transparent)
             );
             if bm.is_null() {
                 bail!("bitmap allocation failed")
@@ -205,7 +222,7 @@ impl Renderer {
                 0,
                 width as i32,
                 height as i32,
-                0xffffffff
+                if transparent { 0x00000000 } else { 0xffffffff }
             );
             call!(
                 "FPDF_RenderPageBitmap",
@@ -233,7 +250,8 @@ impl Renderer {
             for y in 0..height {
                 for x in 0..width {
                     let p = std::slice::from_raw_parts(data.add(y * stride + x * 4), 4);
-                    rgba.extend_from_slice(&[p[2], p[1], p[0], 255]);
+                    let a = if transparent { p[3] } else { 255 };
+                    rgba.extend_from_slice(&[p[2], p[1], p[0], a]);
                 }
             }
             call!("FPDFBitmap_Destroy", unsafe extern "C" fn(Handle), bm);

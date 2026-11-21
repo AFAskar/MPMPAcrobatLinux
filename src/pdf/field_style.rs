@@ -1,7 +1,7 @@
 //! Default appearance data. /DA, /DS, canonical values and rich spans are distinct.
 use super::{resolved, text};
 use anyhow::{bail, Context, Result};
-use lopdf::{Document, ObjectId};
+use lopdf::{dictionary, Document, ObjectId};
 use serde_json::{json, Value};
 
 /// Explicitly borderless widgets use the whole width for plain text in Reader.
@@ -99,6 +99,85 @@ pub fn appearance(doc: &Document, font: &str, size: f64, color: &Value) -> Resul
         })
         .collect::<String>();
     Ok(format!("/{name} {size} Tf {}", color_operator(color)?))
+}
+
+/// Pushbuttons (including icon-only buttons) may lack an existing AcroForm font
+/// resource matching their default font name. Resolve an existing widget/form
+/// font or register a standard Helvetica resource before emitting /DA.
+pub fn button_appearance(
+    doc: &mut Document,
+    widget: Option<ObjectId>,
+    font: &str,
+    size: f64,
+    color: &Value,
+) -> Result<String> {
+    if let Ok(da) = appearance(doc, font, size, color) {
+        return Ok(da);
+    }
+    if let Some(widget_id) = widget {
+        if let Ok(Some(existing)) = widget_font(doc, widget_id) {
+            if let Ok(da) = appearance(doc, &existing, size, color) {
+                return Ok(da);
+            }
+        }
+    }
+    for candidate in ["Helv", "Helvetica"] {
+        if let Ok(da) = appearance(doc, candidate, size, color) {
+            return Ok(da);
+        }
+    }
+    if !size.is_finite() || size < 0. {
+        bail!("Invalid persisted field font size")
+    }
+    let helv_id = doc.add_object(lopdf::dictionary! {
+        "Type" => "Font",
+        "Subtype" => "Type1",
+        "BaseFont" => "Helvetica",
+        "Name" => "Helv",
+    });
+    if let Ok(form_ref) = doc
+        .catalog()
+        .and_then(|c| c.get(b"AcroForm"))
+        .and_then(|v| v.as_reference())
+    {
+        let dr_ref = doc
+            .get_dictionary(form_ref)
+            .ok()
+            .and_then(|d| d.get(b"DR").ok())
+            .and_then(|v| v.as_reference().ok());
+        if let Some(dr_id) = dr_ref {
+            let font_ref = doc
+                .get_dictionary(dr_id)
+                .ok()
+                .and_then(|d| d.get(b"Font").ok())
+                .and_then(|v| v.as_reference().ok());
+            if let Some(font_id) = font_ref {
+                if let Ok(fonts) = doc.get_dictionary_mut(font_id) {
+                    fonts.set("Helv", helv_id);
+                }
+            } else if let Ok(dr) = doc.get_dictionary_mut(dr_id) {
+                if let Ok(fonts) = dr.get_mut(b"Font").and_then(|v| v.as_dict_mut()) {
+                    fonts.set("Helv", helv_id);
+                } else {
+                    dr.set("Font", lopdf::dictionary! {"Helv" => helv_id});
+                }
+            }
+        } else if let Ok(form) = doc.get_dictionary_mut(form_ref) {
+            if let Ok(dr) = form.get_mut(b"DR").and_then(|v| v.as_dict_mut()) {
+                if let Ok(fonts) = dr.get_mut(b"Font").and_then(|v| v.as_dict_mut()) {
+                    fonts.set("Helv", helv_id);
+                } else {
+                    dr.set("Font", lopdf::dictionary! {"Helv" => helv_id});
+                }
+            } else {
+                form.set(
+                    "DR",
+                    lopdf::dictionary! {"Font" => lopdf::dictionary! {"Helv" => helv_id}},
+                );
+            }
+        }
+    }
+    Ok(format!("/Helv {size} Tf {}", color_operator(color)?))
 }
 
 fn color_operator(value: &Value) -> Result<String> {
