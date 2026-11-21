@@ -78,7 +78,7 @@ def run_profile(profile_name, source, instrumentation, binary, out_root, style, 
             json.dumps(
                 {
                     "steps": steps,
-                    "dialogs": [{"title": "SOURCE SELECTION DIALOG", "result": "ok"}]
+                    "dialogs": cfg.get("dialogs", [{"title": "SOURCE SELECTION DIALOG", "result": "ok"}])
                     + [{"result": "ok"}] * 100,
                     "alerts": [1] * 100,
                 },

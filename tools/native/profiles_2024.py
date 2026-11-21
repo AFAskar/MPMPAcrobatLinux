@@ -262,6 +262,13 @@ PROFILES = {
     "sorcerer": {
         "batch": "B",
         "description": "2024 Draconic Sorcerer + Tiefling + Metamagic (Quickened/Subtle) + Draconic Resilience AC/HP + Innate Sorcery / Sorcery Points spend/rest + Spell Sheet",
+        "dialogs": [
+            {"title": "SOURCE SELECTION DIALOG", "result": "ok"},
+            {"title": "ASK USER DIALOG", "header": "Select Species Variant", "values": {"r000": True}, "result": "ok"},
+            {"title": "ASK USER DIALOG", "header": "Select Size Category for Tiefling", "values": {"r000": True}, "result": "ok"},
+            {"title": "ASK USER DIALOG", "header": "Select proficiencies", "result": "ok"},
+            {"title": "ASK USER DIALOG", "header": "Select Spellcasting Ability for Tiefling", "values": {"r000": True}, "result": "ok"},
+        ],
         "phases": [
             (
                 "sorcerer-l3-draconic",
@@ -299,6 +306,12 @@ PROFILES = {
     "warlock": {
         "batch": "B",
         "description": "2024 Fiend Warlock + Human + Tough Feat + Eldritch Invocations (Devil's Sight / Armor of Shadows) + Pact Magic progression L1/5/11/17 + rests + Spell Sheet",
+        "dialogs": [
+            {"title": "SOURCE SELECTION DIALOG", "result": "ok"},
+            {"title": "ASK USER DIALOG", "header": "Select Size Category for Human", "values": {"r000": True}, "result": "ok"},
+            {"title": "ASK USER DIALOG", "header": "Select proficiencies", "result": "ok"},
+            {"title": "ASK USER DIALOG", "header": "Select Origin Feat", "values": {"r000": True}, "result": "ok"},
+        ],
         "phases": [
             (
                 "warlock-l3-fiend",
@@ -342,6 +355,12 @@ PROFILES = {
     "wizard": {
         "batch": "B",
         "description": "2024 Evoker Wizard + Gnome + Sage + Scholar (Arcana Expertise) + Arcane Recovery spend/rest + Spell Sheet",
+        "dialogs": [
+            {"title": "SOURCE SELECTION DIALOG", "result": "ok"},
+            {"title": "ASK USER DIALOG", "header": "Select proficiencies", "result": "ok"},
+            {"title": "ASK USER DIALOG", "header": "Select Spellcasting Ability for Forest Gnome", "values": {"r000": True}, "result": "ok"},
+            {"title": "ASK USER DIALOG", "header": "Select Spellcasting Ability for Magic Initiate [Wizard] (feat)", "values": {"r000": True}, "result": "ok"},
+        ],
         "phases": [
             (
                 "wizard-l3-evoker",
@@ -378,6 +397,12 @@ PROFILES = {
     "multiclass": {
         "batch": "B",
         "description": "2024 Multiclass Paladin (Devotion) 6 / Warlock (Fiend) 3 + Dual Hit Dice + Pact Magic & Spellcasting Slots + Aura of Protection + Tough + Multi-caster Spell Sheet",
+        "dialogs": [
+            {"title": "SOURCE SELECTION DIALOG", "result": "ok"},
+            {"title": "ASK USER DIALOG", "header": "Select Size Category for Human", "values": {"r000": True}, "result": "ok"},
+            {"title": "ASK USER DIALOG", "header": "Select proficiencies", "result": "ok"},
+            {"title": "ASK USER DIALOG", "header": "Select Origin Feat", "values": {"r000": True}, "result": "ok"},
+        ],
         "phases": [
             (
                 "mc-pal6-war3",
