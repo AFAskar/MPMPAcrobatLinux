@@ -178,7 +178,7 @@ def run_reader_profile(
                 time.sleep(0.25)
         return dismissed
 
-    def submit_with_dialogs(op, timeout=180, **params):
+    def submit_with_dialogs(op, timeout=240, **params):
         nonlocal pending_ident
         c.ensure_document(remote)
         ident = c.script_submit(op, path=remote, **params)
@@ -186,8 +186,10 @@ def run_reader_profile(
         deadline = time.monotonic() + timeout
         dismissed = []
         while True:
+            found = dismiss_modal_dialogs()
+            dismissed.extend(found)
             try:
-                res = c.script_result(ident, timeout=2)
+                res = c.script_result(ident, timeout=10)
                 pending_ident = None
                 return {"result": res, "dismissed_dialogs": dismissed}
             except RuntimeError as err:
@@ -205,11 +207,11 @@ def run_reader_profile(
                 if op[1] in ("Str", "Dex", "Con", "Int", "Wis", "Cha"):
                     reply = c.script("set", path=remote, values={op[1]: op[2]})
                 else:
-                    reply = submit_with_dialogs("set", timeout=120, values={op[1]: op[2]})
+                    reply = submit_with_dialogs("set", timeout=240, values={op[1]: op[2]})
                 report["inputs"].append({"edit": [op[1], op[2]], "reply": reply})
             elif kind == "cmd":
                 fn, fn_args = parse_cmd_call(op[1])
-                reply = submit_with_dialogs("call", timeout=180, name=fn, args=fn_args)
+                reply = submit_with_dialogs("call", timeout=240, name=fn, args=fn_args)
                 report["inputs"].append({"call": fn, "args": fn_args, "reply": reply})
             elif kind == "eval":
                 prefix, amt = parse_spend_eval(op[1])
