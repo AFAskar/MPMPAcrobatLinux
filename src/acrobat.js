@@ -122,6 +122,7 @@ var __host = (function () {
     for(const prop of ['userName','submitName']){let stored=f[prop];Object.defineProperty(f,prop,{enumerable:true,get(){return stored},set(v){stored=String(v)}})}
     Object.defineProperty(f,'display',{enumerable:true,get(){return widgetDisplay(f,0)},set(v){displayFlags(v,4);f._fallbackDisplay=Number(v);for(let i=0;i<f._widgets.length;i++)setWidgetDisplay(f,i,v);}});
     for(const prop of ['readonly']){let stored=f[prop];Object.defineProperty(f,prop,{enumerable:true,get(){return stored},set(v){if(stored!==v)revision++;stored=v}})}
+    Object.defineProperty(f,'editable',{enumerable:true,get(){return this.type==='combobox'&&!!(this._exportFlags&262144)},set(v){if(this.type!=='combobox')return unsupported('Field.editable on non-combobox');const next=v?(this._exportFlags|262144):(this._exportFlags&~262144);if(next!==this._exportFlags){this._exportFlags=next;revision++;}}});
     let raw=x.value,richInput,settingRich=false,importInput;
     f._richRaw=copyData(x.rich_value||(x.rich_metadata&&x.rich_metadata.spans)||[]);if(f.richText&&!f._richRaw.length&&String(raw))f._richRaw=normalizeRich(f,[{text:String(raw)}]);
     f._initialRichRaw=copyData(f._richRaw);
@@ -190,9 +191,23 @@ var __host = (function () {
       if(hadWidgets&&!f._widgets.length){names.splice(i,1);delete fields[n];let c=data.order.indexOf(n);if(c>=0)data.order.splice(c,1);}}
     journal.push({op:'deletePages',start,end});globalThis.numPages-=end-start+1;globalThis.pageNum=Math.min(globalThis.pageNum,globalThis.numPages-1);globalThis.numFields=names.length;revision++;
   }
+  function choiceEventFields(f,value){
+    if(f.type!=='combobox'&&f.type!=='listbox')return {};
+    const target=String(value);
+    for(const item of f.items){
+      if(Array.isArray(item)){
+        const exp=String(item[0]),label=String(item.length>1?item[1]:item[0]);
+        if(exp===target||label===target)return {change:label,changeEx:exp};
+      }else if(String(item)===target){
+        return {change:target,changeEx:target};
+      }
+    }
+    return {};
+  }
   function eventRun(f,key,value,extra,richInput) {
     let previous=globalThis.event;
-    let e=Object.assign({target:f,targetName:f.name,source:importActive?null:(fields[data.focus]||f),name:({C:'Calculate',V:'Validate',K:'Keystroke',F:'Format',U:'Mouse Up',D:'Mouse Down',Fo:'Focus',Bl:'Blur'})[key]||key,type:'Field',value:['K','V','C','F'].includes(key)?String(value):value,rc:true,willCommit:key==='K',change:'',selStart:0,selEnd:0},extra||{});
+    const choice=key==='K'?choiceEventFields(f,value):{};
+    let e=Object.assign({target:f,targetName:f.name,source:importActive?null:(fields[data.focus]||f),name:({C:'Calculate',V:'Validate',K:'Keystroke',F:'Format',U:'Mouse Up',D:'Mouse Down',Fo:'Focus',Bl:'Blur'})[key]||key,type:'Field',value:['K','V','C','F'].includes(key)?String(value):value,rc:true,willCommit:key==='K',change:'',selStart:0,selEnd:0},choice,extra||{});
     let eventValue=e.value,valueWritten=false,richWritten=false;
     let richData=richInput===undefined?((key==='K'||key==='V')?(String(value)?richChanges(value):null):copyData(f._richRaw||[])):copyData(richInput);
     Object.defineProperty(e,'value',{enumerable:true,get(){return eventValue},set(v){if(['K','V','C','F'].includes(key)){if(typeof v!=='string'&&typeof v!=='number'){const error=new Error('Set not possible, invalid or unknown.');error.name='InvalidSetError';throw error;}v=String(v);}eventValue=v;valueWritten=true;}});
@@ -332,7 +347,7 @@ var __host = (function () {
     exportDataObject(params){if(typeof params==='string')params={cName:params};const result=JSON.parse(__attachment(JSON.stringify(params)));attachmentExports.push(result);},
     print(params){const result=JSON.parse(__print(JSON.stringify({params,state:JSON.parse(__host.snapshot())})));printJobs.push(result);return undefined},
     ready(){let n=0;while(!globalThis.calculate||!app.calculate||globalThis.delay){let t=Array.from(timers.values()).sort((a,b)=>a.at-b.at)[0];if(!t||++n>100)throw Error('Document calculations suspended without a resumable timer');advance(Math.max(0,t.at-clock));}return true},
-    snapshot(){let o={__structure:journal,__order:data.order},assets={};if(data.bookmarksChanged)o.__bookmarks=bookmarkRoot;for(const n of names){let f=fields[n];o[n]={value:Array.isArray(f.value)?f.value:f.valueAsString,icon:f._icon&&f._icon.asset?{asset:f._icon.asset.id}:f._icon,caption:f._caption,captions:f._captions,actions:f._modifiedActions,widgets:f._widgets,currentValueIndices:f.currentValueIndices,textSize:f.textSize,alignment:f.alignment,multiline:f.multiline,textColor:f.textColor,textFont:f.textFont,richText:f.richText,rawRichValue:copyData(f._richRaw),richValueChanged:!sameRich(f._richRaw,f._initialRichRaw),appearanceDirty:!!f._appearanceDirty,richValue:f.richText?(f._formattedRichValue===null?[]:copyData(f._formattedRichValue===undefined?f._richRaw:f._formattedRichValue)):[],richRenderActive:!!f.richText&&f._formattedRichValue!==null,defaultStyle:copyData(f._defaultStyle),formatted:f._formatted===undefined?f.valueAsString:f._formatted,display:f.display,userName:f.userName,submitName:f.submitName,readonly:f.readonly,items:f.items};if(f._icon&&f._icon.asset)assets[f._icon.asset.id]=f._icon.asset;}if(Object.keys(assets).length)o.__iconAssets=assets;return JSON.stringify(o)},
+    snapshot(){let o={__structure:journal,__order:data.order},assets={};if(data.bookmarksChanged)o.__bookmarks=bookmarkRoot;for(const n of names){let f=fields[n];o[n]={value:Array.isArray(f.value)?f.value:f.valueAsString,icon:f._icon&&f._icon.asset?{asset:f._icon.asset.id}:f._icon,caption:f._caption,captions:f._captions,actions:f._modifiedActions,widgets:f._widgets,currentValueIndices:f.currentValueIndices,textSize:f.textSize,alignment:f.alignment,multiline:f.multiline,textColor:f.textColor,textFont:f.textFont,richText:f.richText,rawRichValue:copyData(f._richRaw),richValueChanged:!sameRich(f._richRaw,f._initialRichRaw),appearanceDirty:!!f._appearanceDirty,richValue:f.richText?(f._formattedRichValue===null?[]:copyData(f._formattedRichValue===undefined?f._richRaw:f._formattedRichValue)):[],richRenderActive:!!f.richText&&f._formattedRichValue!==null,defaultStyle:copyData(f._defaultStyle),formatted:f._formatted===undefined?f.valueAsString:f._formatted,display:f.display,userName:f.userName,submitName:f.submitName,readonly:f.readonly,editable:f.editable,items:f.items};if(f._icon&&f._icon.asset)assets[f._icon.asset.id]=f._icon.asset;}if(Object.keys(assets).length)o.__iconAssets=assets;return JSON.stringify(o)},
     timer(code,ms){let id=++timerId;timers.set(id,{id,code:String(code),at:clock+Math.max(1,Number(ms)||1)});return id},clear(id){timers.delete(id)},
     diagnostics(){return JSON.stringify({gaps,errors,repairs,printJobs,attachmentExports,xfdfImports,iconImports,console:consoleState,timers:timers.size,field_count:names.length,menus:Object.keys(menus)})}
   };
@@ -348,8 +363,16 @@ var event={target:globalThis,name:'Open',type:'Doc',value:'',rc:true};
 var console={println(s){__host.consolePrint(String(s));return true},show(){__host.consoleVisible(true)},clear(){__host.consoleClear()}};
 var global=globalThis.__nativeApplicationGlobal||{};
 var __appState=globalThis.__nativeApplicationState||{};
-var app={viewerType:'Reader',viewerVersion:26,formsVersion:26,platform:'UNIX',language:'ENU',calculate:true,runtimeHighlight:false,
+var __monitors=(function(){
+  const list=[{rect:[0,0,1920,1080],workRect:[0,0,1920,1040],isPrimary:true,colorDepth:32}];
+  const copy=()=>list.map(m=>({rect:m.rect.slice(),workRect:m.workRect.slice(),isPrimary:m.isPrimary,colorDepth:m.colorDepth}));
+  for(const fn of ['primary','desktop','largest','tallest','widest','bestColor'])Object.defineProperty(list,fn,{value:copy});
+  Object.defineProperty(list,'nonDesktop',{value:()=>[]});
+  return list;
+})();
+var app={viewerType:'Reader',viewerVersion:26,formsVersion:26,platform:'UNIX',language:'ENU',calculate:true,runtimeHighlight:false,monitors:__monitors,
   execDialog:__host.execDialog,
+  listMenuItems(){return [{cName:'File',oChildren:[{cName:'Open'},{cName:'Save'},{cName:'SaveAs'},{cName:'Close'}]},{cName:'Edit',oChildren:[]},{cName:'View',oChildren:[]},{cName:'Window',oChildren:[]},{cName:'Help',oChildren:[]}];},
   setTimeOut(code,ms){return __host.timer(code,ms)},clearTimeOut(id){__host.clear(id)},
   setInterval(){return __host.unsupported('app.setInterval')},clearInterval(id){__host.clear(id)},
   alert(o){o=typeof o==='string'?{cMsg:o}:o;if(/error/i.test(o.cTitle||''))__host.recordError({stage:'original-alert',error:o.cMsg,title:o.cTitle});const r=JSON.parse(__alert(JSON.stringify(o)));if(o.oCheckbox)o.oCheckbox.bAfterValue=!!r.checked;return r.button},

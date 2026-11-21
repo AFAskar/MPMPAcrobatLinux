@@ -1248,4 +1248,28 @@ mod tests {
     fn indexed_display_changes_only_its_widget_and_survives_snapshot() {
         host("var f=getField('A');f._widgets=[{page:0,flags:132},{page:1,flags:132}];getField('A.1').display=display.hidden;var hidden=f._widgets[0].flags===132&&f._widgets[1].flags===134&&f.display===display.visible&&getField('A.1').display===display.hidden;f.display=display.noView;getField('A.1').display=display.noPrint;var s=JSON.parse(__host.snapshot());hidden&&s.A.widgets[0].flags===164&&s.A.widgets[1].flags===128&&__host.pageWidgets(0).length===0&&__host.pageWidgets(1)[0].name==='A'");
     }
+    #[test]
+    fn combobox_editable_flag_change_ex_and_classic_app_environment() {
+        host(
+            r#"var c=getField('Choice'),a=getField('A'),seen=[],rejected=false;
+          var initialEditable=c.editable===false&&a.editable===false;
+          c.editable=true;
+          try{a.editable=true}catch(e){rejected=/Field\.editable/.test(String(e))}
+          c.setItems(['',['harpers','The Harpers'],'Custom']);
+          c.setAction('Keystroke',"seen.push([event.change,event.changeEx,event.value,event.willCommit])");
+          c.value='harpers';
+          c.value='Custom';
+          c.value='Other';
+          c.value='';
+          var mons=app.monitors.primary();
+          var menuSrc=app.listMenuItems().toSource();
+          var snap=JSON.parse(__host.snapshot());
+          initialEditable&&c.editable===true&&snap.Choice.editable===true&&rejected&&
+          seen.length===4&&seen[0][0]==='The Harpers'&&seen[0][1]==='harpers'&&seen[0][2]==='harpers'&&seen[0][3]===true&&
+          seen[1][0]==='Custom'&&seen[1][1]==='Custom'&&seen[1][2]==='Custom'&&
+          seen[2][0]===''&&seen[2][1]===undefined&&seen[2][2]==='Other'&&
+          seen[3][0]===''&&seen[3][1]===''&&seen[3][2]===''&&
+          mons.length===1&&mons[0].rect[3]===1080&&!/hamburger/i.test(menuSrc)"#,
+        );
+    }
 }

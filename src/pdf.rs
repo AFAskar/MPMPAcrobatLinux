@@ -715,6 +715,19 @@ impl Pdf {
             if let Some(readonly) = s["readonly"].as_bool() {
                 dict.set("Ff", if readonly { f.flags | 1 } else { f.flags & !1 });
             }
+            if f.kind == "Ch" {
+                if let Some(editable) = s["editable"].as_bool() {
+                    let flags = dict.get(b"Ff").and_then(Object::as_i64).unwrap_or(f.flags);
+                    let next = if editable {
+                        flags | 262144
+                    } else {
+                        flags & !262144
+                    };
+                    if next != flags {
+                        dict.set("Ff", next);
+                    }
+                }
+            }
             if f.kind == "Tx" {
                 let mut flags = dict.get(b"Ff").and_then(Object::as_i64).unwrap_or(f.flags);
                 for (property, mask) in [("richText", 33554432), ("multiline", 4096)] {
@@ -1129,5 +1142,72 @@ mod action_tests {
             .unwrap();
         assert!(!aa.has(b"C"));
         assert!(aa.has(b"F"));
+    }
+    #[test]
+    fn combobox_editable_flag_roundtrips_through_projection() {
+        let mut doc = Document::new();
+        let root = doc.new_object_id();
+        let form = doc.new_object_id();
+        let pages = doc.new_object_id();
+        let page = doc.add_object(dictionary! {
+            "Type" => "Page", "Parent" => pages,
+            "MediaBox" => vec![0.into(), 0.into(), 200.into(), 200.into()],
+            "Resources" => dictionary! {}, "Annots" => Vec::<Object>::new()
+        });
+        let combo = doc.add_object(dictionary! {
+            "Type" => "Annot", "Subtype" => "Widget", "FT" => "Ch", "Ff" => 131072,
+            "T" => Object::string_literal("Faction"), "V" => Object::string_literal(""),
+            "Rect" => vec![10.into(), 10.into(), 100.into(), 30.into()], "P" => page
+        });
+        doc.get_dictionary_mut(page)
+            .unwrap()
+            .set("Annots", vec![Object::Reference(combo)]);
+        doc.set_object(
+            pages,
+            dictionary! {"Type"=>"Pages","Kids"=>vec![Object::Reference(page)],"Count"=>1},
+        );
+        doc.set_object(form, dictionary! {"Fields"=>vec![Object::Reference(combo)]});
+        doc.set_object(
+            root,
+            dictionary! {"Type"=>"Catalog","Pages"=>pages,"AcroForm"=>form},
+        );
+        doc.trailer.set("Root", root);
+        let mut fields = BTreeMap::new();
+        let page_map = BTreeMap::from([(combo, 0)]);
+        walk(
+            &doc,
+            &combo.into(),
+            "",
+            &Dictionary::new(),
+            &page_map,
+            &mut fields,
+        )
+        .unwrap();
+        let pdf = Pdf {
+            doc,
+            fields,
+            scripts: Vec::new(),
+            order: Vec::new(),
+            info: json!({}),
+            bookmarks: json!({"name":"Root","children":[]}),
+            path: PathBuf::from("synthetic.pdf"),
+            templates: BTreeMap::new(),
+        };
+        let bytes = pdf
+            .project(&json!({
+                "__structure": [],
+                "__order": [],
+                "Faction": {"value": "", "readonly": false, "editable": true, "display": 0}
+            }))
+            .unwrap();
+        let reloaded = Document::load_mem(&bytes).unwrap();
+        let ff = reloaded
+            .get_dictionary(combo)
+            .unwrap()
+            .get(b"Ff")
+            .unwrap()
+            .as_i64()
+            .unwrap();
+        assert_eq!(ff & (131072 | 262144 | 1), 131072 | 262144);
     }
 }
