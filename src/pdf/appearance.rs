@@ -442,20 +442,19 @@ pub(super) fn content_with_fonts(
             let first = &run[0];
             let mut encoded = String::new();
             for g in run {
-                if g.c as u32 > 65535 {
-                    bail!(
-                        "appearance font encoding does not support non-BMP text in {}",
-                        field.name
-                    )
+                let mut ch = bmp_appearance_char(g.c);
+                if layout.fonts[g.font].face.glyph_index(ch).is_none() && !ch.is_control() {
+                    if g.c as u32 > 0xFFFF {
+                        ch = '?';
+                    } else {
+                        bail!(
+                            "appearance font lacks glyph U+{:04X} in {}",
+                            g.c as u32,
+                            field.name
+                        )
+                    }
                 }
-                if layout.fonts[g.font].face.glyph_index(g.c).is_none() && !g.c.is_control() {
-                    bail!(
-                        "appearance font lacks glyph U+{:04X} in {}",
-                        g.c as u32,
-                        field.name
-                    )
-                }
-                encoded.push_str(&format!("{:04X}", g.c as u32));
+                encoded.push_str(&format!("{:04X}", ch as u32));
             }
             out.push_str(&format!(
                 "/{} {} Tf {} {} {} rg 1 0 0 1 {x} {y} Tm <{encoded}> Tj ",
@@ -512,6 +511,34 @@ pub(super) fn content_with_fonts(
     Ok(out.into_bytes())
 }
 
+fn bmp_appearance_char(c: char) -> char {
+    let cp = c as u32;
+    if cp <= 0xFFFF {
+        return c;
+    }
+    // Map Unicode Mathematical Alphanumeric Symbols (produced by MPMB toUni)
+    // to their base ASCII glyphs for BMP appearance stream rendering while
+    // canonical /V keeps the exact original UTF-16BE code points.
+    let mapped = match cp {
+        0x1D400..=0x1D419 => Some(b'A' + (cp - 0x1D400) as u8),
+        0x1D41A..=0x1D433 => Some(b'a' + (cp - 0x1D41A) as u8),
+        0x1D434..=0x1D44D => Some(b'A' + (cp - 0x1D434) as u8),
+        0x1D44E..=0x1D467 => Some(b'a' + (cp - 0x1D44E) as u8),
+        0x1D468..=0x1D481 => Some(b'A' + (cp - 0x1D468) as u8),
+        0x1D482..=0x1D49B => Some(b'a' + (cp - 0x1D482) as u8),
+        0x1D5D4..=0x1D5ED => Some(b'A' + (cp - 0x1D5D4) as u8),
+        0x1D5EE..=0x1D607 => Some(b'a' + (cp - 0x1D5EE) as u8),
+        0x1D608..=0x1D621 => Some(b'A' + (cp - 0x1D608) as u8),
+        0x1D622..=0x1D63B => Some(b'a' + (cp - 0x1D622) as u8),
+        0x1D63C..=0x1D655 => Some(b'A' + (cp - 0x1D63C) as u8),
+        0x1D656..=0x1D66F => Some(b'a' + (cp - 0x1D656) as u8),
+        0x1D7CE..=0x1D7D7 => Some(b'0' + (cp - 0x1D7CE) as u8),
+        0x1D7EC..=0x1D7F5 => Some(b'0' + (cp - 0x1D7EC) as u8),
+        _ => None,
+    };
+    mapped.map(char::from).unwrap_or('?')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -530,6 +557,10 @@ mod tests {
             text_size: 7.,
             text_font: String::new(),
             text_color: json!(["G", 0]),
+            fill_color: json!(["T"]),
+            stroke_color: json!(["T"]),
+            line_width: 1.0,
+            border_style: "solid".into(),
             rich_metadata: json!({}),
             widgets: vec![],
             actions: BTreeMap::new(),

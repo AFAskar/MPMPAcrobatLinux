@@ -749,6 +749,10 @@ mod tests {
                 text_size: 0.,
                 text_font: "Helvetica".into(),
                 text_color: json!(["G", 0]),
+                fill_color: json!(["T"]),
+                stroke_color: json!(["T"]),
+                line_width: 1.0,
+                border_style: "solid".into(),
                 rich_metadata: json!({}),
                 widgets: vec![crate::pdf::Widget {
                     id: widget,

@@ -40,6 +40,10 @@ pub struct Field {
     pub text_size: f64,
     pub text_font: String,
     pub text_color: Value,
+    pub fill_color: Value,
+    pub stroke_color: Value,
+    pub line_width: f64,
+    pub border_style: String,
     pub rich_metadata: Value,
     pub widgets: Vec<Widget>,
     pub actions: BTreeMap<String, String>,
@@ -310,6 +314,15 @@ fn walk(
     };
     let text_color =
         field_style::color(&da).with_context(|| format!("Default appearance color in {name}"))?;
+    let fill_color = style_widget
+        .and_then(|wd| widget_mk_color(d, wd, b"BG"))
+        .unwrap_or_else(|| json!(["T"]));
+    let stroke_color = style_widget
+        .and_then(|wd| widget_mk_color(d, wd, b"BC"))
+        .unwrap_or_else(|| json!(["T"]));
+    let (line_width, border_style) = style_widget
+        .map(|wd| widget_border(d, wd))
+        .unwrap_or_else(|| (1.0, "solid".into()));
     let kind = val(b"FT");
     let flags = attrs.get(b"Ff").and_then(Object::as_i64).unwrap_or(0);
     let mut value = val(b"V");
@@ -347,6 +360,10 @@ fn walk(
             .with_context(|| format!("Rich-text metadata in {name}"))?,
             text_font,
             text_color,
+            fill_color,
+            stroke_color,
+            line_width,
+            border_style,
             widgets,
             actions,
             items,
@@ -356,6 +373,80 @@ fn walk(
         },
     );
     Ok(())
+}
+fn widget_mk_color(d: &Document, wd: &Dictionary, key: &[u8]) -> Option<Value> {
+    let mk = wd
+        .get(b"MK")
+        .ok()
+        .and_then(|v| resolved(d, v).ok())
+        .and_then(|v| v.as_dict().ok())?;
+    let arr = mk
+        .get(key)
+        .ok()
+        .and_then(|v| resolved(d, v).ok())
+        .and_then(|v| v.as_array().ok())?;
+    let nums: Vec<f64> = arr
+        .iter()
+        .filter_map(|v| v.as_float().ok().map(f64::from))
+        .collect();
+    if nums.len() != arr.len() {
+        return None;
+    }
+    Some(match nums.as_slice() {
+        [] => json!(["T"]),
+        [g] => json!(["G", g]),
+        [r, g, b] => json!(["RGB", r, g, b]),
+        [c, m, y, k] => json!(["CMYK", c, m, y, k]),
+        _ => return None,
+    })
+}
+fn pdf_mk_color(value: &Value) -> Option<Vec<Object>> {
+    let arr = value.as_array()?;
+    let space = arr.first()?.as_str()?;
+    let expected = match space {
+        "T" => 0,
+        "G" => 1,
+        "RGB" => 3,
+        "CMYK" => 4,
+        _ => return None,
+    };
+    if arr.len() != expected + 1 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(expected);
+    for v in &arr[1..] {
+        let n = v.as_f64()?;
+        if !n.is_finite() {
+            return None;
+        }
+        out.push(Object::Real(n.clamp(0.0, 1.0) as f32));
+    }
+    Some(out)
+}
+fn widget_border(d: &Document, wd: &Dictionary) -> (f64, String) {
+    let bs = wd
+        .get(b"BS")
+        .ok()
+        .and_then(|v| resolved(d, v).ok())
+        .and_then(|v| v.as_dict().ok());
+    let width = bs
+        .and_then(|b| b.get(b"W").ok())
+        .and_then(|v| v.as_float().ok())
+        .map(f64::from)
+        .unwrap_or(1.0);
+    let style = bs
+        .and_then(|b| b.get(b"S").ok())
+        .and_then(|v| v.as_name().ok())
+        .map(|s| match s {
+            b"D" => "dashed",
+            b"B" => "beveled",
+            b"I" => "inset",
+            b"U" => "underline",
+            _ => "solid",
+        })
+        .unwrap_or("solid")
+        .to_owned();
+    (width, style)
 }
 fn widget_icon_key(d: &Document, widgets: &[Widget]) -> Option<String> {
     use sha2::{Digest, Sha256};
@@ -684,10 +775,19 @@ impl Pdf {
             let rich_changed = f.kind == "Tx" && s["richValueChanged"] == true;
             let rich_enabled = s["richText"].as_bool().unwrap_or(f.flags & 33554432 != 0);
             let rich_mode_changed = rich_enabled != (f.flags & 33554432 != 0);
-            let style_field = f.kind == "Tx" || f.kind == "Ch";
+            let style_field =
+                f.kind == "Tx" || f.kind == "Ch" || (f.kind == "Btn" && f.flags & 65536 != 0);
             let font_size = s["textSize"].as_f64().unwrap_or(f.text_size);
             let font_name = s["textFont"].as_str().unwrap_or(&f.text_font);
             let text_color = s.get("textColor").unwrap_or(&f.text_color);
+            let fill_color = s.get("fillColor").unwrap_or(&f.fill_color);
+            let stroke_color = s.get("strokeColor").unwrap_or(&f.stroke_color);
+            let line_width = s["lineWidth"].as_f64().unwrap_or(f.line_width);
+            let border_style = s["borderStyle"].as_str().unwrap_or(&f.border_style);
+            let fill_changed = !field_style::same(fill_color, &f.fill_color);
+            let stroke_changed = !field_style::same(stroke_color, &f.stroke_color);
+            let border_changed =
+                (line_width - f.line_width).abs() > 1e-6 || border_style != f.border_style;
             let alignment = match s["alignment"].as_str() {
                 Some("center") => 1,
                 Some("right") => 2,
@@ -857,6 +957,48 @@ impl Pdf {
                         wd.set("Q", alignment);
                     }
                 }
+                if fill_changed || stroke_changed {
+                    let mut mk = doc
+                        .get_dictionary(w.id)?
+                        .get(b"MK")
+                        .ok()
+                        .and_then(|v| resolved(&doc, v).ok())
+                        .and_then(|v| v.as_dict().ok())
+                        .cloned()
+                        .unwrap_or_default();
+                    if fill_changed {
+                        if let Some(arr) = pdf_mk_color(fill_color) {
+                            mk.set("BG", arr);
+                        }
+                    }
+                    if stroke_changed {
+                        if let Some(arr) = pdf_mk_color(stroke_color) {
+                            mk.set("BC", arr);
+                        }
+                    }
+                    doc.get_dictionary_mut(w.id)?.set("MK", mk);
+                }
+                if border_changed {
+                    let mut bs = doc
+                        .get_dictionary(w.id)?
+                        .get(b"BS")
+                        .ok()
+                        .and_then(|v| resolved(&doc, v).ok())
+                        .and_then(|v| v.as_dict().ok())
+                        .cloned()
+                        .unwrap_or_default();
+                    bs.set("W", Object::Real(line_width.max(0.0) as f32));
+                    let code = match border_style {
+                        "dashed" => "D",
+                        "beveled" => "B",
+                        "inset" => "I",
+                        "underline" => "U",
+                        _ => "S",
+                    };
+                    bs.set("S", Object::Name(code.as_bytes().to_vec()));
+                    doc.get_dictionary_mut(w.id)?.set("BS", bs);
+                }
+                let wd = doc.get_dictionary_mut(w.id)?;
                 wd.set("F", flags);
                 if f.kind == "Btn" && f.flags & 65536 != 0 {
                     buttons::project(
@@ -888,9 +1030,6 @@ impl Pdf {
                 // noView fields still need fresh appearances for printing.
                 if w.page < 0 || flags & 2 != 0 {
                     continue;
-                }
-                if value.chars().any(|c| c as u32 > 65535) {
-                    bail!("appearance encoding does not support non-BMP text in {name}")
                 }
                 if rect.len() != 4 {
                     continue;
@@ -1249,5 +1388,94 @@ mod action_tests {
             .as_i64()
             .unwrap();
         assert_eq!(ff & (131072 | 262144 | 1), 131072 | 262144);
+    }
+    #[test]
+    fn widget_colors_border_and_non_bmp_text_roundtrip_through_projection() {
+        let mut doc = Document::new();
+        let root = doc.new_object_id();
+        let form = doc.new_object_id();
+        let pages = doc.new_object_id();
+        let page = doc.add_object(dictionary! {
+            "Type" => "Page", "Parent" => pages,
+            "MediaBox" => vec![0.into(), 0.into(), 200.into(), 200.into()],
+            "Resources" => dictionary! {}, "Annots" => Vec::<Object>::new()
+        });
+        let field = doc.add_object(dictionary! {
+            "Type" => "Annot", "Subtype" => "Widget", "FT" => "Tx", "Ff" => 0,
+            "T" => Object::string_literal("Styled"), "V" => Object::string_literal(""),
+            "Rect" => vec![10.into(), 10.into(), 140.into(), 30.into()], "P" => page,
+            "MK" => dictionary! {"BG" => vec![Object::Real(0.9), Object::Real(0.9), Object::Real(1.0)]},
+            "BS" => dictionary! {"W" => Object::Real(1.0), "S" => "S"}
+        });
+        doc.get_dictionary_mut(page)
+            .unwrap()
+            .set("Annots", vec![Object::Reference(field)]);
+        doc.set_object(
+            pages,
+            dictionary! {"Type"=>"Pages","Kids"=>vec![Object::Reference(page)],"Count"=>1},
+        );
+        doc.set_object(form, dictionary! {"Fields"=>vec![Object::Reference(field)]});
+        doc.set_object(
+            root,
+            dictionary! {"Type"=>"Catalog","Pages"=>pages,"AcroForm"=>form},
+        );
+        doc.trailer.set("Root", root);
+        let mut fields = BTreeMap::new();
+        let page_map = BTreeMap::from([(field, 0)]);
+        walk(
+            &doc,
+            &field.into(),
+            "",
+            &Dictionary::new(),
+            &page_map,
+            &mut fields,
+        )
+        .unwrap();
+        assert_eq!(fields["Styled"].fill_color[0], json!("RGB"));
+        let pdf = Pdf {
+            doc,
+            fields,
+            scripts: Vec::new(),
+            order: Vec::new(),
+            info: json!({}),
+            bookmarks: json!({"name":"Root","children":[]}),
+            path: PathBuf::from("synthetic.pdf"),
+            templates: BTreeMap::new(),
+        };
+        let bold_hi = "\u{1D407}\u{1D422} \u{1F525}";
+        let bytes = pdf
+            .project(&json!({
+                "__structure": [],
+                "__order": [],
+                "Styled": {
+                    "value": bold_hi,
+                    "formatted": bold_hi,
+                    "readonly": false,
+                    "display": 0,
+                    "fillColor": ["CMYK", 0.1, 0.2, 0.3, 0.4],
+                    "strokeColor": ["RGB", 0.5, 0.0, 0.0],
+                    "lineWidth": 2.0,
+                    "borderStyle": "dashed"
+                }
+            }))
+            .unwrap();
+        let reloaded = Document::load_mem(&bytes).unwrap();
+        let mut out_fields = BTreeMap::new();
+        let out_pages = BTreeMap::from([(field, 0)]);
+        walk(
+            &reloaded,
+            &field.into(),
+            "",
+            &Dictionary::new(),
+            &out_pages,
+            &mut out_fields,
+        )
+        .unwrap();
+        assert_eq!(out_fields["Styled"].value, json!(bold_hi));
+        assert_eq!(out_fields["Styled"].fill_color[0], json!("CMYK"));
+        assert_eq!(out_fields["Styled"].stroke_color[0], json!("RGB"));
+        assert_eq!(out_fields["Styled"].line_width, 2.0);
+        assert_eq!(out_fields["Styled"].border_style, "dashed");
+        assert!(reloaded.get_dictionary(field).unwrap().has(b"AP"));
     }
 }
