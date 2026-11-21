@@ -506,7 +506,7 @@ fn hash_pdf_object(
                 .iter()
                 .filter(|(k, _)| k.as_slice() != b"Parent" && k.as_slice() != b"Length")
                 .collect();
-            entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+            entries.sort_by_key(|(a, _)| *a);
             hasher.update((entries.len() as u64).to_le_bytes());
             for (k, v) in entries {
                 hasher.update((k.len() as u64).to_le_bytes());
@@ -534,7 +534,7 @@ fn hash_pdf_object(
                     true
                 })
                 .collect();
-            entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+            entries.sort_by_key(|(a, _)| *a);
             hasher.update((entries.len() as u64).to_le_bytes());
             for (k, v) in entries {
                 hasher.update((k.len() as u64).to_le_bytes());
@@ -1678,7 +1678,15 @@ mod action_tests {
         let mut fields = BTreeMap::new();
         let page_map = BTreeMap::from([(btn_a, 0), (btn_b, 0), (btn_c, 0), (box_only, 0)]);
         for id in [btn_a, btn_b, btn_c, box_only] {
-            walk(&doc, &id.into(), "", &Dictionary::new(), &page_map, &mut fields).unwrap();
+            walk(
+                &doc,
+                &id.into(),
+                "",
+                &Dictionary::new(),
+                &page_map,
+                &mut fields,
+            )
+            .unwrap();
         }
         assert_ne!(fields["BtnA"].icon_key, fields["BtnB"].icon_key);
         assert_eq!(fields["BtnA"].icon_key, fields["BtnC"].icon_key);

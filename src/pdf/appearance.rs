@@ -207,9 +207,9 @@ pub(super) fn paint_box(width: f32, height: f32, state: &Value) -> String {
                 Some("dashed") => out.push_str(&format!(
                     "q {stroke} {lw} w [3] 0 d {half} {half} {sw} {sh} re S Q "
                 )),
-                Some("underline") => {
-                    out.push_str(&format!("q {stroke} {lw} w 0 {half} m {width} {half} l S Q "))
-                }
+                Some("underline") => out.push_str(&format!(
+                    "q {stroke} {lw} w 0 {half} m {width} {half} l S Q "
+                )),
                 _ => out.push_str(&format!(
                     "q {stroke} {lw} w {half} {half} {sw} {sh} re S Q "
                 )),

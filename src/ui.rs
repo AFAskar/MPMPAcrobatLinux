@@ -372,8 +372,7 @@ impl Reader {
     }
 
     fn commit_choice(&mut self, value: &str) -> Result<()> {
-        self.rt
-            .select_choice(&self.edit_name, &json!(value))?;
+        self.rt.select_choice(&self.edit_name, &json!(value))?;
         self.refresh_editor()?;
         self.edit_dirty = false;
         self.unsaved = true;
