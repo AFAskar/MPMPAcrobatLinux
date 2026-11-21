@@ -267,7 +267,7 @@ PROFILES = {
             {"title": "ASK USER DIALOG", "header": "Select Species Variant", "values": {"r000": True}, "result": "ok"},
             {"title": "ASK USER DIALOG", "header": "Select Size Category for Tiefling", "values": {"r000": True}, "result": "ok"},
             {"title": "ASK USER DIALOG", "header": "Select proficiencies", "result": "ok"},
-            {"title": "ASK USER DIALOG", "header": "Select Spellcasting Ability for Tiefling", "values": {"r000": True}, "result": "ok"},
+            {"title": "ASK USER DIALOG", "header": "Select Spellcasting Ability for Abyssal Tiefling", "values": {"r000": True}, "result": "ok"},
         ],
         "phases": [
             (
