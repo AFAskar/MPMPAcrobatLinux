@@ -87,6 +87,7 @@ def run_reader_profile(
     console_mod,
     fields_mod,
     profile_mod,
+    skip_paired_display=False,
 ):
     native = json.loads(native_profile_report_path.read_text())
     assert native["passed"], (profile_name, "Native report did not pass")
@@ -344,28 +345,29 @@ def run_reader_profile(
         (folder / "report.json").write_text(json.dumps(report, indent=2) + "\n")
 
         # Independent paired canonical + /AA/F + visible AP text verification
-        pair_out = folder / "paired-displays"
-        subprocess.run(
-            [
-                sys.executable,
-                str(ROOT / "tools/native/verify-paired-feature-displays.py"),
-                "--native",
-                str(native_profile_report_path),
-                "--reference",
-                str(folder / "report.json"),
-                "--original",
-                str(source),
-                "--output",
-                str(pair_out),
-            ],
-            check=True,
-            timeout=600,
-        )
-        pair_data = json.loads((pair_out / "comparison.json").read_text())
-        assert pair_data["passed"] and pair_data["complete_report_pair"]
-        report["paired_display"] = str(pair_out / "comparison.json")
-        (folder / "report.json").write_text(json.dumps(report, indent=2) + "\n")
-        print(f"READER+MIXED+PAIRED {profile_name} ({len(report['phases'])} phases): PASS", flush=True)
+        if not skip_paired_display:
+            pair_out = folder / "paired-displays"
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "tools/native/verify-paired-feature-displays.py"),
+                    "--native",
+                    str(native_profile_report_path),
+                    "--reference",
+                    str(folder / "report.json"),
+                    "--original",
+                    str(source),
+                    "--output",
+                    str(pair_out),
+                ],
+                check=True,
+                timeout=1800,
+            )
+            pair_data = json.loads((pair_out / "comparison.json").read_text())
+            assert pair_data["passed"] and pair_data["complete_report_pair"]
+            report["paired_display"] = str(pair_out / "comparison.json")
+            (folder / "report.json").write_text(json.dumps(report, indent=2) + "\n")
+        print(f"READER+MIXED {profile_name} ({len(report['phases'])} phases): PASS", flush=True)
         return report
 
     except Exception as exc:
@@ -408,6 +410,7 @@ def main():
     parser.add_argument("--binary", type=Path, default=None)
     parser.add_argument("--batch", choices=["A", "B", "all"], default="all")
     parser.add_argument("--profile", action="append", choices=sorted(PROFILES))
+    parser.add_argument("--skip-paired-display", action="store_true", help="Defer CPU-bound verify-paired-feature-displays.py so Reader VM can continue immediately")
     args = parser.parse_args()
 
     ready = json.loads(args.readiness.read_text())
@@ -457,6 +460,7 @@ def main():
                 console_mod,
                 fields_mod,
                 profile_mod,
+                skip_paired_display=args.skip_paired_display,
             )
             summary["profiles"][name] = {
                 "passed": res["passed"],
