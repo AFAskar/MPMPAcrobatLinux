@@ -243,6 +243,9 @@ pub fn main() -> Result<()> {
         filter: String::new(),
         edit_name: "PC Name".into(),
         edit_value,
+        edit_type: "text".into(),
+        edit_editable: true,
+        edit_items: Vec::new(),
         edit_dirty: false,
         status: String::new(),
         last_tick: std::time::Instant::now(),
@@ -284,6 +287,9 @@ struct Reader {
     filter: String,
     edit_name: String,
     edit_value: String,
+    edit_type: String,
+    edit_editable: bool,
+    edit_items: Vec<(String, String)>,
     edit_dirty: bool,
     status: String,
     last_tick: std::time::Instant,
@@ -337,15 +343,28 @@ fn bookmark_items(ui: &mut egui::Ui, node: &Value, path: &str, action: &mut Opti
 }
 impl Reader {
     fn refresh_editor(&mut self) -> Result<()> {
-        self.edit_value = self
-            .rt
-            .eval(&format!(
-                "(function(){{var field=getField({});return field?field.valueAsString:''}})()",
-                serde_json::to_string(&self.edit_name)?
-            ))?
-            .as_str()
-            .unwrap_or("")
-            .to_owned();
+        let info = self.rt.eval(&format!(
+            "(function(){{var f=getField({});if(!f)return null;return {{value:f.valueAsString,type:f.type,editable:!!f.editable,items:(f.items||[]).map(function(it){{return Array.isArray(it)?[String(it[0]),String(it.length>1?it[1]:it[0])]:[String(it),String(it)]}})}}}})()",
+            serde_json::to_string(&self.edit_name)?
+        ))?;
+        self.edit_value = info["value"].as_str().unwrap_or("").to_owned();
+        self.edit_type = info["type"].as_str().unwrap_or("text").to_owned();
+        self.edit_editable = info["editable"].as_bool().unwrap_or(true);
+        self.edit_items = info["items"]
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|pair| {
+                        let pair = pair.as_array()?;
+                        Some((
+                            pair.first()?.as_str()?.to_owned(),
+                            pair.get(1)?.as_str()?.to_owned(),
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         Ok(())
     }
 
@@ -368,12 +387,8 @@ impl Reader {
 
     fn select_editor(&mut self, name: &str) -> Result<()> {
         self.commit_pending_edit()?;
-        let value = self.rt.eval(&format!(
-            "getField({}).valueAsString",
-            serde_json::to_string(name)?
-        ))?;
         self.edit_name = name.to_owned();
-        self.edit_value = value.as_str().unwrap_or("").to_owned();
+        self.refresh_editor()?;
         self.edit_dirty = false;
         Ok(())
     }
@@ -803,13 +818,41 @@ impl eframe::App for Reader {
                 }
                 ui.separator();
                 ui.label(&self.edit_name);
-                if ui.text_edit_multiline(&mut self.edit_value).changed() {
-                    self.edit_dirty = true;
-                    self.unsaved = true;
+                let is_choice = matches!(self.edit_type.as_str(), "combobox" | "listbox");
+                if is_choice && !self.edit_items.is_empty() {
+                    let selected_label = self
+                        .edit_items
+                        .iter()
+                        .find(|(exp, _)| *exp == self.edit_value)
+                        .map(|(_, label)| label.clone())
+                        .unwrap_or_else(|| self.edit_value.clone());
+                    let mut chosen = None;
+                    egui::ComboBox::from_id_salt(("sidebar-choice", &self.edit_name))
+                        .width(280.)
+                        .selected_text(selected_label)
+                        .show_ui(ui, |ui| {
+                            for (exp, label) in &self.edit_items {
+                                let display = if label.is_empty() { "(blank)" } else { label };
+                                if ui.selectable_label(self.edit_value == *exp, display).clicked() {
+                                    chosen = Some(exp.clone());
+                                }
+                            }
+                        });
+                    if let Some(exp) = chosen {
+                        self.edit_value = exp;
+                        let r = self.commit_editor();
+                        self.result(r);
+                    }
                 }
-                if ui.button("Commit field edit").clicked() {
-                    let r = self.commit_editor();
-                    self.result(r)
+                if !is_choice || self.edit_editable || self.edit_items.is_empty() {
+                    if ui.text_edit_multiline(&mut self.edit_value).changed() {
+                        self.edit_dirty = true;
+                        self.unsaved = true;
+                    }
+                    if ui.button("Commit field edit").clicked() {
+                        let r = self.commit_editor();
+                        self.result(r)
+                    }
                 }
                 if let Ok(values)=self.rt.eval("['Str','Str Mod','Character Level','Proficiency Bonus'].map(n=>[n,getField(n).valueAsString])"){
                     if let Some(values)=values.as_array(){for item in values{ui.label(format!("{}: {}",item[0].as_str().unwrap_or(""),item[1].as_str().unwrap_or("")));}}
@@ -978,9 +1021,24 @@ fn argb_image(value: &Value) -> Option<ColorImage> {
     }
     Some(ColorImage::from_rgba_unmultiplied([w, h], &rgba))
 }
+fn option_min_order(value: &Value) -> i64 {
+    if let Some(n) = value.as_i64() {
+        return n.saturating_abs();
+    }
+    value
+        .as_object()
+        .and_then(|map| map.values().map(option_min_order).min())
+        .unwrap_or(i64::MAX)
+}
 fn option_leaves(value: &Value, path: &mut Vec<String>, out: &mut Vec<(Vec<String>, i64)>) {
     if let Some(object) = value.as_object() {
-        for (name, v) in object {
+        let mut entries: Vec<_> = object.iter().collect();
+        entries.sort_by(|(ka, va), (kb, vb)| {
+            option_min_order(va)
+                .cmp(&option_min_order(vb))
+                .then_with(|| ka.cmp(kb))
+        });
+        for (name, v) in entries {
             path.push(name.clone());
             if let Some(n) = v.as_i64() {
                 out.push((path.clone(), n))
@@ -1100,8 +1158,12 @@ impl Dialog {
                 self.values.entry(id.into()).or_insert(json!(""))
             };
             let is_red = self.red[id] == true;
+            let is_bold = e["bold"].as_bool().unwrap_or(false);
             let styled_text = |s: &str| {
                 let mut text = egui::RichText::new(s);
+                if is_bold {
+                    text = text.strong();
+                }
                 if is_red {
                     text = text.color(egui::Color32::from_rgb(200, 32, 32));
                 }
@@ -1122,6 +1184,51 @@ impl Dialog {
                     if response.clicked() {
                         reply = Some(json!({"event":id}));
                     }
+                }
+                "edit_text" if value.is_object() && e["PopupEdit"].as_bool().unwrap_or(false) => {
+                    let mut leaves = Vec::new();
+                    option_leaves(value, &mut Vec::new(), &mut leaves);
+                    let mut text = leaves
+                        .iter()
+                        .find(|(_, v)| *v > 0)
+                        .map(|(p, _)| p.last().cloned().unwrap_or_default())
+                        .unwrap_or_default();
+                    let width =
+                        (e["char_width"].as_f64().unwrap_or(20.) as f32 * 7.).clamp(40., 600.);
+                    ui.horizontal(|ui| {
+                        let response = ui.add(
+                            egui::TextEdit::singleline(&mut text)
+                                .desired_width((width - 28.).max(32.))
+                                .interactive(!e["readonly"].as_bool().unwrap_or(false)),
+                        );
+                        if wants_focus {
+                            response.request_focus();
+                            *focus_requested = true;
+                        }
+                        if response.changed() {
+                            *value = json!(text);
+                            self.edited_controls.insert(id.to_owned());
+                        }
+                        if response.lost_focus() && self.edited_controls.remove(id) {
+                            reply = Some(json!({"event":id}));
+                        }
+                        if value.is_object() {
+                            egui::ComboBox::from_id_salt(("popup-edit", id))
+                                .width(24.)
+                                .selected_text("")
+                                .show_ui(ui, |ui| {
+                                    for (path, selection) in &leaves {
+                                        if ui
+                                            .selectable_label(*selection > 0, path.join(" › "))
+                                            .clicked()
+                                        {
+                                            select_option(value, path, false);
+                                            reply = Some(json!({"event":id}));
+                                        }
+                                    }
+                                });
+                        }
+                    });
                 }
                 "edit_text" | "popup" | "list_box" | "hier_list_box" if value.is_object() => {
                     let mut leaves = Vec::new();
@@ -1168,28 +1275,47 @@ impl Dialog {
                         .unwrap_or_else(|| value.to_string());
                     let width =
                         (e["char_width"].as_f64().unwrap_or(25.) as f32 * 7.).clamp(25., 600.);
-                    let edit = if e["multiline"].as_bool().unwrap_or(false)
-                        || e["char_height"].as_i64().unwrap_or(1) > 1
-                    {
-                        egui::TextEdit::multiline(&mut text).desired_width(width)
-                    } else {
-                        egui::TextEdit::singleline(&mut text)
-                            .password(e["password"].as_bool().unwrap_or(false))
-                            .desired_width(width)
-                    };
-                    let response =
-                        ui.add(edit.interactive(!e["readonly"].as_bool().unwrap_or(false)));
-                    if wants_focus {
-                        response.request_focus();
-                        *focus_requested = true;
-                    }
-                    if response.changed() {
-                        *value = json!(text);
-                        self.edited_controls.insert(id.to_owned());
-                    }
-                    if response.lost_focus() && self.edited_controls.remove(id) {
-                        reply = Some(json!({"event":id}));
-                    }
+                    let readonly = e["readonly"].as_bool().unwrap_or(false);
+                    let spin = e["SpinEdit"].as_bool().unwrap_or(false)
+                        && !e["PopupEdit"].as_bool().unwrap_or(false)
+                        && !readonly;
+                    ui.horizontal(|ui| {
+                        let edit = if e["multiline"].as_bool().unwrap_or(false)
+                            || e["char_height"].as_i64().unwrap_or(1) > 1
+                        {
+                            egui::TextEdit::multiline(&mut text).desired_width(width)
+                        } else {
+                            egui::TextEdit::singleline(&mut text)
+                                .password(e["password"].as_bool().unwrap_or(false))
+                                .desired_width(width)
+                        };
+                        let response = ui.add(edit.interactive(!readonly));
+                        if wants_focus {
+                            response.request_focus();
+                            *focus_requested = true;
+                        }
+                        if response.changed() {
+                            *value = json!(text);
+                            self.edited_controls.insert(id.to_owned());
+                        }
+                        if response.lost_focus() && self.edited_controls.remove(id) {
+                            reply = Some(json!({"event":id}));
+                        }
+                        if spin {
+                            let current = value
+                                .as_str()
+                                .and_then(|s| s.trim().parse::<i64>().ok())
+                                .unwrap_or(0);
+                            if ui.small_button("−").clicked() {
+                                *value = json!((current - 1).to_string());
+                                reply = Some(json!({"event":id}));
+                            }
+                            if ui.small_button("+").clicked() {
+                                *value = json!((current + 1).to_string());
+                                reply = Some(json!({"event":id}));
+                            }
+                        }
+                    });
                 }
                 "radio" => {
                     if ui
@@ -1233,7 +1359,11 @@ impl Dialog {
                         {
                             reply = Some(json!({"result":"other"}));
                         }
-                        if kind != "ok" && ui.button("Cancel").clicked() {
+                        if kind != "ok"
+                            && ui
+                                .button(e["cancel_name"].as_str().unwrap_or("Cancel"))
+                                .clicked()
+                        {
                             reply = Some(json!({"result":"cancel"}))
                         }
                     });
@@ -1329,6 +1459,13 @@ fn capture(ctx: &egui::Context, path: &std::path::Path) -> bool {
 impl eframe::App for Dialog {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         if self.dismiss_alert(ctx) {
+            return;
+        }
+        if self.alert_type.is_none()
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            *self.result.lock().unwrap() = json!({"result":"cancel","values":self.values});
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;
         }
         if let Ok(dir) = std::env::var("MPMB_UI_SMOKE_DIR") {
@@ -1778,5 +1915,61 @@ mod dialog_tests {
             Some(json!({"event":"bLin"}))
         );
         assert_eq!(dialog.values["bLin"], json!("Source Link"));
+    }
+
+    #[test]
+    fn option_leaves_follow_acrobat_numeric_entry_order() {
+        let map = json!({
+            "Zebra": -1,
+            "Alpha": -3,
+            "Middle": 2,
+            "GroupB": {"Second": -4, "First": -2}
+        });
+        let mut leaves = Vec::new();
+        option_leaves(&map, &mut Vec::new(), &mut leaves);
+        let labels: Vec<String> = leaves.into_iter().map(|(p, _)| p.join("/")).collect();
+        assert_eq!(
+            labels,
+            vec!["Zebra", "GroupB/First", "GroupB/Second", "Middle", "Alpha"]
+        );
+    }
+
+    #[test]
+    fn popup_edit_accepts_typed_text_and_dispatches_on_focus_loss() {
+        let ctx = egui::Context::default();
+        let mut dialog = alert_dialog(None);
+        dialog
+            .values
+            .insert("sp01".into(), json!({"Fireball": -1, "Shield": 2}));
+        dialog.focus = Some("sp01".into());
+        let control = json!({"type":"edit_text","item_id":"sp01","PopupEdit":true});
+        let mut frame = |events: Vec<egui::Event>| {
+            let mut reply = None;
+            let _ = ctx.run(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        reply = dialog.element(ui, &control);
+                        ui.button("Next").clicked();
+                    });
+                },
+            );
+            (dialog.values["sp01"].clone(), reply)
+        };
+        frame(vec![]);
+        let (val, ev) = frame(vec![egui::Event::Text("!".into())]);
+        assert_eq!(val, json!("Shield!"));
+        assert!(ev.is_none());
+        let (_, ev) = frame(vec![egui::Event::Key {
+            key: egui::Key::Tab,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        assert_eq!(ev, Some(json!({"event":"sp01"})));
     }
 }
