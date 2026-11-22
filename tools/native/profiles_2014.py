@@ -272,6 +272,10 @@ PROFILES = {
     "paladin": {
         "batch": "B",
         "description": "2014 Oath of Devotion Paladin + Dragonborn + Noble + Lay on Hands LR / Channel Divinity SR + Aura + Spell Sheet",
+        "dialogs": [
+            {"title": "SOURCE SELECTION DIALOG", "result": "ok"},
+            {"title": "ASK USER DIALOG", "values": {"r000": True}, "result": "ok"},
+        ],
         "phases": [
             (
                 "paladin-l2-setup",
@@ -384,6 +388,10 @@ PROFILES = {
     "sorcerer": {
         "batch": "C",
         "description": "2014 Draconic Bloodline Sorcerer + Tiefling + Metamagic + Draconic Resilience AC + Sorcery Points + Spell Sheet",
+        "dialogs": [
+            {"title": "SOURCE SELECTION DIALOG", "result": "ok"},
+            {"title": "ASK USER DIALOG", "values": {"r000": True}, "result": "ok"},
+        ],
         "phases": [
             (
                 "sorcerer-l3-draconic",
@@ -420,6 +428,10 @@ PROFILES = {
     "warlock": {
         "batch": "C",
         "description": "2014 The Fiend Warlock + Tiefling + Invocations + Pact Magic L3/11/17 + Mystic Arcanum + Spell Sheet",
+        "dialogs": [
+            {"title": "SOURCE SELECTION DIALOG", "result": "ok"},
+            {"title": "ASK USER DIALOG", "values": {"r000": True}, "result": "ok"},
+        ],
         "phases": [
             (
                 "warlock-l3-fiend",
@@ -525,6 +537,10 @@ PROFILES = {
     "multiclass": {
         "batch": "C",
         "description": "2014 Multiclass: Paladin 6 / Warlock 3 -> Fighter 3 / Wizard 5 -> Fighter 5 / Wizard 5",
+        "dialogs": [
+            {"title": "SOURCE SELECTION DIALOG", "result": "ok"},
+            {"title": "ASK USER DIALOG", "values": {"r000": True}, "result": "ok"},
+        ],
         "phases": [
             (
                 "mc-pal6-war3",
