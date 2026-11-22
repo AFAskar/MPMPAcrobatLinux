@@ -28,6 +28,7 @@ import control as c
 import fighter_additional_diagnostics as diagnostics
 import reader_document_controls as closing
 import subclass_audit_qualification as qualification
+from reference_2024_qualification import require_fixture_reference
 from verify import canonical_fields, inspect, script_hashes
 from workflow_state_comparison import encoded_state
 
@@ -66,28 +67,8 @@ def imported_and_spell_digests(pdf_path):
 
 
 def require_full_three_fixture_reference(readiness_path):
-    data = json.loads(readiness_path.read_text())
-    assert data.get("passed") is True, ("Readiness report did not pass", str(readiness_path))
-    expected_fp = c.harness_fingerprint()
-    actual_fp = data.get("harness_sha256") or data.get("harness_fingerprint")
-    assert actual_fp == expected_fp, (
-        "Readiness fingerprint mismatch",
-        actual_fp,
-        expected_fp,
-    )
-    scope = data.get("fixture_scope", ["2014", "2024", "ashnar"])
-    assert set(["2014", "2024", "ashnar"]).issubset(set(scope)), ("Requires full 3-fixture readiness", scope)
-    cases = data.get("cases", [])
-    assert len(cases) >= 24 and all(case.get("passed") is True for case in cases), (
-        "Requires all 24 full readiness cases passing",
-        len(cases),
-    )
-    return {
-        "readiness": str(readiness_path.resolve()),
-        "fixture_scope": scope,
-        "cases": len(cases),
-        "harness_sha256": actual_fp,
-    }
+    ref = require_fixture_reference(json.loads(readiness_path.read_text()), c.harness_fingerprint(), "ashnar")
+    return dict(ref, readiness=str(readiness_path.resolve()))
 
 
 def scp_to_windows(local_path, remote_win_path):

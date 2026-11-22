@@ -22,6 +22,29 @@ def expected_cases(scope):
     return result
 
 
+def require_fixture_reference(report, fingerprint, required_fixture):
+    scope = report.get('fixture_scope', ['2014', '2024', 'ashnar'])
+    assert isinstance(scope, list) and len(scope) == len(set(scope)) and required_fixture in scope, (
+        'Unqualified reference fixture scope', required_fixture, scope)
+    assert set(scope).issubset({'2014', '2024', 'ashnar'}), ('Unknown fixture in scope', scope)
+    expected = expected_cases(scope)
+    assert report.get('passed') is True and report.get('status') == 'complete', 'Reference suite did not complete successfully'
+    assert report.get('harness_sha256') == fingerprint, 'Reference harness fingerprint changed'
+    assert report.get('planned_cases') == len(expected), 'Reference planned case count differs'
+    cases = report.get('cases', [])
+    assert [case.get('name') for case in cases] == expected, 'Reference case sequence differs'
+    assert all(case.get('passed') is True for case in cases), 'Reference contains a failed case'
+    if 'fixture_scope' in report:
+        assert report.get('expected_cases') == expected, 'Scoped reference plan differs'
+    return {
+        'fixture_scope': list(scope),
+        'cases': len(expected),
+        'required_fixture': required_fixture,
+        'harness_sha256': report['harness_sha256'],
+        'full_three_fixture_readiness': set(scope) == {'2014', '2024', 'ashnar'},
+    }
+
+
 def require_2024_reference(report, fingerprint):
     scope = report.get('fixture_scope', ['2014', '2024', 'ashnar'])
     assert scope in [['2024'], ['2014', '2024', 'ashnar']], 'Unqualified reference fixture scope'
