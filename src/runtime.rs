@@ -26,7 +26,7 @@ struct DocumentServices {
 }
 pub struct Runtime {
     pub js: Context,
-    _engine: Engine,
+    engine: Engine,
     pub loaded: usize,
     documents: Rc<documents::Documents>,
 }
@@ -267,7 +267,7 @@ impl Runtime {
         let loaded = js.with(|ctx| Self::initialize_document(ctx, pdf, &documents))?;
         Ok(Self {
             js,
-            _engine: engine,
+            engine,
             loaded,
             documents,
         })
@@ -608,6 +608,7 @@ impl Runtime {
         ctx.globals().set("__initial", initial.to_string())?;
         ctx.eval::<(), _>(concat!(include_str!("acrobat.js"), "\nvoid 0;"))
             .map_err(|e| anyhow!("Acrobat host: {e}: {:?}", ctx.catch()))?;
+        ctx.globals().remove("__initial")?;
         for (name, code) in &pdf.scripts {
             Self::eval_in(&ctx, code)
                 .with_context(|| format!("original document script {name}"))?;
@@ -656,7 +657,9 @@ impl Runtime {
         Ok(())
     }
     pub fn snapshot(&self) -> Result<Value> {
+        self.engine.run_gc();
         let s: String = self.raw("__host.snapshot()")?;
+        self.engine.run_gc();
         Ok(serde_json::from_str(&s)?)
     }
     pub fn diagnostics(&self) -> Result<Value> {
@@ -1413,5 +1416,69 @@ mod tests {
         rt.ready().unwrap();
         assert_eq!(rt.eval("started").unwrap(), json!(1));
         assert_eq!(rt.eval("polls").unwrap(), json!(0));
+    }
+    #[test]
+    fn repeated_template_spawn_delete_and_snapshot_reclaims_js_memory() {
+        let engine = Engine::new().unwrap();
+        engine.set_memory_limit(16 * 1024 * 1024);
+        let context = Context::full(&engine).unwrap();
+        let mut tpl_fields = serde_json::Map::new();
+        for i in 0..80 {
+            tpl_fields.insert(
+                format!("Slot.{i}"),
+                json!({
+                    "kind": "Tx",
+                    "flags": 0,
+                    "display": 0,
+                    "text_size": 0,
+                    "value": format!("val-{i}"),
+                    "default_value": "",
+                    "items": [],
+                    "widgets": [{"page": 0, "id": [100 + i, 0], "rect": [0, 0, 10, 10]}],
+                    "actions": {"F": "event.value = String(event.value);"},
+                    "text_color": ["RGB", 0, 0, 0],
+                    "fill_color": ["T"],
+                    "stroke_color": ["T"]
+                }),
+            );
+        }
+        let initial = json!({
+            "fields": {},
+            "order": [],
+            "info": {},
+            "bookmarks": {"children": []},
+            "pages": 1,
+            "templates": {"BigPage": {"fields": tpl_fields, "order": []}}
+        });
+        context.with(|ctx| {
+            ctx.globals().set("__initial", initial.to_string()).unwrap();
+            ctx.eval::<(), _>(concat!(include_str!("acrobat.js"), "\nvoid 0;"))
+                .unwrap();
+            ctx.globals().remove("__initial").unwrap();
+        });
+        for round in 0..6 {
+            engine.run_gc();
+            let snap: String = context.with(|ctx| {
+                ctx.eval::<(), _>(
+                    "getTemplate('BigPage').spawn(1,true,false);getField('P1.BigPage.Slot.0').textColor=['RGB',1,0,0];",
+                )
+                .unwrap();
+                let s: String = ctx.eval("__host.snapshot()").unwrap();
+                ctx.eval::<(), _>("deletePages(1);").unwrap();
+                s
+            });
+            engine.run_gc();
+            let parsed: Value = serde_json::from_str(&snap).unwrap();
+            assert_eq!(
+                parsed["P1.BigPage.Slot.0"]["textColor"],
+                json!(["RGB", 1, 0, 0]),
+                "round {round}"
+            );
+            assert_eq!(
+                parsed["P1.BigPage.Slot.79"]["value"],
+                json!("val-79"),
+                "round {round}"
+            );
+        }
     }
 }
