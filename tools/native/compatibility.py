@@ -49,7 +49,7 @@ def main():
  report['page_lifecycle']={'native':'passed-defined-probe' if life and life.get('passed') else 'unverified','acrobat':'passed-defined-probe' if lr and lr.get('passed') else 'failed-or-unverified','scope':'Hide/reveal shared template, remove/readd companion, retained character fields and changed Calculate action/order save and native reopen.'}
  workflows={name:('passed-defined-probe' if gen and gen.get('passed') and len([c for c in gen.get('cases',[]) if c.get('workflow')==name and c.get('passed')])==2 else 'unverified') for name in ['companion','wildshape','spells']}
  report['generated_acrobat_cases']=len(gw.get('cases',[])) if gw else 0
- report['runtime_repairs']=[{'id':'mpmb-2024-261023-wildshape-pop-typo','authorized_by_user':True,'qualification':'Exact Functions2 SHA-256 fingerprint and function markers','embedded_scripts_modified':False,'strict_mode':'MPMB_STRICT_ORIGINAL_SCRIPTS=1','behavior':'Replaces erroneous pop property reads with the local prop in the runtime function only.'}]
+ report['runtime_repairs']=[]
  report['next_workflows']={'companion_pages':workflows['companion'],'wild_shape_pages':workflows['wildshape'],'spell_generation':workflows['spells'],'local_file_import':'passed-defined-probe' if imp and imp.get('passed') else 'unverified','ashnar':'passed-defined-probe' if ash and ash.get('passed') else 'failing-or-unverified'}
  classes=evidence('class_progression_audit',args.classes);scope=evidence('actual_mpmb_counterexamples',args.scope_audit)
  if classes:

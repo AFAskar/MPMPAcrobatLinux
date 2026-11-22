@@ -4,7 +4,7 @@ Covers all previously-unqualified 2024 core classes (Cleric, Druid, Paladin,
 Ranger, Rogue, Sorcerer, Warlock, Wizard), Multiclassing (Paladin/Warlock +
 Fighter/Wizard), 2024 Species, 2024 Backgrounds & Origin Feats, 2024 Weapon
 Mastery, genuine class feature choices, resource spending & short/long rests,
-Spell Sheet generation, Wild Shape (including the authorized 2024 repair),
+Spell Sheet generation, Wild Shape,
 Companion pages, and cold save/reopen verification.
 """
 
@@ -101,7 +101,7 @@ PROFILES = {
     },
     "druid": {
         "batch": "A",
-        "description": "2024 Land Druid + Elf + Primal Order (Magician) + Land Type (Temperate->Arid) + Wild Shape (authorized repair) + Spell Sheet",
+        "description": "2024 Land Druid + Elf + Primal Order (Magician) + Land Type (Temperate->Arid) + Wild Shape + Spell Sheet",
         "phases": [
             (
                 "druid-l3-land-temperate",
