@@ -29,7 +29,7 @@ import reader_document_controls as closing
 import subclass_audit_qualification as qualification
 from profiles_2024 import CONSOLE_SENTINEL, PROFILES, validate_profile_state
 from reference_2024_qualification import require_2024_reference
-from verify import script_hashes
+from verify import inspect, script_hashes
 from workflow_state_comparison import encoded_state
 
 
@@ -265,90 +265,143 @@ def run_reader_profile(
 
     try:
         with c.desktop_lock():
-            assert not [
-                r
-                for r in c.command("inspect")
-                if r["class"] == "AcrobatSDIWindow" and ".pdf" in r["name"].lower()
-            ], "Pre-existing Reader document"
-            scp_to_windows(source, remote)
-            opened = True
-            c.ensure_document(remote)
-            installed()
+            try:
+                assert not [
+                    r
+                    for r in c.command("inspect")
+                    if r["class"] == "AcrobatSDIWindow" and ".pdf" in r["name"].lower()
+                ], "Pre-existing Reader document"
+                scp_to_windows(source, remote)
+                opened = True
+                c.ensure_document(remote)
+                installed()
 
-            last_state = None
-            for phase_label, ops in cfg["phases"]:
-                execute_ops(ops, last_state)
-                pt = capture(phase_label)
-                last_state = pt["state"]
-            check_console()
+                last_state = None
+                for phase_label, ops in cfg["phases"]:
+                    execute_ops(ops, last_state)
+                    pt = capture(phase_label)
+                    last_state = pt["state"]
+                check_console()
 
-            # Cold close & reopen in Reader
-            cold_label = cfg["phases"][-1][0] + "-cold"
-            report["cold_close"] = closing.close_saved(c, remote)
-            opened = False
-            remote, report["cold_reopen"] = closing.reopen_snapshot(c, remote)
-            opened = True
-            c.ensure_document(remote)
-            installed()
-            pt_cold = capture(cold_label)
+                # Cold close & reopen in Reader
+                cold_label = cfg["phases"][-1][0] + "-cold"
+                report["cold_close"] = closing.close_saved(c, remote)
+                opened = False
+                remote, report["cold_reopen"] = closing.reopen_snapshot(c, remote)
+                opened = True
+                c.ensure_document(remote)
+                installed()
+                pt_cold = capture(cold_label)
 
-            # Follow-up changed edit in Reader
-            follow_label, follow_ops = cfg["mixed_followup"]
-            execute_ops(follow_ops, pt_cold["state"])
-            pt_follow = capture(follow_label)
-            check_console()
+                # Follow-up changed edit in Reader
+                follow_label, follow_ops = cfg["mixed_followup"]
+                execute_ops(follow_ops, pt_cold["state"])
+                pt_follow = capture(follow_label)
+                check_console()
 
-            c.script("set", path=remote, values={"User Script": "", "PC Name": f"Reader {profile_name} final"})
-            final_remote = base + "-final.pdf"
-            c.script("save", path=remote, output=final_remote)
-            remote = final_remote
-            report["final_close"] = closing.close_saved(c, remote)
-            opened = False
-            reader_final_pdf = c.fetch(remote, folder / "reader-final.pdf")
-            report["reader_final_pdf"] = str(reader_final_pdf)
+                c.script("set", path=remote, values={"User Script": "", "PC Name": f"Reader {profile_name} final"})
+                final_remote = base + "-final.pdf"
+                c.script("save", path=remote, output=final_remote)
+                remote = final_remote
+                report["final_close"] = closing.close_saved(c, remote)
+                opened = False
+                reader_final_pdf = c.fetch(remote, folder / "reader-final.pdf")
+                report["reader_final_pdf"] = str(reader_final_pdf)
+            finally:
+                if opened:
+                    try:
+                        if pending_ident:
+                            for _ in range(6):
+                                dismiss_modal_dialogs()
+                                try:
+                                    report["cleanup_collected"] = c.script_result(pending_ident, timeout=5)
+                                    pending_ident = None
+                                    break
+                                except RuntimeError:
+                                    time.sleep(0.5)
+                        rows = c.command("inspect")
+                        if any(r["name"] == "JavaScript Debugger" for r in rows):
+                            try:
+                                check_console(request=False)
+                            except Exception as cerr:
+                                report["cleanup_console_error"] = str(cerr)
+                        if any(r["class"] == "#32768" for r in c.command("inspect")):
+                            c.command("keys", keys="{ESC}")
+                        retained = base + "-failed-retained.pdf"
+                        c.script("save", path=remote, output=retained)
+                        report["cleanup_close"] = closing.close_saved(c, retained)
+                        opened = False
+                        c.fetch(retained, folder / "failed-retained.pdf")
+                    except Exception as cerr:
+                        report["cleanup_error"] = str(cerr)
 
-        # Further Native Mixed-Engine Reopen & Changed Save on Reader's final PDF
-        if binary is not None:
-            mixed_pdf = folder / "further-native-changed.pdf"
-            mixed_scenario = folder / "further-native-scenario.json"
-            mixed_probe = folder / "further-native-probe.json"
-            mixed_steps = [
-                {"op": "advance", "ms": 5100},
-                {"op": "assert", "values": {"User Script": "// MPMB workflow observer installed"}},
-                {"op": "eval", "code": diagnostics.native_request()},
-                {"op": "eval", "code": profile_mod.SUMMARY},
-                {"op": "edit", "field": "Extra.Notes", "value": f"Mixed-engine native follow-up {profile_name}"},
-                {"op": "advance", "ms": 500},
-                {"op": "save", "path": str(mixed_pdf)},
-            ]
-            mixed_scenario.write_text(
-                json.dumps(
-                    {"steps": mixed_steps, "dialogs": [{"result": "ok"}] * 20, "alerts": [1] * 20},
-                    indent=2,
-                )
+        # Further Native Mixed-Engine Reopen & Changed Save on Reader's final PDF (required)
+        assert binary is not None, "Mixed-engine native binary is required for Reader class parity"
+        mixed_pdf = folder / "further-native-changed.pdf"
+        mixed_scenario = folder / "further-native-scenario.json"
+        mixed_probe = folder / "further-native-probe.json"
+        expected_note = f"Mixed-engine native follow-up {profile_name}"
+        mixed_steps = [
+            {"op": "advance", "ms": 5100},
+            {"op": "assert", "values": {"User Script": "// MPMB workflow observer installed"}},
+            {"op": "edit", "field": "Extra.Notes", "value": expected_note},
+            {"op": "advance", "ms": 500},
+            {"op": "eval", "code": diagnostics.native_request()},
+            {"op": "eval", "code": profile_mod.SUMMARY},
+            {"op": "eval", "code": "Value('User Script','');true"},
+            {"op": "save", "path": str(mixed_pdf)},
+        ]
+        mixed_scenario.write_text(
+            json.dumps(
+                {"steps": mixed_steps, "dialogs": [{"result": "ok"}] * 20, "alerts": [1] * 20},
+                indent=2,
             )
-            with (folder / "further-native.log").open("w") as out:
-                proc = subprocess.run(
-                    [str(binary), str(reader_final_pdf), "--probe", str(mixed_scenario), str(mixed_probe)],
-                    cwd=ROOT,
-                    stdout=out,
-                    stderr=out,
-                    timeout=300,
-                )
-            mdata = json.loads(mixed_probe.read_text())
-            msgs = mdata["diagnostics"]["console"]["messages"]
-            assert [m["text"] for m in msgs] == [CONSOLE_SENTINEL], (profile_name, "mixed", msgs)
-            strict = copy.deepcopy(mdata)
-            strict["diagnostics"]["console"]["messages"] = []
-            mchecked = qualification.qualify_probe(proc.returncode, strict, "further-native")
-            assert mchecked["passed"], (profile_name, mchecked)
-            assert script_hashes(mixed_pdf) == expected_scripts
-            report["mixed_native"] = {
-                "passed": True,
-                "probe": str(mixed_probe),
-                "pdf": str(mixed_pdf),
-                "pdf_sha256": sha256_file(mixed_pdf),
-            }
+        )
+        with (folder / "further-native.log").open("w") as out:
+            proc = subprocess.run(
+                [str(binary), str(reader_final_pdf), "--probe", str(mixed_scenario), str(mixed_probe)],
+                cwd=ROOT,
+                stdout=out,
+                stderr=out,
+                timeout=300,
+            )
+        mdata = json.loads(mixed_probe.read_text())
+        msgs = mdata["diagnostics"]["console"]["messages"]
+        assert [m["text"] for m in msgs] == [CONSOLE_SENTINEL], (profile_name, "mixed", msgs)
+        strict = copy.deepcopy(mdata)
+        strict["diagnostics"]["console"]["messages"] = []
+        mchecked = qualification.qualify_probe(proc.returncode, strict, "further-native")
+        assert mchecked["passed"], (profile_name, mchecked)
+        assert script_hashes(mixed_pdf) == expected_scripts
+        mixed_summary = mdata["stages"][5]["result"]
+        mixed_state = style.saved_capture(mixed_pdf, mixed_summary, source)
+        assert mixed_state["notesAndActions"]["Extra.Notes"] == expected_note, (profile_name, "mixed note mismatch")
+        assert mixed_state["identity"] == pt_follow["state"]["identity"], (profile_name, "mixed identity mismatch")
+        assert mixed_state["fields"] == pt_follow["state"]["fields"], (profile_name, "mixed fields mismatch")
+        assert mixed_state["resources"] == pt_follow["state"]["resources"], (profile_name, "mixed resources mismatch")
+        assert mixed_state["templates"] == pt_follow["state"]["templates"], (profile_name, "mixed templates mismatch")
+        assert mixed_state["pages"] == pt_follow["state"]["pages"], (profile_name, "mixed pages mismatch")
+        mixed_expected = {
+            "Extra.Notes": expected_note,
+            "Character Level": pt_follow["state"]["fields"]["Character Level"],
+            "Proficiency Bonus": pt_follow["state"]["fields"]["Proficiency Bonus"],
+            "Class and Levels": pt_follow["state"]["fields"]["Class and Levels"],
+        }
+        mixed_inspect = inspect(mixed_pdf, mixed_expected)
+        assert mixed_inspect["actual"] == mixed_expected, (profile_name, "mixed canonical inspect mismatch")
+        note_widgets = [w for w in mixed_inspect["widgets"] if w["name"] == "Extra.Notes" and w["visible"]]
+        assert note_widgets and all((w.get("appearance_text") or "").strip() for w in note_widgets), (
+            profile_name,
+            "mixed Extra.Notes missing visible AP",
+        )
+        report["mixed_native"] = {
+            "passed": True,
+            "probe": str(mixed_probe),
+            "pdf": str(mixed_pdf),
+            "pdf_sha256": sha256_file(mixed_pdf),
+            "verified_fields": mixed_expected,
+            "pages": mixed_state["pages"],
+        }
 
         report["passed"] = True
         (folder / "report.json").write_text(json.dumps(report, indent=2) + "\n")
@@ -383,32 +436,6 @@ def run_reader_profile(
         report["error"] = str(exc)
         raise
     finally:
-        if opened:
-            try:
-                with c.desktop_lock():
-                    if pending_ident:
-                        for _ in range(6):
-                            dismiss_modal_dialogs()
-                            try:
-                                report["cleanup_collected"] = c.script_result(pending_ident, timeout=5)
-                                pending_ident = None
-                                break
-                            except RuntimeError:
-                                time.sleep(0.5)
-                    rows = c.command("inspect")
-                    if any(r["name"] == "JavaScript Debugger" for r in rows):
-                        try:
-                            check_console(request=False)
-                        except Exception as cerr:
-                            report["cleanup_console_error"] = str(cerr)
-                    if any(r["class"] == "#32768" for r in c.command("inspect")):
-                        c.command("keys", keys="{ESC}")
-                    retained = base + "-failed-retained.pdf"
-                    c.script("save", path=remote, output=retained)
-                    report["cleanup_close"] = closing.close_saved(c, retained)
-                    c.fetch(retained, folder / "failed-retained.pdf")
-            except Exception as cerr:
-                report["cleanup_error"] = str(cerr)
         (folder / "report.json").write_text(json.dumps(report, indent=2) + "\n")
 
 
@@ -416,7 +443,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--native-dir", type=Path, required=True)
     parser.add_argument("--readiness", type=Path, required=True)
-    parser.add_argument("--binary", type=Path, default=None)
+    parser.add_argument("--binary", type=Path, default=ROOT / "target/debug/mpmb-reader")
     parser.add_argument("--batch", choices=["A", "B", "all"], default="all")
     parser.add_argument("--profile", action="append", choices=sorted(PROFILES))
     parser.add_argument("--skip-paired-display", action="store_true", help="Defer CPU-bound verify-paired-feature-displays.py so Reader VM can continue immediately")
