@@ -55,9 +55,6 @@ pub fn main() -> Result<()> {
         println!("mpmb-reader <sheet.pdf> [--probe <scenario.json> <report.json>]\nPDFium: MPMB_PDFIUM or output/deps/lib/libpdfium.so\nNative UI: edit fields, class selection, page navigation and save a new copy.");
         return Ok(());
     }
-    if args.iter().any(|a| a == "--strict-original-scripts") {
-        std::env::set_var("MPMB_STRICT_ORIGINAL_SCRIPTS", "1");
-    }
     let pdf = Arc::new(Pdf::open(std::path::Path::new(&args[0]))?);
     if args.get(1).map(String::as_str) == Some("--probe") {
         let scenario: Value = serde_json::from_slice(&std::fs::read(
@@ -734,15 +731,19 @@ impl eframe::App for Reader {
                     }
                 }
                 if ui.button("Select class…").clicked() {
-                    let r = self
-                        .commit_pending_edit()
-                        .and_then(|_| self.rt.eval("__host.invokeMenu('ClassesButton')").map(|_| ()));
+                    let r = self.commit_pending_edit().and_then(|_| {
+                        self.rt
+                            .eval("__host.invokeMenu('ClassesButton')")
+                            .map(|_| ())
+                    });
                     self.result(r)
                 }
                 if ui.button("Import script…").clicked() {
-                    let r = self
-                        .commit_pending_edit()
-                        .and_then(|_| self.rt.eval("ImportUserScriptFile();RunUserScript(false,false)").map(|_| ()));
+                    let r = self.commit_pending_edit().and_then(|_| {
+                        self.rt
+                            .eval("ImportUserScriptFile();RunUserScript(false,false)")
+                            .map(|_| ())
+                    });
                     self.result(r)
                 }
                 for (label, code) in [
@@ -754,12 +755,16 @@ impl eframe::App for Reader {
                     ("Generate spells", "GenerateSpellSheet()"),
                 ] {
                     if ui.button(label).clicked() {
-                        let r = self.commit_pending_edit().and_then(|_| self.rt.command(code));
+                        let r = self
+                            .commit_pending_edit()
+                            .and_then(|_| self.rt.command(code));
                         self.result(r)
                     }
                 }
                 if ui.button("Calculate").clicked() {
-                    let r = self.commit_pending_edit().and_then(|_| self.rt.eval("calculateNow()").map(|_| ()));
+                    let r = self
+                        .commit_pending_edit()
+                        .and_then(|_| self.rt.eval("calculateNow()").map(|_| ()));
                     self.result(r)
                 }
             });
@@ -768,20 +773,68 @@ impl eframe::App for Reader {
                 ui.text_edit_singleline(&mut self.save_path);
                 if ui.button("Save").clicked() {
                     let r = self.save_copy();
-                    let saved=r.is_ok();self.result(r);if saved{self.unsaved=false;}
+                    let saved = r.is_ok();
+                    self.result(r);
+                    if saved {
+                        self.unsaved = false;
+                    }
                 }
             });
-            ui.menu_button("MPMB tools",|ui|{match self.rt.eval("__host.menuItems()"){
-                Ok(items)=>if let Some(items)=items.as_array(){for item in items{let name=item["name"].as_str().unwrap_or("");if !self.menu_images.contains_key(name){if let Some(image)=argb_image(&item["icon"]){self.menu_images.insert(name.into(),ctx.load_texture(name,image,Default::default()));}}
-                    ui.horizontal(|ui|{if let Some(image)=self.menu_images.get(name){ui.image(image);}
-                        if ui.add_enabled(item["enabled"]==true,egui::Button::new(format!("{}{}",if item["marked"]==true{"✓ "}else{""},item["label"].as_str().unwrap_or(name)))).on_hover_text(item["tooltip"].as_str().unwrap_or("")).clicked(){let r=self.commit_pending_edit().and_then(|_|self.rt.eval(&format!("__host.invokeMenu({})",serde_json::to_string(name).unwrap())).map(|_|()));self.result(r);ui.close();}
-                    });
-                }},Err(e)=>{ui.label(format!("Menu error: {e:#}"));}
-            }});
+            ui.menu_button("MPMB tools", |ui| {
+                match self.rt.eval("__host.menuItems()") {
+                    Ok(items) => {
+                        if let Some(items) = items.as_array() {
+                            for item in items {
+                                let name = item["name"].as_str().unwrap_or("");
+                                if !self.menu_images.contains_key(name) {
+                                    if let Some(image) = argb_image(&item["icon"]) {
+                                        self.menu_images.insert(
+                                            name.into(),
+                                            ctx.load_texture(name, image, Default::default()),
+                                        );
+                                    }
+                                }
+                                ui.horizontal(|ui| {
+                                    if let Some(image) = self.menu_images.get(name) {
+                                        ui.image(image);
+                                    }
+                                    if ui
+                                        .add_enabled(
+                                            item["enabled"] == true,
+                                            egui::Button::new(format!(
+                                                "{}{}",
+                                                if item["marked"] == true { "✓ " } else { "" },
+                                                item["label"].as_str().unwrap_or(name)
+                                            )),
+                                        )
+                                        .on_hover_text(item["tooltip"].as_str().unwrap_or(""))
+                                        .clicked()
+                                    {
+                                        let r = self.commit_pending_edit().and_then(|_| {
+                                            self.rt
+                                                .eval(&format!(
+                                                    "__host.invokeMenu({})",
+                                                    serde_json::to_string(name).unwrap()
+                                                ))
+                                                .map(|_| ())
+                                        });
+                                        self.result(r);
+                                        ui.close();
+                                    }
+                                });
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        ui.label(format!("Menu error: {e:#}"));
+                    }
+                }
+            });
             if ui.button("Console").clicked() {
-                if let Err(error) = self.rt.eval("console.show()") { self.status = format!("Console failed: {error:#}"); }
+                if let Err(error) = self.rt.eval("console.show()") {
+                    self.status = format!("Console failed: {error:#}");
+                }
             }
-            if let Ok(d)=self.rt.diagnostics(){if d["repairs"].as_array().is_some_and(|v|!v.is_empty()){ui.colored_label(egui::Color32::YELLOW,"Known sheet repair active: 2024 wild-shape typo. Original PDF scripts are preserved.");}}
             ui.label(&self.status);
         });
         egui::SidePanel::left("fields")

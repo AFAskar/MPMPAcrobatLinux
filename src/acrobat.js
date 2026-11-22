@@ -13,7 +13,7 @@ String.prototype.replace=function(pattern,replacement){
 };
 var __host = (function () {
   const data=JSON.parse(__initial), fields={}, names=[], journal=[];
-  const timers=new Map(), menus={}, gaps=[], errors=[], repairs=[], printJobs=[], attachmentExports=[], xfdfImports=[], launchedUrls=[], assigning=new Set(), formatDirty=new Set(), formatting=new Set();
+  const timers=new Map(), menus={}, gaps=[], errors=[], printJobs=[], attachmentExports=[], xfdfImports=[], launchedUrls=[], assigning=new Set(), formatDirty=new Set(), formatting=new Set();
   let clock=0, timerId=0, calculating=false, pending=false, revision=0, importBatch=0, importActive=0, paneState='';
   const applicationState=globalThis.__nativeApplicationState||(globalThis.__nativeApplicationState={});
   const iconTokens=applicationState.iconTokens||(applicationState.iconTokens=new WeakSet());
@@ -349,16 +349,7 @@ var __host = (function () {
     }
     def.description.elements=items.map(build).filter(Boolean);const result=execDialog(def);return Object.prototype.hasOwnProperty.call(choices,result)?choices[result]:null;
   }
-  function applyQualifiedRepairs(){
-    if(!data.repair_allowed)return;
-    const source=globalThis.ApplyWildshape&&ApplyWildshape.toString();
-    if(!source||!source.includes('var prop = entries[i];')||!source.includes('pop.wildshapeShow'))throw Error('Qualified wild-shape repair did not match the loaded function');
-    const fixed=source.replace(/\bpop\./g,'prop.');
-    globalThis.ApplyWildshape=(0,eval)('('+fixed+')');
-    const repair={id:'mpmb-2024-261023-wildshape-pop-typo',scope:'runtime only',embedded_scripts_modified:false,reason:'Original ApplyWildshape reads pop instead of its local prop variable'};
-    repairs.push(repair);__log('Applied qualified runtime repair: '+repair.id);
-  }
-  return {activate,focusField,userEdit,selectChoice,pageWidgets,widgetDisplay,setWidgetDisplay,widgetRect,setWidgetRect,menuItems,popup,applyQualifiedRepairs,get revision(){return revision},recordError(e){errors.push(e)},fields,names,data,menus,gaps,errors,source,unsupported,gap,calculateNow,edit,advance,execDialog,invokeMenu,command,spawn,removeField,deletePages,importXFDF,
+  return {activate,focusField,userEdit,selectChoice,pageWidgets,widgetDisplay,setWidgetDisplay,widgetRect,setWidgetRect,menuItems,popup,get revision(){return revision},recordError(e){errors.push(e)},fields,names,data,menus,gaps,errors,source,unsupported,gap,calculateNow,edit,advance,execDialog,invokeMenu,command,spawn,removeField,deletePages,importXFDF,
     consoleView(){return copyData(consoleState)},
     consoleVisible(visible){consoleState.visible=!!visible},
     consolePrint(message){consoleState.messages.push({document:data.file,text:message});__log(message)},
@@ -371,7 +362,7 @@ var __host = (function () {
     timer(code,ms){let id=++timerId;timers.set(id,{id,code:String(code),at:clock+Math.max(1,Number(ms)||1)});return id},clear(id){timers.delete(id)},
     launchURL(url,newFrame=false){const target=String(url||'');if(!/^https?:\/\/[^\s\x00-\x1f]{1,4080}$/i.test(target))throw Error('Unsupported URL scheme: '+target);const record=typeof __launchUrl==='function'?JSON.parse(__launchUrl(target,!!newFrame)):{url:target,new_frame:!!newFrame,launched:false};launchedUrls.push(record);return undefined;},
     get pane(){return paneState},set pane(v){const next=String(v||'').toLowerCase();if(!['','bookmarks','thumbnails','layers','attachments','signatures'].includes(next))throw Error('Invalid document pane: '+v);paneState=next;},
-    diagnostics(){return JSON.stringify({gaps,errors,repairs,printJobs,attachmentExports,xfdfImports,iconImports,launchedUrls,pane:paneState,console:consoleState,timers:timers.size,field_count:names.length,menus:Object.keys(menus)})}
+    diagnostics(){return JSON.stringify({gaps,errors,repairs:[],printJobs,attachmentExports,xfdfImports,iconImports,launchedUrls,pane:paneState,console:consoleState,timers:timers.size,field_count:names.length,menus:Object.keys(menus)})}
   };
 })();
 var display={visible:0,hidden:1,noPrint:2,noView:3};

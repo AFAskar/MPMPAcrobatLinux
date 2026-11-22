@@ -325,15 +325,6 @@ impl Runtime {
         })?)?;
         ctx.globals()
             .set("__xfdfRich", Function::new(ctx.clone(), decode_xfdf_rich)?)?;
-        let repair_allowed = std::env::var_os("MPMB_STRICT_ORIGINAL_SCRIPTS").is_none()
-            && pdf.scripts.iter().any(|(name, source)| {
-                name == "Functions2"
-                    && Sha256::digest(source.as_bytes())
-                        .iter()
-                        .map(|b| format!("{b:02x}"))
-                        .collect::<String>()
-                        == "ce4624265af7fad2456badd108fa6003e5dbb939263ee7269a4cbbf9e3055857"
-            });
         let icon_base = pdf
             .path
             .parent()
@@ -605,7 +596,7 @@ impl Runtime {
                 },
             )?,
         )?;
-        let initial = json!({"attachments":attachment_metadata,"repair_allowed":repair_allowed,"templates":pdf.templates,"trace":std::env::var("MPMB_TRACE_FIELDS").unwrap_or_default().split(',').collect::<Vec<_>>(),"bookmarks":pdf.bookmarks,"fields":pdf.fields,"order":pdf.order,"info":pdf.info,"file":pdf.path.file_name().unwrap().to_string_lossy(),"path":pdf.path,"pages":pdf.doc.get_pages().len()});
+        let initial = json!({"attachments":attachment_metadata,"templates":pdf.templates,"trace":std::env::var("MPMB_TRACE_FIELDS").unwrap_or_default().split(',').collect::<Vec<_>>(),"bookmarks":pdf.bookmarks,"fields":pdf.fields,"order":pdf.order,"info":pdf.info,"file":pdf.path.file_name().unwrap_or_default().to_string_lossy(),"path":pdf.path,"pages":pdf.doc.get_pages().len()});
         ctx.globals().set(
             "__roundRichMetric",
             Function::new(ctx.clone(), round_rich_metric)?,
@@ -621,7 +612,6 @@ impl Runtime {
             Self::eval_in(&ctx, code)
                 .with_context(|| format!("original document script {name}"))?;
         }
-        Self::eval_in(&ctx, "__host.applyQualifiedRepairs()")?;
         let diagnostics: Value =
             serde_json::from_str(&Self::raw_in(&ctx, "__host.diagnostics()")?)?;
         if diagnostics["errors"]
@@ -672,22 +662,19 @@ impl Runtime {
         let s: String = self.raw("__host.diagnostics()")?;
         let mut diagnostics: Value = serde_json::from_str(&s)?;
         let documents = self.documents.report();
-        // A source can activate a qualified repair or encounter an original
-        // error even when the target has neither. Retain UI disclosure and
-        // probe failure evidence after the source is discarded.
+        // A source can encounter an original error even when the target has none.
+        // Retain probe failure evidence after the source is discarded.
         for group in ["open", "events"] {
             if let Some(records) = documents[group].as_array() {
                 for record in records {
-                    for key in ["repairs", "errors"] {
-                        if let Some(items) = record["diagnostics"][key].as_array() {
-                            for item in items {
-                                let mut item = item.clone();
-                                item["source_document"] = record["path"].clone();
-                                diagnostics[key]
-                                    .as_array_mut()
-                                    .context("Invalid diagnostic array")?
-                                    .push(item);
-                            }
+                    if let Some(items) = record["diagnostics"]["errors"].as_array() {
+                        for item in items {
+                            let mut item = item.clone();
+                            item["source_document"] = record["path"].clone();
+                            diagnostics["errors"]
+                                .as_array_mut()
+                                .context("Invalid diagnostic array")?
+                                .push(item);
                         }
                     }
                 }
