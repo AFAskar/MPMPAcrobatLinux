@@ -68,10 +68,12 @@ def imported_and_spell_digests(pdf_path):
 def require_full_three_fixture_reference(readiness_path):
     data = json.loads(readiness_path.read_text())
     assert data.get("passed") is True, ("Readiness report did not pass", str(readiness_path))
-    assert data.get("harness_fingerprint") == c.harness_fingerprint(), (
+    expected_fp = c.harness_fingerprint()
+    actual_fp = data.get("harness_sha256") or data.get("harness_fingerprint")
+    assert actual_fp == expected_fp, (
         "Readiness fingerprint mismatch",
-        data.get("harness_fingerprint"),
-        c.harness_fingerprint(),
+        actual_fp,
+        expected_fp,
     )
     scope = data.get("fixture_scope", ["2014", "2024", "ashnar"])
     assert set(["2014", "2024", "ashnar"]).issubset(set(scope)), ("Requires full 3-fixture readiness", scope)
@@ -84,7 +86,7 @@ def require_full_three_fixture_reference(readiness_path):
         "readiness": str(readiness_path.resolve()),
         "fixture_scope": scope,
         "cases": len(cases),
-        "harness_fingerprint": data["harness_fingerprint"],
+        "harness_sha256": actual_fp,
     }
 
 
