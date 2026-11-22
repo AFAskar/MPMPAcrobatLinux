@@ -245,19 +245,16 @@ def main():
                 capture("ashnar-baseline")
 
                 # Phase 2: Combat spend, damage, notes, selective short rest
-                c.script(
-                    "set",
-                    path=remote,
-                    values={
-                        "Limited Feature Used 1": "9",
-                        "Limited Feature Used 2": "1",
-                        "Limited Feature Used 3": "1",
-                        "HP Current": "38",
-                        "HP Temp": "5",
-                        "HD1 Used": "3",
-                        "P5.ASnotes.Notes.Left": "Ashnar session note: shadow ambush",
-                    },
-                )
+                for field_name, field_value in [
+                    ("Limited Feature Used 1", "9"),
+                    ("Limited Feature Used 2", "1"),
+                    ("Limited Feature Used 3", "1"),
+                    ("HP Current", "38"),
+                    ("HP Temp", "5"),
+                    ("HD1 Used", "3"),
+                    ("P5.ASnotes.Notes.Left", "Ashnar session note: shadow ambush"),
+                ]:
+                    c.script("set", path=remote, values={field_name: field_value})
                 submit_with_dialogs("call", name="resetLimFeaUsed", args=["short rest"])
                 capture("ashnar-combat-spend-short-rest")
 
