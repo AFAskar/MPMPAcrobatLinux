@@ -226,74 +226,82 @@ def main():
 
     try:
         with c.desktop_lock():
-            assert not [
-                r
-                for r in c.command("inspect")
-                if r["class"] == "AcrobatSDIWindow" and ".pdf" in r["name"].lower()
-            ], "Pre-existing Reader document"
-            scp_to_windows(source, remote)
-            opened = True
-            c.ensure_document(remote)
-            installed()
-            c.script("call", path=remote, name="DoTemplate", args=["ALlog", "Add", None, True])
-            al_list = c.script("read", path=remote, fields=["Template.extras.ALlog"])["fields"]["Template.extras.ALlog"]
-            al_pre = al_list.split(",")[1]
-            c.script("set", path=remote, values={"DateFormat_Remember": "d mmm yyyy", "Decimal Separator": "comma"})
-            c.script(
-                "set",
-                path=remote,
-                values={
-                    al_pre + "AdvLog.1.date": "2024-03-06",
-                    al_pre + "AdvLog.1.gold.gain": "1200+34.5",
-                },
-            )
+            try:
+                assert not [
+                    r
+                    for r in c.command("inspect")
+                    if r["class"] == "AcrobatSDIWindow" and ".pdf" in r["name"].lower()
+                ], "Pre-existing Reader document"
+                scp_to_windows(source, remote)
+                opened = True
+                c.ensure_document(remote)
+                installed()
+                c.script("call", path=remote, name="DoTemplate", args=["ALlog", "Add", None, True])
+                al_list = c.script("read", path=remote, fields=["Template.extras.ALlog"])["fields"]["Template.extras.ALlog"]
+                al_pre = al_list.split(",")[1]
+                c.script("set", path=remote, values={"DateFormat_Remember": "d mmm yyyy", "Decimal Separator": "comma"})
+                c.script(
+                    "set",
+                    path=remote,
+                    values={
+                        al_pre + "AdvLog.1.date": "2024-03-06",
+                        al_pre + "AdvLog.1.gold.gain": "1200+34.5",
+                    },
+                )
 
-            timer1 = diagnostics.reader_request(c, remote)
-            summary1 = c.script("field_summary", path=remote, fields=["PC Name"])["fields"]["PC Name"]
-            c.script("set", path=remote, values={"User Script": ""})
-            rdr_remote_1 = base + "-phase1-mobile.pdf"
-            c.script("save", path=remote, output=rdr_remote_1)
-            remote = rdr_remote_1
-            rdr_s1 = c.fetch(remote, out / "reader-phase1-mobile.pdf")
-            rdr_state_1 = style.saved_capture(rdr_s1, summary1, source)
-            assert script_hashes(rdr_s1) == expected_scripts
-            check_console()
-            report["phase1_close"] = closing.close_saved(c, remote)
-            opened = False
+                timer1 = diagnostics.reader_request(c, remote)
+                summary1 = c.script("field_summary", path=remote, fields=["PC Name"])["fields"]["PC Name"]
+                c.script("set", path=remote, values={"User Script": ""})
+                rdr_remote_1 = base + "-phase1-mobile.pdf"
+                c.script("save", path=remote, output=rdr_remote_1)
+                remote = rdr_remote_1
+                rdr_s1 = c.fetch(remote, out / "reader-phase1-mobile.pdf")
+                rdr_state_1 = style.saved_capture(rdr_s1, summary1, source)
+                assert script_hashes(rdr_s1) == expected_scripts
+                check_console()
+                report["phase1_close"] = closing.close_saved(c, remote)
+                opened = False
 
-            assert encoded_state(rdr_state_1) == encoded_state(nat_state_1), (
-                "Phase 1 Reader vs Native mismatch",
-                rdr_state_1,
-                nat_state_1,
-            )
-            report["reader_states"]["phase1"] = {"state": rdr_state_1, "timer": timer1, "pdf": str(rdr_s1)}
-            print("Reader toolbar parity phase 1 (APIs, ALlog, colors, non-BMP, mobile): PASS", flush=True)
+                assert encoded_state(rdr_state_1) == encoded_state(nat_state_1), (
+                    "Phase 1 Reader vs Native mismatch",
+                    rdr_state_1,
+                    nat_state_1,
+                )
+                report["reader_states"]["phase1"] = {"state": rdr_state_1, "timer": timer1, "pdf": str(rdr_s1)}
+                print("Reader toolbar parity phase 1 (APIs, ALlog, colors, non-BMP, mobile): PASS", flush=True)
 
-            # Phase 2: Cold Reader reopen -> observer confirms preMobile.active=true then MakeMobileReady(false)
-            remote, report["phase2_reopen"] = closing.reopen_snapshot(c, remote)
-            opened = True
-            c.ensure_document(remote)
-            installed()
-            timer2 = diagnostics.reader_request(c, remote)
-            summary2 = c.script("field_summary", path=remote, fields=["PC Name"])["fields"]["PC Name"]
-            c.script("set", path=remote, values={"User Script": ""})
-            rdr_remote_2 = base + "-phase2-unmobile.pdf"
-            c.script("save", path=remote, output=rdr_remote_2)
-            remote = rdr_remote_2
-            rdr_s2 = c.fetch(remote, out / "reader-phase2-unmobile.pdf")
-            rdr_state_2 = style.saved_capture(rdr_s2, summary2, source)
-            assert script_hashes(rdr_s2) == expected_scripts
-            check_console()
-            report["phase2_close"] = closing.close_saved(c, remote)
-            opened = False
+                # Phase 2: Cold Reader reopen -> observer confirms preMobile.active=true then MakeMobileReady(false)
+                remote, report["phase2_reopen"] = closing.reopen_snapshot(c, remote)
+                opened = True
+                c.ensure_document(remote)
+                installed()
+                timer2 = diagnostics.reader_request(c, remote)
+                summary2 = c.script("field_summary", path=remote, fields=["PC Name"])["fields"]["PC Name"]
+                c.script("set", path=remote, values={"User Script": ""})
+                rdr_remote_2 = base + "-phase2-unmobile.pdf"
+                c.script("save", path=remote, output=rdr_remote_2)
+                remote = rdr_remote_2
+                rdr_s2 = c.fetch(remote, out / "reader-phase2-unmobile.pdf")
+                rdr_state_2 = style.saved_capture(rdr_s2, summary2, source)
+                assert script_hashes(rdr_s2) == expected_scripts
+                check_console()
+                report["phase2_close"] = closing.close_saved(c, remote)
+                opened = False
 
-            assert encoded_state(rdr_state_2) == encoded_state(nat_state_2), (
-                "Phase 2 Reader vs Native mismatch",
-                rdr_state_2,
-                nat_state_2,
-            )
-            report["reader_states"]["phase2"] = {"state": rdr_state_2, "timer": timer2, "pdf": str(rdr_s2)}
-            print("Reader toolbar parity phase 2 (cold reopen + MakeMobileReady false): PASS", flush=True)
+                assert encoded_state(rdr_state_2) == encoded_state(nat_state_2), (
+                    "Phase 2 Reader vs Native mismatch",
+                    rdr_state_2,
+                    nat_state_2,
+                )
+                report["reader_states"]["phase2"] = {"state": rdr_state_2, "timer": timer2, "pdf": str(rdr_s2)}
+                print("Reader toolbar parity phase 2 (cold reopen + MakeMobileReady false): PASS", flush=True)
+            finally:
+                if opened:
+                    try:
+                        report["cleanup_close"] = closing.close_saved(c, remote)
+                        opened = False
+                    except Exception as err:
+                        report["cleanup_error"] = str(err)
 
         # Verify actual formatted AP text in BOTH Native and Reader PDFs for ALlog date & comma gold!
         for label, npdf, rpdf in [("phase1", nat_s1, rdr_s1), ("phase2", nat_s2, rdr_s2)]:
