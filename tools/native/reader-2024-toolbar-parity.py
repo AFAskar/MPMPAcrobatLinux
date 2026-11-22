@@ -341,11 +341,6 @@ def main():
         report["passed"] = True
         print("Mixed-engine Native reopen of Reader mobile/color/non-BMP/ALlog PDF: PASS", flush=True)
     finally:
-        if opened:
-            try:
-                closing.close_saved(c, remote)
-            except Exception as err:
-                report["cleanup_error"] = str(err)
         (out / "toolbar-parity.json").write_text(json.dumps(report, indent=2) + "\n")
 
     print(out / "toolbar-parity.json", flush=True)
