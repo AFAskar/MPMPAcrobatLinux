@@ -41,6 +41,7 @@ def worker(request,out):
    a=inspect(q['native'],nt);gc.collect();b=inspect(q['reference'],rt);gc.collect();r['display']=[]
    for name in nt:
     left=[w for w in a['widgets'] if w['name']==name and w['visible']];right=[w for w in b['widgets'] if w['name']==name and w['visible']];assert len(left)==len(right),(name,'visible widget count')
+    if normalized(nt[name]):assert left and right,(name,'Populated field has no visible widgets')
     for x,y in zip(left,right):
      sx,sy=normalized(x['appearance_text']),normalized(y['appearance_text']);same=sx==sy
      if normalized(nt[name]):assert sx and sy,(name,'Populated visible field has no paired display')
