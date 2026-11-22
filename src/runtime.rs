@@ -612,6 +612,7 @@ impl Runtime {
             Self::eval_in(&ctx, code)
                 .with_context(|| format!("original document script {name}"))?;
         }
+        Self::eval_in(&ctx, "__host.finishStartupLoad()")?;
         let diagnostics: Value =
             serde_json::from_str(&Self::raw_in(&ctx, "__host.diagnostics()")?)?;
         if diagnostics["errors"]
@@ -1387,5 +1388,30 @@ mod tests {
           italicStyle&&sameGet&&sameAfterCopy&&importedCode===0&&sameImported&&
           btn===1&&seenAlert.cMsg==='Nothing found'&&seenAlert.nIcon===1&&seenAlert.nType===0&&seenAlert.cTitle==='Nothing to Export'"#,
         );
+    }
+    #[test]
+    fn ready_drains_startup_timers_without_looping_on_repeating_post_startup_timers() {
+        let mut doc = lopdf::Document::new();
+        let pages = doc.add_object(lopdf::dictionary! {"Type"=>"Pages","Kids"=>vec![],"Count"=>0});
+        let root = doc.add_object(lopdf::dictionary! {"Type"=>"Catalog","Pages"=>pages});
+        doc.trailer.set("Root", root);
+        let pdf = Arc::new(Pdf {
+            doc,
+            fields: std::collections::BTreeMap::new(),
+            scripts: vec![(
+                "StartupTimer".into(),
+                "var started=0; var polls=0; function onStart(){started++; app.setTimeOut('onPoll()', 250);} function onPoll(){polls++; app.setTimeOut('onPoll()', 250);} app.setTimeOut('onStart()', 4000);".into(),
+            )],
+            order: Vec::new(),
+            info: json!({}),
+            bookmarks: json!({"name":"Root","children":[]}),
+            path: PathBuf::from("Cargo.toml"),
+            templates: std::collections::BTreeMap::new(),
+        });
+        let rt = Runtime::new(&pdf, vec![], vec![], false, None, None).unwrap();
+        assert_eq!(rt.eval("started").unwrap(), json!(0));
+        rt.ready().unwrap();
+        assert_eq!(rt.eval("started").unwrap(), json!(1));
+        assert_eq!(rt.eval("polls").unwrap(), json!(0));
     }
 }
