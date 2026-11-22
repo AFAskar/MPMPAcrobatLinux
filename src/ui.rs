@@ -46,6 +46,8 @@ fn page_widget_hit(widgets: &[Value], x: f32, y: f32) -> Option<Value> {
         .cloned()
 }
 
+const TOOLBAR_IMPORT_SCRIPT_ACTION: &str = "if(ImportUserScriptFile())RunUserScript(false,false)";
+
 pub fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("--dialog") {
@@ -739,11 +741,9 @@ impl eframe::App for Reader {
                     self.result(r)
                 }
                 if ui.button("Import script…").clicked() {
-                    let r = self.commit_pending_edit().and_then(|_| {
-                        self.rt
-                            .eval("ImportUserScriptFile();RunUserScript(false,false)")
-                            .map(|_| ())
-                    });
+                    let r = self
+                        .commit_pending_edit()
+                        .and_then(|_| self.rt.eval(TOOLBAR_IMPORT_SCRIPT_ACTION).map(|_| ()));
                     self.result(r)
                 }
                 for (label, code) in [
@@ -2068,5 +2068,32 @@ mod dialog_tests {
             dialog.popup_options.get("sp01"),
             Some(&json!({"Fireball": -1, "Shield": 2}))
         );
+    }
+
+    #[test]
+    fn toolbar_import_script_skips_rerun_when_import_is_cancelled() {
+        let mut doc = lopdf::Document::new();
+        let pages = doc.add_object(lopdf::dictionary! {"Type"=>"Pages","Kids"=>vec![],"Count"=>0});
+        let root = doc.add_object(lopdf::dictionary! {"Type"=>"Catalog","Pages"=>pages});
+        doc.trailer.set("Root", root);
+        let pdf = Pdf {
+            doc,
+            fields: BTreeMap::new(),
+            scripts: vec![(
+                "ImportHarness".into(),
+                "var runs=0; var nextImport=false; function ImportUserScriptFile(){return nextImport;} function RunUserScript(a,b){runs++;}".into(),
+            )],
+            order: Vec::new(),
+            info: json!({}),
+            bookmarks: json!({"name":"Root","children":[]}),
+            path: PathBuf::from("Cargo.toml"),
+            templates: BTreeMap::new(),
+        };
+        let rt = Runtime::new(&Arc::new(pdf), vec![], vec![], false, None, None).unwrap();
+        rt.eval(TOOLBAR_IMPORT_SCRIPT_ACTION).unwrap();
+        assert_eq!(rt.eval("runs").unwrap(), json!(0));
+        rt.eval("nextImport = true").unwrap();
+        rt.eval(TOOLBAR_IMPORT_SCRIPT_ACTION).unwrap();
+        assert_eq!(rt.eval("runs").unwrap(), json!(1));
     }
 }
