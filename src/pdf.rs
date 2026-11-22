@@ -1337,17 +1337,58 @@ impl Pdf {
     }
     pub fn save_new(&self, state: &Value, path: &Path) -> Result<()> {
         // Refuse overwrites, including originals, aliases, and existing generated outputs.
+        if path.exists() {
+            bail!("save requires a new disposable path");
+        }
         let bytes = self.project(state)?;
-        use std::io::Write;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
-            .context("save requires a new disposable path")?;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-        Ok(())
+        write_bytes_atomic_new(&bytes, path, |file, data| {
+            use std::io::Write;
+            file.write_all(data)?;
+            file.sync_all()?;
+            Ok(())
+        })
     }
+}
+
+fn write_bytes_atomic_new<F>(bytes: &[u8], path: &Path, writer: F) -> Result<()>
+where
+    F: FnOnce(&mut std::fs::File, &[u8]) -> std::io::Result<()>,
+{
+    if path.exists() {
+        bail!("save requires a new disposable path");
+    }
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let stem = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("output.pdf");
+    let pid = std::process::id();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = parent.join(format!(".{stem}.mpmb-tmp-{pid}-{nanos}"));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .with_context(|| format!("failed to create staging file {}", tmp.display()))?;
+    let write_res = writer(&mut file, bytes);
+    drop(file);
+    if let Err(err) = write_res {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(err).context("failed to write staged PDF");
+    }
+    let publish_res = std::fs::hard_link(&tmp, path);
+    let _ = std::fs::remove_file(&tmp);
+    publish_res.context("save requires a new disposable path")?;
+    if let Ok(dir) = std::fs::File::open(parent) {
+        let _ = dir.sync_all();
+    }
+    Ok(())
 }
 
 fn update_action(doc: &mut Document, id: ObjectId, key: &str, code: &str) -> Result<()> {
@@ -1713,5 +1754,45 @@ mod action_tests {
         let reloaded = Document::load_mem(&bytes).unwrap();
         assert!(reloaded.get_dictionary(btn_a).unwrap().has(b"DA"));
         assert!(reloaded.get_dictionary(box_only).unwrap().has(b"AP"));
+    }
+
+    #[test]
+    fn atomic_save_cleans_up_failed_writes_and_refuses_overwrites() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!(
+            "mpmb-atomic-save-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("character.pdf");
+
+        // Failed write must clean up staging file and leave target nonexistent so retry works.
+        let err = write_bytes_atomic_new(b"%PDF-1.7\n", &target, |file, data| {
+            file.write_all(&data[..4])?;
+            Err(std::io::Error::other("simulated disk full"))
+        });
+        assert!(err.is_err());
+        assert!(!target.exists());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+
+        // Retry on the exact same path succeeds cleanly and leaves zero temp files.
+        write_bytes_atomic_new(b"%PDF-1.7\nfull", &target, |file, data| {
+            file.write_all(data)?;
+            file.sync_all()
+        })
+        .unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"%PDF-1.7\nfull");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+
+        // Existing target is never overwritten.
+        let overwrite =
+            write_bytes_atomic_new(b"clobber", &target, |file, data| file.write_all(data));
+        assert!(overwrite.is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"%PDF-1.7\nfull");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
