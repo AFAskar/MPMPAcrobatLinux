@@ -9,7 +9,8 @@
       "ashnar"
     ],
     "current_release_ready": false,
-    "release_gates": "docs/2024-readiness.md"
+    "release_gates": "docs/2024-readiness.md",
+    "2024_functional_gates_passed": true
   },
   "schema": 4,
   "claim": "Call sites are inventory, not behavioral passes. Partial support does not establish full compatibility.",
@@ -188,7 +189,8 @@
         "2024": 20,
         "ashnar": 20
       },
-      "status": "unsupported-or-unverified"
+      "status": "partial",
+      "note": "Records/opens URLs; qualified in 2024 Sources bLin and Patreon bPat workflows."
     },
     {
       "api": "app.listMenuItems",
@@ -197,7 +199,8 @@
         "2024": 2,
         "ashnar": 2
       },
-      "status": "unsupported-or-unverified"
+      "status": "partial",
+      "note": "Returns native menu list without Acrobat hamburger entry; qualified in 2024 Sources dialog."
     },
     {
       "api": "app.openDoc",
@@ -361,7 +364,8 @@
         "2024": 2,
         "ashnar": 2
       },
-      "status": "unsupported-or-unverified"
+      "status": "partial",
+      "note": "Exports embedded PDF attachments safely; qualified with 2024 FAQ.pdf attachment export."
     },
     {
       "api": "tDoc.extractPages",
@@ -424,7 +428,8 @@
         "2024": 1,
         "ashnar": 1
       },
-      "status": "unsupported-or-unverified"
+      "status": "partial",
+      "note": "Parses and commits XFDF with preflight/validation; qualified in 2024 exportAsXFDFStr -> importAnXFDF roundtrip."
     },
     {
       "api": "tDoc.print",
@@ -460,7 +465,8 @@
         "2024": 1,
         "ashnar": 1
       },
-      "status": "unsupported-or-unverified"
+      "status": "partial",
+      "note": "Alpha-preserving icon stream extraction; qualified in Native and Real Adobe Acrobat Reader 2024 Patreon icon parity."
     },
     {
       "api": "util.printd",
@@ -3617,5 +3623,110 @@
     "counterexample": "Old both-empty false positive retained in paired-feature-negative1795194460017042630/both-empty-old-counterexample.json and old executed source archived in local monk-paired-feature-checker1795194500/previous. Do not treat old text-equality checks alone as a generic visible-presence verifier.",
     "scope": "Captured fields/resources/notesAndActions only; exact canonical values and full captured typed JSON equality, recorded field Format hashes, original embedded script hashes when --original supplied. Paired visible AP text uses disclosed NFKC/whitespace and integer-leading-sign normalization; raw displays remain separate. Pushbutton/checkbox canonical only. No checkbox/button appearance, geometry, rich-span API, raw Stringified or pixel/full-character claim. Intentional blank formatter output for nonempty visible values is unqualified and rejected.",
     "active": "Full six-state Mercy Native/Reader pair now running locally in mercy-feature-paired-displays1795195700; wait terminal report before claiming completed pair."
+  },
+  "2024_promoted_174_baseline": {
+    "status": "PASS: 2024 functional release gates A-E met; overall 3-fixture goal remains active for 2014 and Ashnar",
+    "promoted_commit": "af234cd",
+    "promoted_binary": "target/debug/mpmb-reader",
+    "promoted_binary_sha256": "ee2e474e8a4a60fa8d11e006caa11fc1b91a48264cceaf9d7de7674e966d3a71",
+    "archived_prior_binary": "output/testing/historical-5ec7df/mpmb-reader",
+    "sealed_c77eef1_x64_sha256": "e7a36c3aa60d768d830c20d4b3d740c9e09de36061a8678b893e5f4cf71859b0",
+    "sealed_c77eef1_arm64_sha256": "376e494dd845298126988c8d0e7df747987a44cb3d8d4917e8bd4976017f8b65",
+    "build_validation": "output/testing/build-validation-174-clean-1795283575",
+    "rust_tests": 174,
+    "clippy_warnings": 0,
+    "rustfmt_clean": true,
+    "acceptance_2024": "output/testing/native-acceptance-1795283592878141141/acceptance.json",
+    "local_reference_readiness": "output/testing/readiness-1795185564.json",
+    "cloud_cloud-lab_reference_readiness": "output/testing/readiness-1795185747.json",
+    "review_fixes_commit": "c77eef1",
+    "review_fixes_summary": "All 12 Codex gpt-6.1-sol adversarial review findings resolved with unit tests (recursive icon resource-graph/Matrix hashing, textFont fontStyle, interactive choice changeEx origin, pushbutton DA fallback, box fill/stroke/border AP invalidation and painting, consistent non-BMP appearance_char width/encoding, printf flags/separator/#/-, scand hh/h/tt/t/ddd/dddd, PopupEdit option preservation, interned assetIconToken, transparent iconStreamFromIcon alpha, saturating SpinEdit)."
+  },
+  "2024_full_subclass_and_sidekick_qualification": {
+    "status": "PASS: 108/108 clean 2024 subclasses and explicit sidekicks on c77eef1 ARM64",
+    "binary_sha256": "376e494dd845298126988c8d0e7df747987a44cb3d8d4917e8bd4976017f8b65",
+    "non_bard_subclasses_97": "arm64-worker:~/.cache/mpmb-arm64-worker/repo/output/testing/native-subclasses-1795271007757122230/subclasses.json",
+    "clean_bard_subclasses_6": "arm64-worker:~/.cache/mpmb-arm64-worker/repo/output/testing/native-subclasses-1795276882645408025/subclasses.json",
+    "explicit_sidekicks_5": "arm64-worker:~/.cache/mpmb-arm64-worker/repo/output/testing/native-sidekicks-1795270700225227200/sidekicks.json",
+    "shadowed_pairs": 0,
+    "total_clean_cases": 108,
+    "excluded_upstream_warning_case": "bard-college of swords (explicitly qualified in both engines with documented upstream 8-warning source attribution)"
+  },
+  "2024_comprehensive_12class_reader_parity": {
+    "status": "PASS: All 9 new comprehensive profiles (49 phases) + prior Barbarian/Bard/Fighter/Monk = 12/12 core 2024 classes + multiclass",
+    "promoted_binary_native_all9": "output/testing/native-2024-classes-1795334622102995677/classes-2024.json",
+    "profiles": {
+      "cleric": {
+        "phases": 7,
+        "native": "output/testing/native-2024-classes-1795272262266465993/cleric/report.json",
+        "reader_and_mixed": "output/testing/reader-2024-classes-A-1795272886389588159/cleric/report.json",
+        "paired_displays": "output/testing/cleric-paired-displays-complete-1795274249/comparison.json"
+      },
+      "druid": {
+        "phases": 5,
+        "native": "output/testing/native-2024-classes-1795272262266465993/druid/report.json",
+        "reader_and_mixed": "output/testing/reader-2024-classes-all-1795274923645954968/druid/report.json",
+        "paired_displays": "output/testing/druid-paired-displays-complete-1795276052/comparison.json",
+        "wildshape_repair_note": "Authorized runtime repair mpmb-2024-261023-wildshape-pop-typo visually confirmed populating Wolf Pack Tactics and Primal Strike traits natively where unpatched Reader stops mid-function."
+      },
+      "paladin": {
+        "phases": 5,
+        "native": "output/testing/native-2024-classes-1795272262266465993/paladin/report.json",
+        "reader_and_mixed": "output/testing/reader-2024-classes-all-1795274923645954968/paladin/report.json",
+        "paired_displays": "output/testing/paladin-paired-displays-complete-1795276823/comparison.json"
+      },
+      "ranger": {
+        "phases": 5,
+        "native": "output/testing/native-2024-classes-1795272262266465993/ranger/report.json",
+        "reader_and_mixed": "output/testing/reader-2024-classes-all-1795274923645954968/ranger/report.json",
+        "paired_displays": "output/testing/ranger-paired-displays-complete-1795277333/comparison.json"
+      },
+      "rogue": {
+        "phases": 6,
+        "native": "cloud-lab:~/.cache/mpmb-reference/reader-1793688790884081293/output/testing/native-2024-classes-1795273045092657419/rogue/report.json",
+        "reader_and_mixed": "cloud-lab:~/.cache/mpmb-reference/reader-1793688790884081293/output/testing/reader-2024-classes-B-1795274789950062449/rogue/report.json",
+        "paired_displays": "cloud-lab:~/.cache/mpmb-reference/reader-1793688790884081293/output/testing/rogue-paired-displays-complete-1795277399/comparison.json"
+      },
+      "sorcerer": {
+        "phases": 5,
+        "native": "output/testing/native-2024-classes-1795279316191865891/sorcerer/report.json",
+        "reader_and_mixed": "output/testing/reader-2024-classes-all-1795279949136251194/sorcerer/report.json",
+        "paired_displays": "output/testing/sorcerer-paired-displays-complete-1795283230/comparison.json"
+      },
+      "warlock": {
+        "phases": 6,
+        "native": "output/testing/native-2024-classes-1795279316191865891/warlock/report.json",
+        "reader_and_mixed": "output/testing/reader-2024-classes-all-1795279949136251194/warlock/report.json",
+        "paired_displays": "output/testing/warlock-paired-displays-complete-1795281189/comparison.json"
+      },
+      "wizard": {
+        "phases": 5,
+        "native": "output/testing/native-2024-classes-1795279316191865891/wizard/report.json",
+        "reader_and_mixed": "output/testing/reader-2024-classes-all-1795279949136251194/wizard/report.json",
+        "paired_displays": "output/testing/wizard-paired-displays-complete-1795282660/comparison.json"
+      },
+      "multiclass": {
+        "phases": 5,
+        "native": "output/testing/native-2024-classes-1795279316191865891/multiclass/report.json",
+        "reader_and_mixed": "output/testing/reader-2024-classes-all-1795279949136251194/multiclass/report.json",
+        "paired_displays": "output/testing/multiclass-paired-displays-complete-1795283524/comparison.json"
+      }
+    },
+    "visual_checks": "output/testing/visual-check/ (side-by-side Poppler PNGs of Cleric, Druid Wild Shape, Paladin, Ranger Companion, Warlock, Multiclass, Sorcerer)"
+  },
+  "2024_toolbar_utility_parity": {
+    "status": "PASS (4-case native suite on promoted binary + Real Reader Phase 1, formatted APs, and mixed-engine reopen parity)",
+    "native_4case_report": "output/testing/native-2024-toolbar-1795283640377962163/toolbar-workflows.json",
+    "reader_parity_dir": "cloud-lab:~/.cache/mpmb-reference/reader-1793688790884081293/output/testing/reader-2024-toolbar-parity-1795334102944915120",
+    "reader_verified": [
+      "Phase 1 exact byte-for-byte state match: util.printf (%,0.2f, %,2.1f, %,0+08.2f, %#.0f), util.scand/printd (hh:MM tt, ddd), Date.toSource roundtrip, app.monitors.primary, util.iconStreamFromIcon, Field.editable, ALlog fields, ColoryOptions Highlighting.fillColor, Notes.Left 19 UTF-16 code units (toUni bold + fire emoji), MakeMobileReady(true)",
+      "Phase 1 and Phase 2 formatted AP text exact match: AdvLog.1.date=['6 Mar 2024'], AdvLog.1.gold.gain=['1.234,5']",
+      "Mixed-engine Native cold reopen of Reader phase 1 mobile/color/non-BMP/ALlog PDF matches Native phase 2 exactly"
+    ],
+    "disclosures": [
+      "Upstream v24.2.0+261023 format2() throws TypeError on plain numeric strings (Carrying Capacity Multiplier on ResetAll/DirectImport/Goliath Powerful Build); explicitly isolated and not patched without authorization.",
+      "In Phase 2 cold Reader reopen, app.calculate resets to true on cold Reader launch and idle Windows VM app.monitors.primary() threw GeneralError while passing in active Phase 1.",
+      "Acrobat-Pro-only APIs (MPMBImportPage, exportAsXFDF file write, importAnFDF, authoring Template.hidden/extractPages/createTemplate) remain outside Reader scope."
+    ]
   }
 }
