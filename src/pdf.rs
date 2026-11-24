@@ -80,35 +80,91 @@ fn text(d: &Document, o: &Object) -> String {
         return String::new();
     };
     match o {
-        Object::String(b, _) => decode(b),
+        Object::String(b, _) => decode_text_string(b),
         Object::Name(b) => String::from_utf8_lossy(b).into(),
         Object::Integer(v) => v.to_string(),
         Object::Real(v) => v.to_string(),
-        Object::Stream(s) => decode(
+        Object::Stream(s) => decode_stream(
             &s.decompressed_content()
                 .unwrap_or_else(|_| s.content.clone()),
         ),
         _ => String::new(),
     }
 }
-fn decode(b: &[u8]) -> String {
+fn pdfdoc_char(byte: u8) -> char {
+    match byte {
+        0x18 => '\u{02D8}',
+        0x19 => '\u{02C7}',
+        0x1A => '\u{02C6}',
+        0x1B => '\u{02D9}',
+        0x1C => '\u{02DD}',
+        0x1D => '\u{02DB}',
+        0x1E => '\u{02DA}',
+        0x1F => '\u{02DC}',
+        0x80 => '\u{2022}',
+        0x81 => '\u{2020}',
+        0x82 => '\u{2021}',
+        0x83 => '\u{2026}',
+        0x84 => '\u{2014}',
+        0x85 => '\u{2013}',
+        0x86 => '\u{0192}',
+        0x87 => '\u{2044}',
+        0x88 => '\u{2039}',
+        0x89 => '\u{203A}',
+        0x8A => '\u{2212}',
+        0x8B => '\u{2030}',
+        0x8C => '\u{201E}',
+        0x8D => '\u{201C}',
+        0x8E => '\u{201D}',
+        0x8F => '\u{2018}',
+        0x90 => '\u{2019}',
+        0x91 => '\u{201A}',
+        0x92 => '\u{2122}',
+        0x93 => '\u{FB01}',
+        0x94 => '\u{FB02}',
+        0x95 => '\u{0141}',
+        0x96 => '\u{0152}',
+        0x97 => '\u{0160}',
+        0x98 => '\u{0178}',
+        0x99 => '\u{017D}',
+        0x9A => '\u{0131}',
+        0x9B => '\u{0142}',
+        0x9C => '\u{0153}',
+        0x9D => '\u{0161}',
+        0x9E => '\u{017E}',
+        0xA0 => '\u{20AC}',
+        _ => char::from(byte),
+    }
+}
+fn decode_bom(b: &[u8]) -> Option<String> {
     if b.starts_with(&[254, 255]) {
-        String::from_utf16_lossy(
+        Some(String::from_utf16_lossy(
             &b[2..]
                 .chunks_exact(2)
                 .map(|x| u16::from_be_bytes([x[0], x[1]]))
                 .collect::<Vec<_>>(),
-        )
+        ))
     } else if b.starts_with(&[255, 254]) {
-        String::from_utf16_lossy(
+        Some(String::from_utf16_lossy(
             &b[2..]
                 .chunks_exact(2)
                 .map(|x| u16::from_le_bytes([x[0], x[1]]))
                 .collect::<Vec<_>>(),
-        )
+        ))
+    } else if b.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        Some(String::from_utf8_lossy(&b[3..]).into_owned())
     } else {
-        String::from_utf8(b.to_vec()).unwrap_or_else(|_| b.iter().map(|x| char::from(*x)).collect())
+        None
     }
+}
+fn decode_text_string(b: &[u8]) -> String {
+    decode_bom(b).unwrap_or_else(|| b.iter().map(|&x| pdfdoc_char(x)).collect())
+}
+fn decode_stream(b: &[u8]) -> String {
+    decode_bom(b).unwrap_or_else(|| {
+        String::from_utf8(b.to_vec())
+            .unwrap_or_else(|_| b.iter().map(|&x| pdfdoc_char(x)).collect())
+    })
 }
 fn pdf_string(s: &str) -> Object {
     let mut b = vec![254, 255];
@@ -1793,6 +1849,56 @@ mod action_tests {
             write_bytes_atomic_new(b"clobber", &target, |file, data| file.write_all(data));
         assert!(overwrite.is_err());
         assert_eq!(std::fs::read(&target).unwrap(), b"%PDF-1.7\nfull");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pdf_text_strings_decode_pdfdocencoding_and_bom_encodings() {
+        let mut doc = Document::new();
+        let page = doc.add_object(
+            dictionary! {"Type"=>"Page","MediaBox"=>vec![0.into(),0.into(),612.into(),792.into()]},
+        );
+        let pages =
+            doc.add_object(dictionary! {"Type"=>"Pages","Kids"=>vec![page.into()],"Count"=>1});
+        doc.get_dictionary_mut(page).unwrap().set("Parent", pages);
+        let field = doc.add_object(dictionary! {
+            "FT"=>"Tx",
+            // Field name containing PDFDocEncoding bullet (0x80) and em-dash (0x84).
+            "T"=>Object::String(b"Note \x80 \x84 1".to_vec(), StringFormat::Literal),
+            // Value containing bullet (0x80), dagger (0x81), euro (0xA0), breve (0x18).
+            "V"=>Object::String(b"\x80\x81\xA0\x18".to_vec(), StringFormat::Literal),
+            "Subtype"=>"Widget",
+            "Rect"=>vec![10.into(),700.into(),200.into(),720.into()],
+            "P"=>page,
+            "F"=>4
+        });
+        doc.get_dictionary_mut(page)
+            .unwrap()
+            .set("Annots", vec![field.into()]);
+        let form = doc.add_object(dictionary! {"Fields"=>vec![field.into()]});
+        let info = doc.add_object(dictionary! {
+            "Title"=>Object::String(b"Hero \x84 \xA0".to_vec(), StringFormat::Literal),
+            "Author"=>Object::String(b"\xEF\xBB\xBF\xE2\x80\xA2 UTF8".to_vec(), StringFormat::Literal)
+        });
+        let root = doc.add_object(dictionary! {"Type"=>"Catalog","Pages"=>pages,"AcroForm"=>form});
+        doc.trailer.set("Root", root);
+        doc.trailer.set("Info", info);
+
+        let dir = std::env::temp_dir().join(format!("mpmb-pdfdoc-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("pdfdoc.pdf");
+        doc.save(&path).unwrap();
+
+        let opened = Pdf::open(&path).unwrap();
+        let expected_name = "Note \u{2022} \u{2014} 1";
+        let loaded = opened
+            .fields
+            .get(expected_name)
+            .expect("decoded PDFDocEncoding field name");
+        assert_eq!(loaded.value, json!("\u{2022}\u{2020}\u{20AC}\u{02D8}"));
+        assert_eq!(opened.info["Title"], json!("Hero \u{2014} \u{20AC}"));
+        assert_eq!(opened.info["Author"], json!("\u{2022} UTF8"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
