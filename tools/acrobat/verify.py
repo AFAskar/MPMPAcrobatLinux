@@ -53,6 +53,11 @@ def script_hashes(path):
     if tree:walk(tree)
     return out
 
+def class_and_levels_tokens(value):
+    """Preserve every class word and level number while allowing formatting punctuation/spacing."""
+    return re.findall(r'[A-Za-z]+|\d+', unicodedata.normalize('NFKC', str(value or '')))
+
+
 def inspect(path, expected=None):
     path=Path(path);reader=PdfReader(path);fields=canonical_fields(reader);expected=expected or {}
     actual={k:str(fields[k].get('/V','')) if k in fields else None for k in expected}
@@ -104,7 +109,7 @@ def inspect(path, expected=None):
                 appearance_matches=shown==wanted
                 if re.fullmatch(r'[+-]?\d+',shown) and re.fullmatch(r'[+-]?\d+',wanted):appearance_matches=int(shown)==int(wanted)
                 if field_type=='/Ch':appearance_matches=shown.casefold()==wanted.casefold()
-                if name=='Class and Levels':appearance_matches=re.sub(r'[^A-Za-z]','',shown)==re.sub(r'[^A-Za-z]','',wanted)
+                if name=='Class and Levels':appearance_matches=class_and_levels_tokens(shown)==class_and_levels_tokens(wanted)
             widgets.append(dict(name=name,page=page_number,template=template,value=str(value),matches=str(value)==str(expected[name]),appearance=normal is not None,visible=visible,appearance_text=appearance_text,appearance_matches=appearance_matches))
     represented={w['name'] for w in widgets}
     return dict(path=str(path.resolve()),sha256=hashlib.sha256(path.read_bytes()).hexdigest(),pages=len(reader.pages),field_count=len(fields),expected=expected,actual=actual,widgets=widgets,passed=all(actual[k]==str(v) for k,v in expected.items()) and represented==set(expected) and all(w['matches'] and (not w['visible'] or str(expected[w['name']])=='' or (w['appearance'] and w['appearance_matches'])) for w in widgets))
