@@ -710,6 +710,64 @@ fn bookmarks(d: &Document, first: Option<&Object>, depth: usize) -> Result<Vec<V
     }
     Ok(result)
 }
+fn find_existing_unicode_font(
+    doc: &Document,
+    name: &str,
+    expected_bytes: &[u8],
+) -> Option<ObjectId> {
+    for (&id, obj) in &doc.objects {
+        let Ok(dict) = obj.as_dict() else {
+            continue;
+        };
+        if dict.get(b"Type").and_then(Object::as_name).ok() != Some(b"Font")
+            || dict.get(b"Subtype").and_then(Object::as_name).ok() != Some(b"Type0")
+            || dict.get(b"BaseFont").and_then(Object::as_name).ok() != Some(name.as_bytes())
+            || dict.get(b"Encoding").and_then(Object::as_name).ok() != Some(b"Identity-H")
+        {
+            continue;
+        }
+        let Ok(descendants) = dict.get(b"DescendantFonts").and_then(Object::as_array) else {
+            continue;
+        };
+        let Some(cid_id) = descendants.first().and_then(|o| o.as_reference().ok()) else {
+            continue;
+        };
+        let Ok(cid) = doc.get_dictionary(cid_id) else {
+            continue;
+        };
+        let Ok(desc_id) = cid.get(b"FontDescriptor").and_then(Object::as_reference) else {
+            continue;
+        };
+        let Ok(desc) = doc.get_dictionary(desc_id) else {
+            continue;
+        };
+        let Ok(file_id) = desc.get(b"FontFile2").and_then(Object::as_reference) else {
+            continue;
+        };
+        let Ok(Object::Stream(stream)) = doc.get_object(file_id) else {
+            continue;
+        };
+        let raw = stream
+            .decompressed_content()
+            .unwrap_or_else(|_| stream.content.clone());
+        if raw.as_slice() == expected_bytes {
+            return Some(id);
+        }
+    }
+    None
+}
+
+fn ensure_unicode_font(
+    doc: &mut Document,
+    bytes: Vec<u8>,
+    name: &str,
+) -> Result<(ObjectId, Vec<u8>)> {
+    if let Some(existing) = find_existing_unicode_font(doc, name, &bytes) {
+        return Ok((existing, bytes));
+    }
+    unicode_font(doc, bytes, name)
+}
+
 fn unicode_font(doc: &mut Document, bytes: Vec<u8>, name: &str) -> Result<(ObjectId, Vec<u8>)> {
     let face = ttf_parser::Face::parse(&bytes, 0)?;
     let units = face.units_per_em() as f32;
@@ -908,9 +966,7 @@ impl Pdf {
         let mut embedded = embedded_fonts::collect(&doc)?;
         let mut installed_fonts = installed_fonts::Resolver::default();
         let mut font_cache = BTreeMap::new();
-        let fallback_bytes = installed_fonts::fallback_bytes()?;
-        let (font, font_bytes) = unicode_font(&mut doc, fallback_bytes, "MPMBDejaVuSans")?;
-        let face = ttf_parser::Face::parse(&font_bytes, 0)?;
+        let mut fallback_font: Option<(ObjectId, Vec<u8>)> = None;
         for (name, f) in &fields {
             let Some(s) = state.get(name) else {
                 bail!("state lost field {name}")
@@ -1164,15 +1220,34 @@ impl Pdf {
                 let wd = doc.get_dictionary_mut(w.id)?;
                 wd.set("F", flags);
                 if f.kind == "Btn" && f.flags & 65536 != 0 {
-                    buttons::project(
-                        &mut doc,
-                        &icon_source,
-                        &fields,
-                        w,
-                        &rect,
-                        (s, &state["__iconAssets"], visual_box_changed || da_changed),
-                        (&face, font),
-                    )?;
+                    let button_dirty = s["icon"]["field"].is_string()
+                        || s["icon"]["asset"].is_string()
+                        || s["caption"].is_string()
+                        || visual_box_changed
+                        || da_changed;
+                    if button_dirty {
+                        if fallback_font.is_none() {
+                            let fallback_bytes = installed_fonts::fallback_bytes()?;
+                            fallback_font = Some(ensure_unicode_font(
+                                &mut doc,
+                                fallback_bytes,
+                                "MPMBDejaVuSans",
+                            )?);
+                        }
+                        let (font_id, font_bytes) = fallback_font
+                            .as_ref()
+                            .expect("fallback font initialized for dirty button");
+                        let face = ttf_parser::Face::parse(font_bytes, 0)?;
+                        buttons::project(
+                            &mut doc,
+                            &icon_source,
+                            &fields,
+                            w,
+                            &rect,
+                            (s, &state["__iconAssets"], visual_box_changed || da_changed),
+                            (&face, *font_id),
+                        )?;
+                    }
                     continue;
                 }
                 if !changed
@@ -1325,7 +1400,7 @@ impl Pdf {
                 for key in selected.iter().flatten() {
                     if !font_cache.contains_key(key) {
                         let asset = &embedded[key];
-                        let mapped = unicode_font(
+                        let mapped = ensure_unicode_font(
                             &mut doc,
                             asset.bytes.clone(),
                             &format!("MPMB{}", asset.font_name),
@@ -1333,12 +1408,27 @@ impl Pdf {
                         font_cache.insert(key.clone(), mapped);
                     }
                 }
+                if base.is_none() || selected.iter().any(Option::is_none) {
+                    if fallback_font.is_none() {
+                        let fallback_bytes = installed_fonts::fallback_bytes()?;
+                        fallback_font = Some(ensure_unicode_font(
+                            &mut doc,
+                            fallback_bytes,
+                            "MPMBDejaVuSans",
+                        )?);
+                    }
+                }
                 let default_metrics = field_style::widget_font(&doc, w.id)?
                     .and_then(|name| embedded.get(&name).map(|font| font.metrics));
-                let metrics = base
-                    .as_ref()
-                    .map(|key| embedded[key].metrics)
-                    .unwrap_or_else(|| appearance::RichFontMetrics::from_face(&face, None));
+                let metrics = if let Some(key) = base.as_ref() {
+                    embedded[key].metrics
+                } else {
+                    let (_, fallback_bytes) = fallback_font
+                        .as_ref()
+                        .expect("fallback font initialized when base is absent");
+                    let fallback_face = ttf_parser::Face::parse(fallback_bytes, 0)?;
+                    appearance::RichFontMetrics::from_face(&fallback_face, None)
+                };
                 let metrics = default_metrics
                     .map(|defaults| metrics.with_default_bounds(defaults))
                     .unwrap_or(metrics);
@@ -1350,13 +1440,26 @@ impl Pdf {
                     } else {
                         format!("Rich{index}")
                     };
-                    let id = key.as_ref().map(|key| font_cache[key].0).unwrap_or(font);
+                    let id = if let Some(key) = key.as_ref() {
+                        font_cache[key].0
+                    } else {
+                        fallback_font
+                            .as_ref()
+                            .expect("fallback font initialized for fallback run")
+                            .0
+                    };
                     // Each parsed face borrows its existing cache bytes; no field
                     // state is created by the appearance renderer.
                     let parsed = if let Some(key) = key {
                         ttf_parser::Face::parse(&font_cache[key].1, 0)?
                     } else {
-                        ttf_parser::Face::parse(&font_bytes, 0)?
+                        ttf_parser::Face::parse(
+                            &fallback_font
+                                .as_ref()
+                                .expect("fallback font initialized for fallback run")
+                                .1,
+                            0,
+                        )?
                     };
                     font_resources.set(resource.as_bytes().to_vec(), id);
                     render_fonts.push(appearance::RenderFont {
@@ -1899,6 +2002,86 @@ mod action_tests {
         assert_eq!(loaded.value, json!("\u{2022}\u{2020}\u{20AC}\u{02D8}"));
         assert_eq!(opened.info["Title"], json!("Hero \u{2014} \u{20AC}"));
         assert_eq!(opened.info["Author"], json!("\u{2022} UTF8"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn repeated_cold_noop_and_edited_saves_keep_bounded_size_and_objects() {
+        let mut doc = Document::new();
+        let page = doc.add_object(
+            dictionary! {"Type"=>"Page","MediaBox"=>vec![0.into(),0.into(),612.into(),792.into()]},
+        );
+        let pages =
+            doc.add_object(dictionary! {"Type"=>"Pages","Kids"=>vec![page.into()],"Count"=>1});
+        doc.get_dictionary_mut(page).unwrap().set("Parent", pages);
+        let field = doc.add_object(dictionary! {
+            "FT"=>"Tx","T"=>Object::string_literal("Note"),"V"=>Object::string_literal("Hello"),
+            "Subtype"=>"Widget","Rect"=>vec![10.into(),700.into(),200.into(),720.into()],"P"=>page,"F"=>4
+        });
+        doc.get_dictionary_mut(page)
+            .unwrap()
+            .set("Annots", vec![field.into()]);
+        let form = doc.add_object(dictionary! {"Fields"=>vec![field.into()]});
+        let root = doc.add_object(dictionary! {"Type"=>"Catalog","Pages"=>pages,"AcroForm"=>form});
+        doc.trailer.set("Root", root);
+
+        let dir = std::env::temp_dir().join(format!("mpmb-noop-size-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut current = dir.join("cycle-0.pdf");
+        doc.save(&current).unwrap();
+        let initial_len = std::fs::metadata(&current).unwrap().len();
+
+        // Four fresh cold no-op saves must not embed any fallback font or bloat the file.
+        for i in 1..=4 {
+            let pdf = Pdf::open(&current).unwrap();
+            let next = dir.join(format!("cycle-{i}.pdf"));
+            pdf.save_new(
+                &json!({
+                    "__structure": [],
+                    "__order": [],
+                    "Note": {"value":"Hello","formatted":"Hello","readonly":false,"display":0}
+                }),
+                &next,
+            )
+            .unwrap();
+            let size = std::fs::metadata(&next).unwrap().len();
+            assert!(
+                size < initial_len + 4096,
+                "no-op cycle {i} unexpectedly grew from {initial_len} to {size} bytes"
+            );
+            current = next;
+        }
+
+        // Four fresh cold edited saves embed the fallback font once and reuse it afterward.
+        let mut edited_sizes = Vec::new();
+        let mut edited_objects = Vec::new();
+        for i in 1..=4 {
+            let pdf = Pdf::open(&current).unwrap();
+            let next = dir.join(format!("edited-{i}.pdf"));
+            let val = format!("Edited {i}");
+            pdf.save_new(
+                &json!({
+                    "__structure": [],
+                    "__order": [],
+                    "Note": {"value":val,"formatted":val,"readonly":false,"display":0}
+                }),
+                &next,
+            )
+            .unwrap();
+            edited_sizes.push(std::fs::metadata(&next).unwrap().len());
+            edited_objects.push(Document::load(&next).unwrap().objects.len());
+            current = next;
+        }
+        // Cycles 2..4 reuse the already-embedded Type0 font rather than adding ~450 KB each time.
+        assert!(
+            edited_sizes[3] < edited_sizes[0] + 4096,
+            "repeated edited saves grew unexpectedly: {edited_sizes:?}"
+        );
+        assert!(
+            edited_objects[3] <= edited_objects[0] + 6,
+            "repeated edited saves leaked objects: {edited_objects:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
