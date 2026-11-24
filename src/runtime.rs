@@ -316,8 +316,7 @@ impl Runtime {
                 if selected.contains("://") { bail!("XFDF import requires a local filesystem path") }
                 let path = std::path::Path::new(&selected);
                 let path = if path.is_absolute() { path.to_owned() } else { xfdf_base.join(path) };
-                let bytes = std::fs::read(&path)?;
-                if bytes.len() > 64 * 1024 * 1024 { bail!("XFDF import exceeds 64 MiB") }
+                let bytes = read_bounded_file(&path, 64 * 1024 * 1024, "XFDF import exceeds 64 MiB")?;
                 let fields = crate::pdf::xfdf::parse::read(std::str::from_utf8(&bytes).context("XFDF import requires UTF-8")?)?;
                 let sha256 = Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect::<String>();
                 Ok(json!({"path":path,"sha256":sha256,"fields":fields}).to_string())
@@ -586,10 +585,11 @@ impl Runtime {
                         if selected.starts_with("http:") || selected.starts_with("https:") {
                             bail!("URL imports are unsupported")
                         }
-                        let bytes = std::fs::read(selected)?;
-                        if bytes.len() > 16 * 1024 * 1024 {
-                            bail!("import exceeds 16 MiB")
-                        }
+                        let bytes = read_bounded_file(
+                            std::path::Path::new(&selected),
+                            16 * 1024 * 1024,
+                            "import exceeds 16 MiB",
+                        )?;
                         Ok(json!({"data":String::from_utf8(bytes)?}).to_string())
                     })()
                     .map_err(|e| Exception::throw_message(&ctx, &format!("{e:#}")))
@@ -723,6 +723,28 @@ impl Runtime {
         self.eval(&format!("__host.advance({ms})"))?;
         Ok(())
     }
+}
+
+fn read_bounded<R: std::io::Read>(reader: R, max_bytes: usize, message: &str) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    reader
+        .take((max_bytes as u64).saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > max_bytes {
+        bail!("{message}");
+    }
+    Ok(bytes)
+}
+
+fn read_bounded_file(path: &std::path::Path, max_bytes: usize, message: &str) -> Result<Vec<u8>> {
+    let file = std::fs::File::open(path)?;
+    if let Ok(meta) = file.metadata() {
+        if meta.is_file() && meta.len() > max_bytes as u64 {
+            bail!("{message}");
+        }
+    }
+    read_bounded(file, max_bytes, message)
 }
 
 #[cfg(test)]
@@ -1521,5 +1543,30 @@ mod tests {
           var unique=new Set(hits).size;
           budgetHit&&afterFirst===100&&hits.length===101&&unique===101&&hits[100]===100"#,
         );
+    }
+    #[test]
+    fn read_bounded_enforces_limit_without_unbounded_allocation() {
+        // Exact limit succeeds.
+        let ok = read_bounded(&b"abcdef"[..], 6, "too big").unwrap();
+        assert_eq!(ok, b"abcdef");
+
+        // Even an infinite stream stops at max_bytes + 1 and rejects without OOM.
+        let err = read_bounded(std::io::repeat(b'x'), 1024, "too big").unwrap_err();
+        assert!(err.to_string().contains("too big"));
+
+        // File helper rejects oversized regular files via metadata and bounded read.
+        let dir = std::env::temp_dir().join(format!("mpmb-bounded-read-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sample.txt");
+        std::fs::write(&path, vec![b'a'; 17]).unwrap();
+        assert!(read_bounded_file(&path, 16, "exceeds 16 bytes").is_err());
+        assert_eq!(
+            read_bounded_file(&path, 17, "exceeds 17 bytes")
+                .unwrap()
+                .len(),
+            17
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
