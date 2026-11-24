@@ -1470,15 +1470,15 @@ impl Pdf {
                         font_cache.insert(key.clone(), mapped);
                     }
                 }
-                if base.is_none() || selected.iter().any(Option::is_none) {
-                    if fallback_font.is_none() {
-                        let fallback_bytes = installed_fonts::fallback_bytes()?;
-                        fallback_font = Some(ensure_unicode_font(
-                            &mut doc,
-                            fallback_bytes,
-                            "MPMBDejaVuSans",
-                        )?);
-                    }
+                if (base.is_none() || selected.iter().any(Option::is_none))
+                    && fallback_font.is_none()
+                {
+                    let fallback_bytes = installed_fonts::fallback_bytes()?;
+                    fallback_font = Some(ensure_unicode_font(
+                        &mut doc,
+                        fallback_bytes,
+                        "MPMBDejaVuSans",
+                    )?);
                 }
                 let default_metrics = field_style::widget_font(&doc, w.id)?
                     .and_then(|name| embedded.get(&name).map(|font| font.metrics));
