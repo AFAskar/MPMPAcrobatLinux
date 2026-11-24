@@ -344,34 +344,20 @@ def main():
             "verified_fields": mixed_expected,
         }
 
-        report["passed"] = True
-        (out / "report.json").write_text(json.dumps(report, indent=2) + "\n")
+        from profile_qualification import finalize_profile_qualification
 
-        if not args.skip_paired_display:
-            paired_dir = out / "paired-displays"
-            subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "tools/native/verify-paired-feature-displays.py"),
-                    "--native",
-                    str(args.native),
-                    "--reference",
-                    str(out / "report.json"),
-                    "--original",
-                    str(source),
-                    "--output",
-                    str(paired_dir),
-                ],
-                cwd=ROOT,
-                check=True,
-            )
-            paired = json.loads((paired_dir / "comparison.json").read_text())
-            assert paired["passed"] and paired["complete_report_pair"], paired
-            report["paired_display"] = {"passed": True, "comparison": str(paired_dir / "comparison.json")}
-            (out / "report.json").write_text(json.dumps(report, indent=2) + "\n")
-
-        print("READER+MIXED Ashnar (5 phases + Wis 20->22 mixed reopen): PASS", flush=True)
+        finalize_profile_qualification(
+            report,
+            out,
+            args.native,
+            source,
+            skip_paired_display=args.skip_paired_display,
+            timeout=1800,
+        )
+        status = "PASS" if report["passed"] else "CAPTURE-ONLY (paired display deferred)"
+        print(f"READER+MIXED Ashnar (5 phases + Wis 20->22 mixed reopen): {status}", flush=True)
     except Exception as err:
+        report["passed"] = False
         report["error"] = str(err)
         raise
     finally:

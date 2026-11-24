@@ -411,35 +411,22 @@ def run_reader_profile(
             "pages": mixed_state["pages"],
         }
 
-        report["passed"] = True
-        (folder / "report.json").write_text(json.dumps(report, indent=2) + "\n")
+        from profile_qualification import finalize_profile_qualification
 
-        if not skip_paired_display:
-            pair_out = folder / "paired-displays"
-            subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "tools/native/verify-paired-feature-displays.py"),
-                    "--native",
-                    str(native_profile_report_path),
-                    "--reference",
-                    str(folder / "report.json"),
-                    "--original",
-                    str(source),
-                    "--output",
-                    str(pair_out),
-                ],
-                check=True,
-                timeout=3600,
-            )
-            pair_data = json.loads((pair_out / "comparison.json").read_text())
-            assert pair_data["passed"] and pair_data["complete_report_pair"]
-            report["paired_display"] = str(pair_out / "comparison.json")
-            (folder / "report.json").write_text(json.dumps(report, indent=2) + "\n")
-        print(f"READER+MIXED 2014 {profile_name} ({len(report['phases'])} phases): PASS", flush=True)
+        finalize_profile_qualification(
+            report,
+            folder,
+            native_profile_report_path,
+            source,
+            skip_paired_display=skip_paired_display,
+            timeout=3600,
+        )
+        status = "PASS" if report["passed"] else "CAPTURE-ONLY (paired display deferred)"
+        print(f"READER+MIXED 2014 {profile_name} ({len(report['phases'])} phases): {status}", flush=True)
         return report
 
     except Exception as exc:
+        report["passed"] = False
         report["error"] = str(exc)
         raise
     finally:
@@ -505,12 +492,19 @@ def main():
             )
             summary["profiles"][name] = {
                 "passed": res["passed"],
+                "state_capture_passed": res.get("state_capture_passed", False),
+                "paired_display_status": res.get("paired_display_status"),
                 "report": str(folder / name / "report.json"),
+                "capture_report": res.get("capture_report"),
                 "paired_display": res["paired_display"],
                 "mixed_native": res["mixed_native"],
             }
-        assert c.harness_fingerprint() == reference["harness_sha256"]
-        summary["passed"] = True
+        if c.harness_fingerprint() != reference["harness_sha256"]:
+            raise AssertionError("Harness fingerprint changed during suite")
+        summary["state_capture_passed"] = all(
+            p.get("state_capture_passed") is True for p in summary["profiles"].values()
+        )
+        summary["passed"] = all(p.get("passed") is True for p in summary["profiles"].values())
     except Exception as exc:
         summary["error"] = str(exc)
         raise
