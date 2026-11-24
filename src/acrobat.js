@@ -364,7 +364,27 @@ var __host = (function () {
     exportDataObject(params){if(typeof params==='string')params={cName:params};const result=JSON.parse(__attachment(JSON.stringify(params)));attachmentExports.push(result);},
     print(params){const result=JSON.parse(__print(JSON.stringify({params,state:JSON.parse(__host.snapshot())})));printJobs.push(result);return undefined},
     finishStartupLoad(){startupLoad=false},
-    ready(){let n=0;while(!globalThis.calculate||!app.calculate||globalThis.delay||Array.from(timers.values()).some(t=>t.startup)){const list=Array.from(timers.values()).sort((a,b)=>a.at-b.at);const t=(!globalThis.calculate||!app.calculate||globalThis.delay)?list[0]:list.filter(x=>x.startup)[0];if(!t||++n>100)throw Error('Document calculations suspended without a resumable timer');advance(Math.max(0,t.at-clock));}return true},
+    ready(){
+      let n=0;
+      while(true){
+        const list=Array.from(timers.values()).sort((a,b)=>a.at-b.at||a.id-b.id);
+        const startup=list.filter(x=>x.startup)[0];
+        if(startup){if(++n>100)throw Error('Document startup timers did not settle');advance(Math.max(0,startup.at-clock));continue;}
+        if(globalThis.delay){
+          const t=list[0];
+          if(!t||++n>100)throw Error('Document calculations suspended without a resumable timer');
+          advance(Math.max(0,t.at-clock));
+          continue;
+        }
+        if((!globalThis.calculate||!app.calculate)&&list.length){
+          if(++n>100)throw Error('Document calculations suspended without a resumable timer');
+          advance(Math.max(0,list[0].at-clock));
+          continue;
+        }
+        break;
+      }
+      return true;
+    },
     snapshot(){let o={__structure:journal,__order:data.order},assets={};if(data.bookmarksChanged)o.__bookmarks=bookmarkRoot;for(const n of names){let f=fields[n];o[n]={value:Array.isArray(f.value)?f.value:f.valueAsString,icon:f._icon&&f._icon.asset?{asset:f._icon.asset.id}:f._icon,caption:f._caption,captions:f._captions,actions:f._modifiedActions,widgets:f._widgets,currentValueIndices:f.currentValueIndices,textSize:f.textSize,alignment:f.alignment,multiline:f.multiline,textColor:f._colors.textColor,fillColor:f._colors.fillColor,strokeColor:f._colors.strokeColor,lineWidth:f.lineWidth,borderStyle:f.borderStyle,textFont:f.textFont,richText:f.richText,rawRichValue:f._richRaw,richValueChanged:!sameRich(f._richRaw,f._initialRichRaw),appearanceDirty:!!f._appearanceDirty,richValue:f.richText?(f._formattedRichValue===null?[]:(f._formattedRichValue===undefined?f._richRaw:f._formattedRichValue)):[],richRenderActive:!!f.richText&&f._formattedRichValue!==null,defaultStyle:f._defaultStyle,formatted:f._formatted===undefined?f.valueAsString:f._formatted,display:f.display,userName:f.userName,submitName:f.submitName,readonly:f.readonly,editable:f.editable,items:f.items};if(f._icon&&f._icon.asset)assets[f._icon.asset.id]=f._icon.asset;}if(Object.keys(assets).length)o.__iconAssets=assets;return JSON.stringify(o)},
     timer(code,ms){let id=++timerId;timers.set(id,{id,code:String(code),at:clock+Math.max(1,Number(ms)||1),startup:startupLoad});return id},clear(id){timers.delete(id)},
     launchURL(url,newFrame=false){const target=String(url||'');if(!/^https?:\/\/[^\s\x00-\x1f]{1,4080}$/i.test(target))throw Error('Unsupported URL scheme: '+target);const record=typeof __launchUrl==='function'?JSON.parse(__launchUrl(target,!!newFrame)):{url:target,new_frame:!!newFrame,launched:false};launchedUrls.push(record);return undefined;},

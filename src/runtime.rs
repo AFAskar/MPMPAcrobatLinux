@@ -1493,4 +1493,20 @@ mod tests {
           snap.A.value==='Review'&&snap.A.formatted==='formatted:Review'&&JSON.stringify(seen)==='[["F","Review"]]'&&a.calcOrderIndex===-1"#,
         );
     }
+    #[test]
+    fn ready_allows_settled_disabled_calculations_but_drains_calc_stop_timers() {
+        host(
+            r#"var resumed=0;
+          app.calculate=false;
+          getField('A').value='Manual';
+          var settledManual=__host.ready()===true&&app.calculate===false&&getField('A').valueAsString==='Manual';
+          app.calculate=false;this.calculate=false;this.delay=true;
+          app.setTimeOut('resumed++;app.calculate=true;this.calculate=true;this.delay=false;',250);
+          var drainedCalcStop=__host.ready()===true&&resumed===1&&app.calculate===true&&this.delay===false;
+          this.delay=true;
+          var stuckFailed=false;
+          try{__host.ready();}catch(e){stuckFailed=String(e).indexOf('resumable timer')>=0;}
+          settledManual&&drainedCalcStop&&stuckFailed"#,
+        );
+    }
 }
