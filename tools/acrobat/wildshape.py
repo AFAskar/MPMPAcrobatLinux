@@ -5,10 +5,12 @@ import time
 import control as c
 from verify import inspect,script_hashes
 
-def test(rule,run_id):
+def test(rule,run_id,on_active=None):
+    mark=on_active or (lambda _path:None)
     path=c.remote_path('runs/druid-'+rule+'-'+run_id+'.pdf')
     source=c.remote_path('fixtures/blank-'+rule+'.pdf')
     c.powershell('Copy-Item '+c.literal(source)+' '+c.literal(path)+' -Force;(Get-Item '+c.literal(path)+').IsReadOnly=$false')
+    mark(path)
     c.script('set',path=path,values={'PC Name':'MPMB Druid '+rule,'Str':10,'Dex':10,'Con':10,'Int':14,'Wis':16,'Cha':10})
     class_text='Druid (Circle of the Moon) 2' if rule=='2014' else 'Druid 2'
     c.script('call',path=path,name='ApplyClasses',args=[class_text,False])
@@ -23,14 +25,15 @@ def test(rule,run_id):
     actual=c.script('read',path=path,fields=list(expected))
     assert actual['fields']==expected,(expected,actual)
     output=path[:-4]+'-saved.pdf'
-    c.script('save',path=path,output=output);c.script('close',path=output)
+    c.script('save',path=path,output=output);mark(output);c.script('close',path=output);mark(None)
     reopened=output[:-4]+'-reopened.pdf'
     c.powershell('Copy-Item '+c.literal(output)+' '+c.literal(reopened)+' -Force;if((Get-FileHash '+c.literal(output)+').Hash -ne (Get-FileHash '+c.literal(reopened)+").Hash){throw 'Snapshot hash differs'}")
+    mark(reopened)
     again=c.script('read',path=reopened,fields=list(expected));assert again['fields']==expected,again
     local=c.fetch(output,c.STATE/('druid-'+rule+'-'+run_id+'.pdf'));verified=inspect(local,expected);assert verified['passed'],verified
     original=next((c.REPO/'Testing').glob('*_'+rule+'_*.pdf'))
     assert script_hashes(original)==script_hashes(local),'Document scripts changed'
-    c.script('close',path=reopened)
+    c.script('close',path=reopened);mark(None)
     return dict(template=template,reader=again,pdf=verified)
 
 if __name__=='__main__':

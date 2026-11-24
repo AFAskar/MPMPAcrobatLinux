@@ -18,16 +18,18 @@ def wait_dialog(title, deadline):
     raise RuntimeError('Expected dialog did not appear: ' + title)
 
 
-def test(rule, run_id):
+def test(rule, run_id, on_active=None):
+    mark = on_active or (lambda _path: None)
     source = c.remote_path('runs/druid-' + rule + '-' + run_id + '-saved.pdf')
     path = c.remote_path('runs/spells-' + rule + '-' + run_id + '.pdf')
     c.powershell('Copy-Item ' + c.literal(source) + ' ' + c.literal(path) + ' -Force;(Get-Item ' + c.literal(path) + ').IsReadOnly=$false')
+    mark(path)
     c.ensure_document(path)
     ident = c.script_submit('call', path=path, name='GenerateSpellSheet', args=[])
-    return finish(rule, run_id, path, ident)
+    return finish(rule, run_id, path, ident, mark)
 
 
-def finish(rule, run_id, path, ident):
+def finish(rule, run_id, path, ident, mark=lambda _path: None):
     deadline = time.monotonic() + 90
     root, elements = wait_dialog('SPELL SELECTION DIALOG', deadline)
     choices = [e for e in elements if e.get('owner') == root['handle'] and e['class'] == 'Button' and e['name'].startswith('1st') and 'Bonus' in e['name']]
@@ -39,10 +41,10 @@ def finish(rule, run_id, path, ident):
     c.command('invoke', name='Generate the Spell Sheet', owner=root['handle'])
     generated = c.script_result(ident, timeout=55)
     assert generated.get('value') is True, generated
-    return verify_generated(rule, run_id, path, generated, choices[0]['name'])
+    return verify_generated(rule, run_id, path, generated, choices[0]['name'], mark)
 
 
-def verify_generated(rule, run_id, path, generated, dialog_option):
+def verify_generated(rule, run_id, path, generated, dialog_option, mark=lambda _path: None):
     prefixes = c.script('read', path=path, fields=['Template.extras.SSfront'])['fields']['Template.extras.SSfront']
     prefix = [p for p in prefixes.split(',') if p][-1]
     remembered = c.script('read', path=path, fields=[prefix + 'spells.remember.' + str(i) for i in range(64)])['fields']
@@ -53,9 +55,12 @@ def verify_generated(rule, run_id, path, generated, dialog_option):
     assert actual['fields'] == expected, actual
     saved = path[:-4] + '-saved.pdf'
     c.script('save', path=path, output=saved)
+    mark(saved)
     c.script('close', path=saved)
+    mark(None)
     reopened = path[:-4] + '-reopened.pdf'
     c.powershell('Copy-Item ' + c.literal(saved) + ' ' + c.literal(reopened) + ' -Force;if((Get-FileHash ' + c.literal(saved) + ').Hash -ne (Get-FileHash ' + c.literal(reopened) + ").Hash){throw 'Reopen snapshot differs'}")
+    mark(reopened)
     again = c.script('read', path=reopened, fields=list(expected))
     assert again['fields'] == expected, again
     local = c.fetch(saved, c.STATE / ('spells-' + rule + '-' + run_id + '.pdf'))
@@ -67,6 +72,7 @@ def verify_generated(rule, run_id, path, generated, dialog_option):
     original = next((c.REPO / 'Testing').glob('*_' + rule + '_*.pdf'))
     assert script_hashes(original) == script_hashes(local), 'Document scripts changed'
     c.script('close', path=reopened)
+    mark(None)
     return dict(dialog_option=dialog_option, generated=generated, reader=again, remembered=cure, pdf=verified)
 
 
