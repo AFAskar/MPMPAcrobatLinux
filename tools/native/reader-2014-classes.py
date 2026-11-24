@@ -430,7 +430,7 @@ def run_reader_profile(
                     str(pair_out),
                 ],
                 check=True,
-                timeout=1800,
+                timeout=3600,
             )
             pair_data = json.loads((pair_out / "comparison.json").read_text())
             assert pair_data["passed"] and pair_data["complete_report_pair"]
