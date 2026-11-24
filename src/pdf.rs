@@ -381,12 +381,23 @@ fn walk(
         .unwrap_or_else(|| (1.0, "solid".into()));
     let kind = val(b"FT");
     let flags = attrs.get(b"Ff").and_then(Object::as_i64).unwrap_or(0);
-    let mut value = val(b"V");
-    // Reader exposes an unset checkbox/radio value as Off. Keep the source
-    // dictionary untouched so an unchanged logical Off does not invent /V.
-    if kind == "Btn" && flags & 65536 == 0 && value.is_empty() {
-        value = "Off".into();
-    }
+    let value: Value = if kind == "Ch" && flags & 2097152 != 0 {
+        match attrs.get(b"V").ok().and_then(|v| resolved(d, v).ok()) {
+            Some(Object::Array(arr)) => {
+                json!(arr.iter().map(|o| text(d, o)).collect::<Vec<_>>())
+            }
+            Some(obj) => json!(text(d, obj)),
+            None => json!([]),
+        }
+    } else {
+        let mut s = val(b"V");
+        // Reader exposes an unset checkbox/radio value as Off. Keep the source
+        // dictionary untouched so an unchanged logical Off does not invent /V.
+        if kind == "Btn" && flags & 65536 == 0 && s.is_empty() {
+            s = "Off".into();
+        }
+        json!(s)
+    };
     let icon_key = if kind == "Btn" && flags & 65536 != 0 {
         widget_icon_key(d, &widgets)
     } else {
@@ -397,7 +408,7 @@ fn walk(
         Field {
             name: name.clone(),
             id,
-            value: json!(value),
+            value,
             default_value: json!(val(b"DV")),
             kind,
             user_name: val(b"TU"),
@@ -971,12 +982,25 @@ impl Pdf {
             let Some(s) = state.get(name) else {
                 bail!("state lost field {name}")
             };
+            let is_multiselect = f.kind == "Ch" && f.flags & 2097152 != 0;
             let value = s["value"]
                 .as_str()
                 .map(str::to_owned)
+                .or_else(|| {
+                    s["value"].as_array().map(|arr| {
+                        arr.iter()
+                            .filter_map(Value::as_str)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                })
                 .unwrap_or_else(|| s["value"].to_string());
-            let original = f.value.as_str().unwrap_or("");
-            let changed = value != original;
+            let changed = if is_multiselect {
+                s["value"] != f.value
+            } else {
+                let original = f.value.as_str().unwrap_or("");
+                value != original
+            };
             let rich_changed = f.kind == "Tx" && s["richValueChanged"] == true;
             let rich_enabled = s["richText"].as_bool().unwrap_or(f.flags & 33554432 != 0);
             let rich_mode_changed = rich_enabled != (f.flags & 33554432 != 0);
@@ -1045,6 +1069,23 @@ impl Pdf {
                     } else {
                         dict.set("V", Object::Name(value.as_bytes().to_vec()));
                     }
+                } else if is_multiselect {
+                    if let Some(arr) = s["value"].as_array() {
+                        if arr.is_empty() {
+                            dict.remove(b"V");
+                        } else {
+                            dict.set(
+                                "V",
+                                Object::Array(
+                                    arr.iter()
+                                        .map(|v| pdf_string(v.as_str().unwrap_or("")))
+                                        .collect(),
+                                ),
+                            );
+                        }
+                    } else {
+                        dict.set("V", pdf_string(&value));
+                    }
                 } else {
                     dict.set("V", pdf_string(&value));
                 }
@@ -1069,6 +1110,19 @@ impl Pdf {
                             .collect::<Vec<_>>(),
                     );
                     dict.remove(b"I");
+                }
+                if is_multiselect {
+                    if let Some(indices) = s["currentValueIndices"].as_array() {
+                        let ints: Vec<Object> = indices
+                            .iter()
+                            .filter_map(|v| v.as_i64().map(Object::Integer))
+                            .collect();
+                        if ints.is_empty() {
+                            dict.remove(b"I");
+                        } else {
+                            dict.set("I", Object::Array(ints));
+                        }
+                    }
                 }
             }
             if let Some(readonly) = s["readonly"].as_bool() {
@@ -2081,6 +2135,96 @@ mod action_tests {
         assert!(
             edited_objects[3] <= edited_objects[0] + 6,
             "repeated edited saves leaked objects: {edited_objects:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn multiselect_choice_preserves_pdf_array_values_and_indices() {
+        let mut doc = Document::new();
+        let page = doc.add_object(
+            dictionary! {"Type"=>"Page","MediaBox"=>vec![0.into(),0.into(),612.into(),792.into()]},
+        );
+        let pages =
+            doc.add_object(dictionary! {"Type"=>"Pages","Kids"=>vec![page.into()],"Count"=>1});
+        doc.get_dictionary_mut(page).unwrap().set("Parent", pages);
+        let list = doc.add_object(dictionary! {
+            "FT"=>"Ch",
+            "Ff"=>2097152, // MultiSelect listbox
+            "T"=>Object::string_literal("Tags"),
+            "Opt"=>vec![
+                Object::string_literal("a"),
+                Object::string_literal("b"),
+                Object::string_literal("c")
+            ],
+            "V"=>vec![Object::string_literal("a"), Object::string_literal("c")],
+            "I"=>vec![0.into(), 2.into()],
+            "Subtype"=>"Widget",
+            "Rect"=>vec![10.into(),650.into(),150.into(),720.into()],
+            "P"=>page,
+            "F"=>4
+        });
+        doc.get_dictionary_mut(page)
+            .unwrap()
+            .set("Annots", vec![list.into()]);
+        let form = doc.add_object(dictionary! {"Fields"=>vec![list.into()]});
+        let root = doc.add_object(dictionary! {"Type"=>"Catalog","Pages"=>pages,"AcroForm"=>form});
+        doc.trailer.set("Root", root);
+
+        let dir = std::env::temp_dir().join(format!("mpmb-multiselect-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("input.pdf");
+        let saved = dir.join("saved.pdf");
+        doc.save(&input).unwrap();
+
+        let pdf = std::sync::Arc::new(Pdf::open(&input).unwrap());
+        assert_eq!(pdf.fields["Tags"].value, json!(["a", "c"]));
+
+        let rt = crate::runtime::Runtime::new(&pdf, vec![], vec![], false, None, None).unwrap();
+        assert_eq!(
+            rt.eval("getField('Tags').value").unwrap(),
+            json!(["a", "c"])
+        );
+        assert_eq!(
+            rt.eval("getField('Tags').currentValueIndices").unwrap(),
+            json!([0, 2])
+        );
+        rt.eval("getField('Tags').currentValueIndices = [0, 1]")
+            .unwrap();
+        assert_eq!(
+            rt.eval("getField('Tags').value").unwrap(),
+            json!(["a", "b"])
+        );
+
+        pdf.save_new(&rt.snapshot().unwrap(), &saved).unwrap();
+
+        // Independently verify saved PDF object types: /V is Array of strings, /I is Array of ints.
+        let raw_saved = Document::load(&saved).unwrap();
+        let saved_dict = raw_saved.get_dictionary(list).unwrap();
+        let v_arr = saved_dict
+            .get(b"V")
+            .unwrap()
+            .as_array()
+            .expect("/V must be a PDF array");
+        let decoded_v: Vec<String> = v_arr.iter().map(|o| text(&raw_saved, o)).collect();
+        assert_eq!(decoded_v, vec!["a", "b"]);
+        let i_arr = saved_dict
+            .get(b"I")
+            .unwrap()
+            .as_array()
+            .expect("/I must be a PDF array");
+        let decoded_i: Vec<i64> = i_arr.iter().map(|o| o.as_i64().unwrap()).collect();
+        assert_eq!(decoded_i, vec![0, 1]);
+
+        // Reopen into fresh runtime and confirm round-trip fidelity.
+        let reopened = std::sync::Arc::new(Pdf::open(&saved).unwrap());
+        assert_eq!(reopened.fields["Tags"].value, json!(["a", "b"]));
+        let rt2 =
+            crate::runtime::Runtime::new(&reopened, vec![], vec![], false, None, None).unwrap();
+        assert_eq!(
+            rt2.eval("getField('Tags').currentValueIndices").unwrap(),
+            json!([0, 1])
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
