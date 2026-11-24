@@ -341,11 +341,12 @@ def main():
         )
         assert script_hashes(mixed_pdf) == expected_scripts
         mixed_state = read_payload(mixed_pdf)
-        assert encoded_state(mixed_state) == encoded_state(rdr_state_2), (
-            "Mixed Native vs Reader phase 2 mismatch",
-            mixed_state,
-            rdr_state_2,
-        )
+        if encoded_state(mixed_state) != encoded_state(nat_state_2):
+            raise AssertionError((
+                "Mixed Native vs Native phase 2 mismatch",
+                mixed_state,
+                nat_state_2,
+            ))
         report["mixed_native"] = {"passed": True, "pdf": str(mixed_pdf), "state": mixed_state}
         report["passed"] = True
         print("Mixed-engine Native reopen of Reader mobile/color/non-BMP/ALlog PDF: PASS", flush=True)
