@@ -1481,4 +1481,16 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn calculated_cross_field_string_assignment_runs_target_format() {
+        host(
+            r#"var seen=[];
+          var a=getField('A'),b=getField('B'),c=getField('C');
+          a.setAction('Format',"seen.push(['F',event.value]);event.value='formatted:'+event.value");
+          b.setAction('Calculate',"if(getField('C').valueAsString==='go')getField('A').value='Review'");
+          c.value='go';
+          var snap=JSON.parse(__host.snapshot());
+          snap.A.value==='Review'&&snap.A.formatted==='formatted:Review'&&JSON.stringify(seen)==='[["F","Review"]]'&&a.calcOrderIndex===-1"#,
+        );
+    }
 }
