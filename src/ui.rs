@@ -223,11 +223,8 @@ pub fn main() -> Result<()> {
             rt.command("createBookmarks(bookmarkRoot,{'Native bookmark navigation':{cExpr:\"getField('PC Name').value=event.target.name;pageNum=1;\"}});bookmarkRoot.children[0].color=['RGB',0.2,0.7,0.4]")?;
         }
     }
-    let edit_value = rt
-        .eval("getField('PC Name').valueAsString")?
-        .as_str()
-        .unwrap_or("")
-        .to_owned();
+    let mut editor = SidebarEditor::new("PC Name");
+    let _ = editor.refresh(&rt);
     let app = Reader {
         field_names: pdf.fields.keys().cloned().collect(),
         menu_images: BTreeMap::new(),
@@ -243,12 +240,7 @@ pub fn main() -> Result<()> {
         page: 0,
         texture: None,
         filter: String::new(),
-        edit_name: "PC Name".into(),
-        edit_value,
-        edit_type: "text".into(),
-        edit_editable: true,
-        edit_items: Vec::new(),
-        edit_dirty: false,
+        editor,
         status: String::new(),
         last_tick: std::time::Instant::now(),
         bookmarks_pane_applied: false,
@@ -272,6 +264,95 @@ fn options() -> eframe::NativeOptions {
         ..Default::default()
     }
 }
+struct SidebarEditor {
+    name: String,
+    value: String,
+    kind: String,
+    editable: bool,
+    readonly: bool,
+    items: Vec<(String, String)>,
+    dirty: bool,
+}
+
+impl SidebarEditor {
+    fn new(name: &str) -> Self {
+        Self {
+            name: name.to_owned(),
+            value: String::new(),
+            kind: "text".into(),
+            editable: true,
+            readonly: false,
+            items: Vec::new(),
+            dirty: false,
+        }
+    }
+
+    fn can_edit(&self) -> bool {
+        !self.readonly && self.kind != "button"
+    }
+
+    fn refresh(&mut self, rt: &Runtime) -> Result<()> {
+        let info = rt.eval(&format!(
+            "(function(){{var f=getField({});if(!f)return null;return {{value:f.valueAsString,type:f.type,editable:!!f.editable,readonly:!!f.readonly,items:(f.items||[]).map(function(it){{return Array.isArray(it)?[String(it[0]),String(it.length>1?it[1]:it[0])]:[String(it),String(it)]}})}}}})()",
+            serde_json::to_string(&self.name)?
+        ))?;
+        self.value = info["value"].as_str().unwrap_or("").to_owned();
+        self.kind = info["type"].as_str().unwrap_or("text").to_owned();
+        self.editable = info["editable"].as_bool().unwrap_or(true);
+        self.readonly = info["readonly"].as_bool().unwrap_or(false);
+        self.items = info["items"]
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|pair| {
+                        let pair = pair.as_array()?;
+                        Some((
+                            pair.first()?.as_str()?.to_owned(),
+                            pair.get(1)?.as_str()?.to_owned(),
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(())
+    }
+
+    fn commit(&mut self, rt: &Runtime) -> Result<()> {
+        rt.user_edit(&self.name, &json!(self.value))?;
+        self.refresh(rt)?;
+        self.dirty = false;
+        Ok(())
+    }
+
+    fn commit_choice(&mut self, rt: &Runtime, value: &str) -> Result<()> {
+        rt.select_choice(&self.name, &json!(value))?;
+        self.refresh(rt)?;
+        self.dirty = false;
+        Ok(())
+    }
+
+    fn commit_pending(&mut self, rt: &Runtime) -> Result<()> {
+        if self.dirty {
+            self.commit(rt)?;
+        }
+        Ok(())
+    }
+
+    fn discard(&mut self, rt: &Runtime) -> Result<()> {
+        self.dirty = false;
+        self.refresh(rt)
+    }
+
+    fn select(&mut self, rt: &Runtime, name: &str) -> Result<()> {
+        self.commit_pending(rt)?;
+        self.name = name.to_owned();
+        self.refresh(rt)?;
+        self.dirty = false;
+        Ok(())
+    }
+}
+
 struct Reader {
     field_names: Vec<String>,
     menu_images: BTreeMap<String, egui::TextureHandle>,
@@ -287,12 +368,7 @@ struct Reader {
     page: i32,
     texture: Option<egui::TextureHandle>,
     filter: String,
-    edit_name: String,
-    edit_value: String,
-    edit_type: String,
-    edit_editable: bool,
-    edit_items: Vec<(String, String)>,
-    edit_dirty: bool,
+    editor: SidebarEditor,
     status: String,
     last_tick: std::time::Instant,
     bookmarks_pane_applied: bool,
@@ -345,63 +421,38 @@ fn bookmark_items(ui: &mut egui::Ui, node: &Value, path: &str, action: &mut Opti
 }
 impl Reader {
     fn refresh_editor(&mut self) -> Result<()> {
-        let info = self.rt.eval(&format!(
-            "(function(){{var f=getField({});if(!f)return null;return {{value:f.valueAsString,type:f.type,editable:!!f.editable,items:(f.items||[]).map(function(it){{return Array.isArray(it)?[String(it[0]),String(it.length>1?it[1]:it[0])]:[String(it),String(it)]}})}}}})()",
-            serde_json::to_string(&self.edit_name)?
-        ))?;
-        self.edit_value = info["value"].as_str().unwrap_or("").to_owned();
-        self.edit_type = info["type"].as_str().unwrap_or("text").to_owned();
-        self.edit_editable = info["editable"].as_bool().unwrap_or(true);
-        self.edit_items = info["items"]
-            .as_array()
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|pair| {
-                        let pair = pair.as_array()?;
-                        Some((
-                            pair.first()?.as_str()?.to_owned(),
-                            pair.get(1)?.as_str()?.to_owned(),
-                        ))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        Ok(())
+        self.editor.refresh(&self.rt)
     }
 
     fn commit_choice(&mut self, value: &str) -> Result<()> {
-        self.rt.select_choice(&self.edit_name, &json!(value))?;
-        self.refresh_editor()?;
-        self.edit_dirty = false;
+        self.editor.commit_choice(&self.rt, value)?;
         self.unsaved = true;
         self.texture = None;
         Ok(())
     }
 
     fn commit_editor(&mut self) -> Result<()> {
-        self.rt
-            .user_edit(&self.edit_name, &json!(self.edit_value))?;
-        self.refresh_editor()?;
-        self.edit_dirty = false;
+        self.editor.commit(&self.rt)?;
         self.unsaved = true;
         self.texture = None;
         Ok(())
     }
 
+    fn discard_editor(&mut self) -> Result<()> {
+        self.editor.discard(&self.rt)?;
+        self.texture = None;
+        Ok(())
+    }
+
     fn commit_pending_edit(&mut self) -> Result<()> {
-        if self.edit_dirty {
+        if self.editor.dirty {
             self.commit_editor()?;
         }
         Ok(())
     }
 
     fn select_editor(&mut self, name: &str) -> Result<()> {
-        self.commit_pending_edit()?;
-        self.edit_name = name.to_owned();
-        self.refresh_editor()?;
-        self.edit_dirty = false;
-        Ok(())
+        self.editor.select(&self.rt, name)
     }
 
     fn save_copy(&mut self) -> Result<()> {
@@ -575,7 +626,7 @@ impl Reader {
     fn result(&mut self, r: Result<()>) {
         if r.is_ok() {
             self.unsaved = true;
-            if !self.edit_dirty {
+            if !self.editor.dirty {
                 let _ = self.refresh_editor();
             }
         }
@@ -692,7 +743,7 @@ impl eframe::App for Reader {
                             .collect();
                     }
                 }
-                if !self.edit_dirty {
+                if !self.editor.dirty {
                     let _ = self.refresh_editor();
                 }
                 self.texture = None;
@@ -870,7 +921,9 @@ impl eframe::App for Reader {
                     .show(ui, |ui| {
                         for name in &self.field_names {
                             if name.to_lowercase().contains(&self.filter.to_lowercase())
-                                && ui.selectable_label(self.edit_name == *name, name).clicked()
+                                && ui
+                                    .selectable_label(self.editor.name == *name, name)
+                                    .clicked()
                             {
                                 selected = Some(name.clone());
                             }
@@ -882,42 +935,68 @@ impl eframe::App for Reader {
                     }
                 }
                 ui.separator();
-                ui.label(&self.edit_name);
-                let is_choice = matches!(self.edit_type.as_str(), "combobox" | "listbox");
-                if is_choice && !self.edit_items.is_empty() {
-                    let selected_label = self
-                        .edit_items
-                        .iter()
-                        .find(|(exp, _)| *exp == self.edit_value)
-                        .map(|(_, label)| label.clone())
-                        .unwrap_or_else(|| self.edit_value.clone());
-                    let mut chosen = None;
-                    egui::ComboBox::from_id_salt(("sidebar-choice", &self.edit_name))
-                        .width(280.)
-                        .selected_text(selected_label)
-                        .show_ui(ui, |ui| {
-                            for (exp, label) in &self.edit_items {
-                                let display = if label.is_empty() { "(blank)" } else { label };
-                                if ui.selectable_label(self.edit_value == *exp, display).clicked() {
-                                    chosen = Some(exp.clone());
+                let header = if self.editor.readonly {
+                    format!("{} (read-only)", self.editor.name)
+                } else if self.editor.kind == "button" {
+                    format!("{} (button)", self.editor.name)
+                } else {
+                    self.editor.name.clone()
+                };
+                ui.label(header);
+                let editable_here = self.editor.can_edit();
+                let is_choice = matches!(self.editor.kind.as_str(), "combobox" | "listbox");
+                let mut chosen = None;
+                let mut commit_clicked = false;
+                let mut discard_clicked = false;
+                ui.add_enabled_ui(editable_here, |ui| {
+                    if is_choice && !self.editor.items.is_empty() {
+                        let selected_label = self
+                            .editor
+                            .items
+                            .iter()
+                            .find(|(exp, _)| *exp == self.editor.value)
+                            .map(|(_, label)| label.clone())
+                            .unwrap_or_else(|| self.editor.value.clone());
+                        egui::ComboBox::from_id_salt(("sidebar-choice", &self.editor.name))
+                            .width(280.)
+                            .selected_text(selected_label)
+                            .show_ui(ui, |ui| {
+                                for (exp, label) in &self.editor.items {
+                                    let display = if label.is_empty() { "(blank)" } else { label };
+                                    if ui
+                                        .selectable_label(self.editor.value == *exp, display)
+                                        .clicked()
+                                    {
+                                        chosen = Some(exp.clone());
+                                    }
                                 }
-                            }
-                        });
-                    if let Some(exp) = chosen {
-                        self.edit_value = exp.clone();
-                        let r = self.commit_choice(&exp);
-                        self.result(r);
+                            });
                     }
+                    if !is_choice || self.editor.editable || self.editor.items.is_empty() {
+                        if ui.text_edit_multiline(&mut self.editor.value).changed() {
+                            self.editor.dirty = true;
+                            self.unsaved = true;
+                        }
+                        if ui.button("Commit field edit").clicked() {
+                            commit_clicked = true;
+                        }
+                    }
+                });
+                if self.editor.dirty && ui.button("Discard pending edit").clicked() {
+                    discard_clicked = true;
                 }
-                if !is_choice || self.edit_editable || self.edit_items.is_empty() {
-                    if ui.text_edit_multiline(&mut self.edit_value).changed() {
-                        self.edit_dirty = true;
-                        self.unsaved = true;
-                    }
-                    if ui.button("Commit field edit").clicked() {
-                        let r = self.commit_editor();
-                        self.result(r)
-                    }
+                if let Some(exp) = chosen {
+                    self.editor.value = exp.clone();
+                    let r = self.commit_choice(&exp);
+                    self.result(r);
+                }
+                if commit_clicked {
+                    let r = self.commit_editor();
+                    self.result(r);
+                }
+                if discard_clicked {
+                    let r = self.discard_editor();
+                    self.result(r);
                 }
                 if let Ok(values)=self.rt.eval("['Str','Str Mod','Character Level','Proficiency Bonus'].map(n=>[n,getField(n).valueAsString])"){
                     if let Some(values)=values.as_array(){for item in values{ui.label(format!("{}: {}",item[0].as_str().unwrap_or(""),item[1].as_str().unwrap_or("")));}}
@@ -969,7 +1048,7 @@ impl eframe::App for Reader {
                                 Ok(Some(w)) => {
                                     let r = (|| -> Result<()> {
                                         self.select_editor(w["name"].as_str().unwrap_or(""))?;
-                                        let name = serde_json::to_string(&self.edit_name)?;
+                                        let name = serde_json::to_string(&self.editor.name)?;
                                         self.rt.eval(&format!(
                                             "__host.activate({name},{},{modifiers})",
                                             w["index"]
@@ -2095,5 +2174,80 @@ mod dialog_tests {
         rt.eval("nextImport = true").unwrap();
         rt.eval(TOOLBAR_IMPORT_SCRIPT_ACTION).unwrap();
         assert_eq!(rt.eval("runs").unwrap(), json!(1));
+    }
+
+    #[test]
+    fn readonly_sidebar_selection_and_discard_do_not_strand_earlier_edits() {
+        let mut doc = lopdf::Document::new();
+        let page = doc.add_object(lopdf::dictionary! {"Type"=>"Page","MediaBox"=>vec![0.into(),0.into(),612.into(),792.into()]});
+        let pages = doc
+            .add_object(lopdf::dictionary! {"Type"=>"Pages","Kids"=>vec![page.into()],"Count"=>1});
+        doc.get_dictionary_mut(page).unwrap().set("Parent", pages);
+        let name_field = doc.add_object(lopdf::dictionary! {
+            "FT"=>"Tx","T"=>lopdf::Object::string_literal("PC Name"),"V"=>lopdf::Object::string_literal(""),
+            "Subtype"=>"Widget","Rect"=>vec![10.into(),700.into(),150.into(),720.into()],"P"=>page,"F"=>4
+        });
+        let ro_field = doc.add_object(lopdf::dictionary! {
+            "FT"=>"Tx","T"=>lopdf::Object::string_literal("Str Mod"),"V"=>lopdf::Object::string_literal("+2"),
+            "Ff"=>1,"Subtype"=>"Widget","Rect"=>vec![10.into(),660.into(),60.into(),680.into()],"P"=>page,"F"=>4
+        });
+        doc.get_dictionary_mut(page)
+            .unwrap()
+            .set("Annots", vec![name_field.into(), ro_field.into()]);
+        let form = doc.add_object(lopdf::dictionary! {
+            "Fields"=>vec![name_field.into(), ro_field.into()],
+            "NeedAppearances"=>true
+        });
+        let root =
+            doc.add_object(lopdf::dictionary! {"Type"=>"Catalog","Pages"=>pages,"AcroForm"=>form});
+        doc.trailer.set("Root", root);
+
+        let dir = std::env::temp_dir().join(format!("mpmb-sidebar-ro-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let src_path = dir.join("input.pdf");
+        doc.save(&src_path).unwrap();
+
+        let pdf = Arc::new(Pdf::open(&src_path).unwrap());
+        let rt = Runtime::new(&pdf, vec![], vec![], false, None, None).unwrap();
+        let mut editor = SidebarEditor::new("PC Name");
+        editor.refresh(&rt).unwrap();
+        assert!(!editor.readonly);
+        assert!(editor.can_edit());
+
+        // Make a valid character edit first.
+        editor.value = "Saved Hero".into();
+        editor.dirty = true;
+        editor.select(&rt, "Str Mod").unwrap();
+        assert_eq!(
+            rt.eval("getField('PC Name').valueAsString").unwrap(),
+            json!("Saved Hero")
+        );
+
+        // Read-only field disables editing in the sidebar model.
+        assert!(editor.readonly);
+        assert!(!editor.can_edit());
+        assert!(!editor.dirty);
+        assert_eq!(editor.value, "+2");
+
+        // Even if a draft becomes dirty on a field whose commit fails (e.g. turned read-only),
+        // discarding clears ONLY the pending draft without losing earlier committed edits.
+        editor.value = "+9".into();
+        editor.dirty = true;
+        assert!(editor.commit_pending(&rt).is_err());
+        assert!(editor.dirty);
+        editor.discard(&rt).unwrap();
+        assert!(!editor.dirty);
+        assert_eq!(editor.value, "+2");
+
+        // Navigation and saving now succeed and preserve the earlier character edit.
+        editor.commit_pending(&rt).unwrap();
+        rt.ready().unwrap();
+        let out_path = dir.join("saved.pdf");
+        pdf.save_new(&rt.snapshot().unwrap(), &out_path).unwrap();
+        let reopened = Pdf::open(&out_path).unwrap();
+        assert_eq!(reopened.fields["PC Name"].value, json!("Saved Hero"));
+        assert_eq!(reopened.fields["Str Mod"].value, json!("+2"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
