@@ -15,11 +15,16 @@ spec=importlib.util.spec_from_file_location('style',ROOT/'tools/native/default-s
 MESSAGE='MPMB console reference sentinel'
 
 
+def _require(condition, message):
+    if not condition:
+        raise AssertionError(message)
+
+
 def observed_console(expected):
-    rows=c.command('inspect');roots=[r for r in rows if r.get('class')=='#32770' and r.get('name')=='JavaScript Debugger'];assert len(roots)==1,'Expected one observed console window'
-    owner=roots[0]['handle'];edits=[r for r in rows if r.get('owner')==owner and r.get('class')=='RICHEDIT50W'];assert len(edits)==1,'Expected one observed console edit'
+    rows=c.command('inspect');roots=[r for r in rows if r.get('class')=='#32770' and r.get('name')=='JavaScript Debugger'];_require(len(roots)==1,'Expected one observed console window')
+    owner=roots[0]['handle'];edits=[r for r in rows if r.get('owner')==owner and r.get('class')=='RICHEDIT50W'];_require(len(edits)==1,'Expected one observed console edit')
     observed=read_console_text(owner,edits[0]['handle'])
-    assert observed['live']['text'].rstrip('\r\n')==expected,observed
+    _require(observed['live']['text'].rstrip('\r\n')==expected,observed)
     observed['rows']=rows
     return observed
 
@@ -73,8 +78,8 @@ def read_console_text(owner, edit, *, controller=None, max_attempts=3):
 
 
 def close_console(observed):
-    focused=c.command('focus_control',owner=observed['owner'],handle=observed['edit']);assert focused['focused']
-    result=c.command('keys',keys='%{F4}');assert not [r for r in c.command('inspect') if r.get('class')=='#32770' and r.get('name')=='JavaScript Debugger']
+    focused=c.command('focus_control',owner=observed['owner'],handle=observed['edit']);_require(focused['focused'],'Console focus failed')
+    result=c.command('keys',keys='%{F4}');_require(not [r for r in c.command('inspect') if r.get('class')=='#32770' and r.get('name')=='JavaScript Debugger'],'Console did not close')
     return {'focus':focused,'action':result}
 
 
