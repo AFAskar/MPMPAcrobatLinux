@@ -92,7 +92,9 @@ class ReadinessCleanupTests(unittest.TestCase):
         self.assertEqual(report['status'], 'failed')
         self.assertIn('cleanup', report)
         cleanup = report['cleanup']
+        self.assertTrue(cleanup['retained'])
         self.assertTrue(cleanup['closed'])
+        self.assertFalse(cleanup['unresolved'])
         self.assertTrue(cleanup['retained_path'].endswith('-failed-retained.pdf'))
         self.assertFalse(session_exists)
 
@@ -103,23 +105,27 @@ class ReadinessCleanupTests(unittest.TestCase):
         self.assertLess(close_idx, exit_idx)
         self.assertEqual(events[close_idx][2]['path'], cleanup['retained_path'])
 
-    def test_save_failure_still_closes_active_path_under_lock(self):
+    def test_save_failure_preserves_open_document_and_marks_unresolved(self):
         events, report, session_exists = self._run_failed_first_read(save_error='Modal dialog blocked save')
         cleanup = report['cleanup']
         self.assertEqual(cleanup['save_error'], 'Modal dialog blocked save')
+        self.assertFalse(cleanup['retained'])
         self.assertIsNone(cleanup['retained_path'])
-        self.assertTrue(cleanup['closed'])
-        self.assertFalse(session_exists)
-
-        close_idx = next(i for i, ev in enumerate(events) if ev[0] == 'command' and ev[1] == 'close_document')
+        self.assertFalse(cleanup['closed'])
+        self.assertTrue(cleanup['unresolved'])
+        self.assertTrue(session_exists)
+        # Must NOT discard the unsaved failed state by calling close_document when retain failed.
+        self.assertFalse(any(ev[0] == 'command' and ev[1] == 'close_document' for ev in events))
+        save_idx = next(i for i, ev in enumerate(events) if ev[0] == 'raw_script' and ev[1] == 'save')
         exit_idx = next(i for i, ev in enumerate(events) if ev[0] == 'lock_exit')
-        self.assertLess(close_idx, exit_idx)
-        self.assertEqual(events[close_idx][2]['path'], cleanup['active_path'])
+        self.assertLess(save_idx, exit_idx)
 
     def test_no_open_pdf_skips_save_and_close(self):
         events, report, session_exists = self._run_failed_first_read(open_windows=[])
         cleanup = report['cleanup']
+        self.assertFalse(cleanup['retained'])
         self.assertTrue(cleanup['closed'])
+        self.assertFalse(cleanup['unresolved'])
         self.assertEqual(cleanup['open_windows'], [])
         self.assertIsNone(cleanup['retained_path'])
         self.assertTrue(session_exists)

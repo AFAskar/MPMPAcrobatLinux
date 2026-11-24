@@ -29,38 +29,51 @@ def cases_complete(cases, plan):
 
 
 def retain_and_close_active(active_path):
-    """Retain and close the active disposable PDF while still holding desktop_lock()."""
-    info = {'active_path': active_path, 'retained_path': None, 'closed': False}
+    """Retain the active disposable PDF under desktop_lock(); only close after verified retention.
+
+    If retaining the live failed state fails, keep the document open and mark cleanup
+    unresolved so the failed interaction is preserved and subsequent suites are blocked.
+    """
+    info = {
+        'active_path': active_path,
+        'retained': False,
+        'retained_path': None,
+        'closed': False,
+        'unresolved': False,
+    }
     try:
         windows = c.command('inspect')
     except Exception as error:
         info['inspect_error'] = str(error)
-        windows = None
+        info['unresolved'] = True
+        return info
     open_pdfs = [
         w for w in (windows or [])
         if w.get('class') == 'AcrobatSDIWindow' and '.pdf' in w.get('name', '').lower()
     ]
-    if windows is not None and not open_pdfs:
+    if not open_pdfs:
         info['open_windows'] = []
         info['closed'] = True
         return info
-    info['open_windows'] = [w.get('name', '') for w in open_pdfs] if windows is not None else None
+    info['open_windows'] = [w.get('name', '') for w in open_pdfs]
     retained = (active_path[:-4] + '-failed-retained.pdf') if active_path.lower().endswith('.pdf') else (active_path + '-failed-retained.pdf')
-    close_target = active_path
     try:
         info['save'] = c.raw_script('save', path=active_path, output=retained)
+        info['retained'] = True
         info['retained_path'] = retained
-        close_target = retained
     except Exception as error:
         info['save_error'] = str(error)
+        info['unresolved'] = True
+        return info
     try:
-        close_result = c.command('close_document', path=close_target)
+        close_result = c.command('close_document', path=retained)
         info['close'] = close_result
         info['closed'] = True
         if isinstance(close_result, dict) and close_result.get('process_terminated'):
             (c.STATE / 'reader-session.json').unlink(missing_ok=True)
     except Exception as error:
         info['close_error'] = str(error)
+        info['unresolved'] = True
     return info
 
 
