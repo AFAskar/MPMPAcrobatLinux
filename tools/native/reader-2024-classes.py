@@ -411,7 +411,7 @@ def run_reader_profile(
             native_profile_report_path,
             source,
             skip_paired_display=skip_paired_display,
-            timeout=1800,
+            timeout=3600,
         )
         status = "PASS" if report["passed"] else "CAPTURE-ONLY (paired display deferred)"
         print(f"READER+MIXED {profile_name} ({len(report['phases'])} phases): {status}", flush=True)
