@@ -10,7 +10,10 @@
     ],
     "current_release_ready": false,
     "release_gates": "docs/2024-readiness.md",
-    "2024_functional_gates_passed": true
+    "2024_functional_gates_passed": true,
+    "2014_functional_gates_passed": true,
+    "ashnar_functional_gates_passed": true,
+    "runtime_script_overrides": []
   },
   "schema": 4,
   "claim": "Call sites are inventory, not behavioral passes. Partial support does not establish full compatibility.",
@@ -3728,5 +3731,76 @@
       "In Phase 2 cold Reader reopen, app.calculate resets to true on cold Reader launch and idle Windows VM app.monitors.primary() threw GeneralError while passing in active Phase 1.",
       "Acrobat-Pro-only APIs (MPMBImportPage, exportAsXFDF file write, importAnFDF, authoring Template.hidden/extractPages/createTemplate) remain outside Reader scope."
     ]
+  },
+  "three_fixture_override_free_qualification_2026_11_24": {
+    "status": "PASS across all three fixtures (2024, 2014, Ashnar) for all reachable clean Reader workflows with zero runtime script overrides",
+    "promoted_binary": {
+      "commit": "67a800d",
+      "path": "target/debug/mpmb-reader",
+      "sha256": "716a381d1284e2a3917b6be0206043af9553b15aff7635c7b13d326d7da8b963",
+      "rust_tests": "179/179 PASS (cargo test --locked -j 1)",
+      "clippy": "0 warnings (cargo clippy --locked --all-targets -j 1 -- -D warnings)",
+      "python_tests": "63/63 PASS (as of 91d1e26)",
+      "runtime_script_overrides": []
+    },
+    "independent_review_findings_0e19a42": {
+      "report": "output/reviews/MPMPAcrobatLinux-developer-review.md",
+      "resolved": {
+        "1_wildshape_override_and_evidence": "33f6cb4, 0e19a42, 71374c0 — override removed; override-free 2024 Druid Wild Shape upstream repro in output/testing/native-2024-classes-1795345258415621059/classes-2024.json; pre-override druid-paired-displays-complete-1795276052 explicitly marked historical",
+        "2_paired_display_missing_widgets": "34feb38 — zero-widget and hidden-widget negative controls in tools/native/test_paired_display_missing_widgets.py",
+        "3_mixed_engine_changed_save_assertions": "9513a5a — reader-2024-classes.py (and 2014/Ashnar suites) require and independently inspect further-native-changed.pdf",
+        "4_lock_held_failure_cleanup": "9513a5a, 0458589, ede25f0, 91d1e26 — desktop_lock() held through failure retention/close across readiness.py, wildshape.py, spells.py, toolbar and class runners + test_readiness_cleanup.py",
+        "5_atomic_pdf_save": "fe784ec — staged sync + atomic publish in src/pdf.rs + atomic_save_cleans_up_failed_writes_and_refuses_overwrites",
+        "6_toolbar_import_cancel_guard": "d5866d2 — src/ui.rs + toolbar_import_script_skips_rerun_when_import_is_cancelled",
+        "7_cross_field_calculate_format": "67a800d — Real Reader verified K->V->F with ap=['formatted:Review']; src/acrobat.js + calculated_cross_field_string_assignment_runs_target_format",
+        "8_startup_timer_drain_in_ready": "a12e324 — src/acrobat.js + src/runtime.rs + ready_drains_startup_timers_without_looping_on_repeating_post_startup_timers"
+      }
+    },
+    "engine_memory_fix": {
+      "commit": "d3635c7",
+      "summary": "Eliminated QuickJS 512 MiB OOM during multi-page spell-sheet deletion/regeneration (12,373 -> 11,562 fields) by parsing __initial once, dropping retained init payloads, read-only snapshot() without 70k copyData clones, and running GC around snapshot()",
+      "test": "repeated_template_spawn_delete_and_snapshot_reclaims_js_memory"
+    },
+    "2024_override_free_reverification": {
+      "clean_core_8_profiles_44_phases_native": "output/testing/native-2024-classes-1795344010838327630/classes-2024.json",
+      "toolbar_4case_native": "output/testing/native-2024-toolbar-1795343905640150548/toolbar-workflows.json",
+      "druid_wildshape_upstream_repro": "output/testing/native-2024-classes-1795345258415621059/classes-2024.json (reproduces upstream v24.2.0+261023 ApplyWildshape ReferenceError: pop is not defined with repairs=[])"
+    },
+    "ashnar_qualification": {
+      "status": "PASS (5-phase Real-Table Native + Real Adobe Acrobat Reader 26.2.22031.0 + Mixed-Engine + Hardened Paired Displays)",
+      "reader_readiness_8_cases": "cloud-lab:~/.cache/mpmb-reference/reader-1793688790884081293/output/testing/readiness-1795344543.json",
+      "native_local_d3635c7": "output/testing/native-ashnar-workflows-1795343686849462523/report.json",
+      "reader_mixed_and_paired": "cloud-lab:~/.cache/mpmb-reference/reader-1793688790884081293/output/testing/reader-ashnar-workflows-1795346168843824896/report.json",
+      "preserved_payloads": "4,054,883-byte User_Imported_Files.Stringified, all 38 spells.remember.*, and all 25 original document scripts byte-identical across every phase",
+      "visual_check": "output/testing/visual-check/ashnar/{native-p1-1.png,reader-p1-1.png,mixed-p1-1.png}"
+    },
+    "2014_qualification": {
+      "status": "PASS (14/14 comprehensive core classes + Artificer + Multiclass [72 phases] + 188/188 subclasses/sidekicks + 4-case toolbar + Real Reader 26.2.22031.0 + Mixed-Engine + Hardened Paired Displays)",
+      "reader_readiness_12_cases_local": "output/testing/readiness-1795345455.json",
+      "reader_readiness_12_cases_cloud-lab": "cloud-lab:~/.cache/mpmb-reference/reader-1793688790884081293/output/testing/readiness-1795354543.json",
+      "native_acceptance": "output/testing/native-acceptance-1795337027009053435/acceptance.json",
+      "native_lifecycle": "output/testing/native-lifecycle-1795337142380673018/lifecycle.json",
+      "native_table_workflows_6": "output/testing/native-table-1795337173276022089/table.json",
+      "toolbar_4case_native": "output/testing/native-2014-toolbar-1795343785032900223/toolbar-workflows.json",
+      "toolbar_reader_and_mixed": "cloud-lab:~/.cache/mpmb-reference/reader-1793688790884081293/output/testing/reader-2014-toolbar-parity-1795356972783819757/toolbar-parity.json",
+      "subclasses_and_sidekicks_188": {
+        "explicit_sidekicks_5": "arm64-worker:native-sidekicks-1795338785515906947/sidekicks.json",
+        "ordinary_and_ua_barbarian_to_wizard_142": "arm64-worker:native-subclasses-1795339121618723221/subclasses.json (1 documented upstream UA warning case: wizard-theurgy-ua)",
+        "artificer_mystic_and_ua_rangers_26": "arm64-worker:native-subclasses-1795348810278849736/subclasses.json",
+        "isolated_standard_ranger_15": "arm64-worker:native-subclasses-1795350335244117457/subclasses.json"
+      },
+      "comprehensive_14_profiles_72_phases": {
+        "native_unified_14": "output/testing/native-2014-classes-1795341589873250724/classes-2014.json",
+        "native_win32_radio_4": "output/testing/native-2014-classes-1795355384121361118/classes-2014.json",
+        "reader_batch_A_barbarian_bard_cleric_druid_fighter": "output/testing/reader-2014-classes-A-1795345922994069729/reader-classes-2014.json (includes clean 2014 Moon Druid Wild Shape Wolf with zero overrides)",
+        "reader_batch_B_monk": "output/testing/reader-2014-classes-B-1795353923925272585/monk/report.json",
+        "reader_batch_B_paladin": "output/testing/reader-2014-classes-all-1795356052260554795/paladin/report.json + output/testing/paladin-2014-paired-displays-complete-1795511763/comparison.json",
+        "reader_batch_B_ranger_rogue": "output/testing/reader-2014-classes-all-1795508780729062747/reader-classes-2014.json (includes Timber Wolf Companion)",
+        "reader_batch_C_sorcerer_warlock": "cloud-lab:~/.cache/mpmb-reference/reader-1793688790884081293/output/testing/reader-2014-classes-C-1795358839513395350",
+        "reader_batch_C_wizard_artificer": "output/testing/reader-2014-classes-all-1795513440691854185/reader-classes-2014.json (on 67a800d)",
+        "reader_batch_C_multiclass": "output/testing/reader-2014-classes-all-1795516798669655812/reader-classes-2014.json (on 67a800d)"
+      },
+      "visual_checks": "output/testing/visual-check/{druid2014,ranger2014,artificer2014}"
+    }
   }
 }
