@@ -1,5 +1,20 @@
 # MPMB compatibility audit — 2026-10-26
 
+## Reader 26.3.22110.0 full 24/24 readiness, 23/23 same-build hardened paired displays, and desktop UI/UX refresh — 2026-11-24
+
+All pending same-build verification items from the `cef6e98` adversarial review follow-up are now **COMPLETE**, alongside a full native desktop UI/UX refresh (`f7a570e`):
+
+- **Full 24-case Real Adobe Acrobat Reader `26.3.22110.0` Readiness**: `docs/environment-lock.json` updated deliberately to `26.3.22110.0` (`9809e9a`); preflight 30/30 + full 3-fixture readiness **24/24 PASS** (`output/testing/readiness-1795536477.json`) under the post-`9809e9a` harness fingerprint.
+- **5/5 Fresh Reader `26.3.22110.0` + `145e5940...` Mixed-Engine Suites PASS** (cleanly superseding all 3 historical contradictory pre-`709b103` reports):
+  1. Ashnar 5-phase: `output/testing/reader-ashnar-workflows-1795537635784461169/report.json`.
+  2. 2024 Toolbar + Mixed (`ae40f44`/`b3bda77`): `output/testing/reader-2024-toolbar-parity-1795539605822929865/toolbar-parity.json`.
+  3. 2014 Toolbar + Mixed: `output/testing/reader-2014-toolbar-parity-1795539910868149265/toolbar-parity.json`.
+  4. 2024 Cleric 7-phase (`6ffa4dc`): `output/testing/reader-2024-classes-all-1795540239033033985/cleric/report.json` (supersedes `1795271463791415733`/`1795272886389588159`).
+  5. 2014 Paladin 5-phase: `output/testing/reader-2014-classes-all-1795542118417821986/paladin/report.json` (supersedes `1795356052260554795`).
+- **23/23 (100%) Same-Build `145e5940...` Hardened Paired Displays (`19ae168`, `source_sha256: eb1c87d500cf...`)**: All 8/8 clean 2024 profiles, all 14/14 2014 profiles, and Ashnar PASS (`passed=True, complete_report_pair=True`) across local (`paired-145e5940-1795525313`, plus embedded Cleric/Paladin/Ashnar Reader runs) and `cloud-lab` (`paired-145e5940` 4/4 + `paired-145e5940-batch2` 12/12).
+- **Native Desktop UI/UX Refresh (`f7a570e`, SHA-256 `0e9a4cd7a71ab052bc00409de1fdc3ad9733627758ea8e2bd54b9e8fbad047bd`)**: Added `src/ui/theme.rs` (Dark Obsidian Slate & Gold + Light Ivory & Ink themes with `MPMB_THEME` dialog propagation), `src/ui/state.rs` (`ProjectionCache`, `ZoomState`, `CharacterSummary`, `FieldFilter`, 4 unit tests), and refreshed `src/ui.rs` (single-row command bar, Character Quick-Card, filterable Fields + Field Inspector, Bookmarks, Diagnostics, Save modal with `zenity` Browse, interactive hover/selection widget overlays, keyboard shortcuts, status bar). Zero engine/PDF/JS files modified. Verified with `cargo fmt --check`, strict Clippy (0 warnings), **191/191** Rust tests, visually inspected Dark/Light desktop smoke screenshots (`output/testing/ui-refresh-smoke-v3-1795544560/{dark,light}/reader.png`), `desktop.py` (2014+2024), `bookmarks-desktop.py` (2014+2024), and `acceptance.py` (2024 `1795544681607208485` + 2014 `1795544715544094008`).
+- **Explicit remaining boundaries**: Per-subclass non-default feature choices & per-subclass Reader parity (beyond structural audits on `arm64-worker`), unpatched upstream PDF bugs (2024 `ApplyWildshape` `pop` typo, 2024 `format2()`, `bard-college of swords`, `wizard-theurgy-ua`), Acrobat-Pro-only APIs, and documented trusted-input/synchronous-JS boundaries.
+
 ## Adversarial review (cef6e98) 15/15 findings remediated; release sign-off held pending same-build Reader refresh — 2026-11-24
 
 Following the independent adversarial review at `cef6e98` (`docs/reviews/2026-11-24-adversarial-review.md`), all **15/15** findings were remediated in atomic commits (`58058ac`..`962205b`) and the **all-reachable-workflows release sign-off is explicitly HELD** (`docs/2024-readiness.md`, `docs/native-compatibility.json`) with a build-bound case-by-case matrix:

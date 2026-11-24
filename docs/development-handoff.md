@@ -1,5 +1,27 @@
 # Development handoff
 
+## Reader 26.3.22110.0 24/24 readiness, 23/23 hardened paired displays, and desktop UI/UX refresh COMPLETE — 2026-11-24
+
+All pending verification work from the `cef6e98` adversarial review follow-up is **COMPLETE**, and the native Linux desktop reader has received a comprehensive **UI/UX refresh (`f7a570e`)**:
+
+- **Environment & Readiness (`9809e9a`)**: Updated `docs/environment-lock.json` to Adobe Acrobat Reader `26.3.22110.0`; passed **30/30** preflight and **24/24** full 3-fixture (`2014`, `2024`, `Ashnar`) readiness (`output/testing/readiness-1795536477.json`) under the post-`9809e9a` harness fingerprint. Local `mpmb-windows11` VM cleanly shut down after all Reader runs completed; `cloud-lab` workers finished with zero lingering `mpmb-paired-*` tmux sessions or sleep inhibitors. All 3 original paid fixtures under `Testing/` match `docs/fixtures.json` SHA-256 byte-for-byte, and `2024_MPMBs-Character-Record-Sheet` remains at `5d6e57c8`.
+- **Fresh Reader `26.3.22110.0` + `145e5940...` Mixed-Engine Suites (5/5 PASS)**:
+  - Ashnar 5-phase: `output/testing/reader-ashnar-workflows-1795537635784461169/report.json`
+  - 2024 Toolbar + Mixed (`ae40f44`/`b3bda77`): `output/testing/reader-2024-toolbar-parity-1795539605822929865/toolbar-parity.json`
+  - 2014 Toolbar + Mixed: `output/testing/reader-2014-toolbar-parity-1795539910868149265/toolbar-parity.json`
+  - 2024 Cleric 7-phase (`6ffa4dc`): `output/testing/reader-2024-classes-all-1795540239033033985/cleric/report.json` (cleanly supersedes historical contradictory reports `1795271463791415733`/`1795272886389588159`)
+  - 2014 Paladin 5-phase: `output/testing/reader-2014-classes-all-1795542118417821986/paladin/report.json` (cleanly supersedes historical contradictory report `1795356052260554795`)
+- **Complete 23/23 (100%) Same-Build `145e5940...` Hardened Paired Displays (`19ae168`, `source_sha256: eb1c87d500cf...`)**:
+  - **2024 (8/8 clean core profiles, 44 phases)**: `cleric` (fresh Reader `26.3.22110.0`), `paladin` & `multiclass` (local `paired-145e5940-1795525313`), `rogue` (`cloud-lab` `paired-145e5940`), `ranger`/`sorcerer`/`warlock`/`wizard` (`cloud-lab` `paired-145e5940-batch2`). (2024 Druid Wild Shape remains faithfully reproduced upstream `ReferenceError: pop is not defined`, zero runtime overrides.)
+  - **2014 (14/14 comprehensive profiles, 72 phases)**: `paladin` (fresh Reader `26.3.22110.0`), `druid`/`artificer`/`multiclass` (local `paired-145e5940-1795525313`), `sorcerer`/`warlock` (`cloud-lab` `paired-145e5940`), `barbarian`/`bard`/`cleric`/`fighter`/`monk`/`ranger`/`rogue`/`wizard` (`cloud-lab` `paired-145e5940-batch2`).
+  - **Ashnar (1/1, 5 phases)**: Fresh Reader `26.3.22110.0` (`reader-ashnar-workflows-1795537635784461169`) + `cloud-lab` `paired-145e5940/results/ashnar/comparison.json`.
+- **Desktop UI/UX Refresh (`f7a570e`, binary SHA-256 `0e9a4cd7a71ab052bc00409de1fdc3ad9733627758ea8e2bd54b9e8fbad047bd`)**:
+  - `src/ui/theme.rs`: Obsidian Slate & Gold Dark theme + Ivory & Ink Light theme, vector `status_dot`/`status_pill`, card/badge/accent button helpers, and `MPMB_THEME` propagation to child modal dialogs.
+  - `src/ui/state.rs`: Revision-keyed `ProjectionCache` (eliminating redundant per-frame PDF projection and page-widget JSON recomputation), `ZoomState` (`FitWidth` + quantized manual zoom), `CharacterSummary`, `SidebarTab`, `FieldFilter`, and `pdf_rect_to_screen` (4 new Rust unit tests).
+  - `src/ui.rs`: Single-row command bar, collapsible tabbed left sidebar (Character Quick-Card with 6-column ability strip, filterable Fields + Field Inspector with `Ctrl+Enter`/`Esc`, Bookmarks, Diagnostics), Save modal with `zenity` Browse, interactive canvas hover/selection widget overlays, keyboard shortcuts (`Ctrl+S`, `Ctrl+B`, `Ctrl+-`/`=`/`0`, `Ctrl+Scroll`, `PageUp`/`PageDown`), and status bar.
+  - Verified with `cargo fmt --check`, strict Clippy (0 warnings), **191/191** Rust tests, visually inspected Dark/Light desktop screenshots (`output/testing/ui-refresh-smoke-v3-1795544560/{dark,light}/reader.png`), `desktop.py` (2014+2024 `native-desktop-1795544610791708346`), `bookmarks-desktop.py` (2014+2024 `native-bookmark-desktop-1795544344927970348`), and `acceptance.py` (2024 `native-acceptance-1795544681607208485` + 2014 `native-acceptance-1795544715544094008`).
+- **Honest scope retained**: `achieved` and `current_release_ready` remain `false` in `docs/native-compatibility.json` for explicitly disclosed boundaries outside the 23-profile core matrix (per-subclass non-default feature choices / per-subclass Reader parity, unpatched upstream PDF bugs, Acrobat-Pro-only APIs, and the trusted-input/synchronous-JS boundary).
+
 ## Adversarial review (cef6e98) 15/15 findings fixed on promoted `145e5940...`; release sign-off held with build-bound matrix — 2026-11-24
 
 All **15/15** findings from `docs/reviews/2026-11-24-adversarial-review.md` (`a2667e8`) have been addressed in atomic commits (`58058ac`..`962205b`). Per Finding 2, the all-reachable-workflows release sign-off is **HELD** (`achieved: false`, `current_release_ready: false`, `*_functional_gates_passed: false` in `docs/native-compatibility.json`) and replaced with an explicit build-bound case-by-case matrix in `docs/2024-readiness.md`.
