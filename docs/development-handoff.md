@@ -1,5 +1,34 @@
 # Development handoff
 
+## Adversarial review (cef6e98) 15/15 findings fixed on promoted `145e5940...`; release sign-off held with build-bound matrix — 2026-11-24
+
+All **15/15** findings from `docs/reviews/2026-11-24-adversarial-review.md` (`a2667e8`) have been addressed in atomic commits (`58058ac`..`962205b`). Per Finding 2, the all-reachable-workflows release sign-off is **HELD** (`achieved: false`, `current_release_ready: false`, `*_functional_gates_passed: false` in `docs/native-compatibility.json`) and replaced with an explicit build-bound case-by-case matrix in `docs/2024-readiness.md`.
+
+**Promoted override-free binary (`e39bdfc` + harness `962205b`)**:
+- `target/debug/mpmb-reader` SHA-256: `145e594041b411c8335d9a4139d60c9f140bf19f8199c298af115b2cba01f783` (`repairs: []`).
+- Validation: `cargo fmt --check` clean, `cargo clippy --locked --all-targets -j 1 -- -D warnings` **0 warnings**, `cargo test --locked -j 1` **187/187 PASS**, Python `unittest discover -s tools/native` **74/74 PASS** under BOTH normal Python and `PYTHONOPTIMIZE=1 python3 -O`.
+- Same-build native passes on `145e5940...`: `acceptance` 2024 (`native-acceptance-1795521642609414705`) & 2014 (`native-acceptance-1795521677245607888`), 4-case `toolbar` 2024 (`native-2024-toolbar-1795521715577554010`) & 2014 (`native-2014-toolbar-1795521810840794811`), `Ashnar` 5-phase (`native-ashnar-workflows-1795521931907078191`), 2024 8/8 clean core profiles (`native-2024-classes-1795522054082976993`), 2024 Druid Wild Shape upstream repro (`native-2024-classes-1795523238033577881`), and 2014 14/14 comprehensive profiles (`native-2014-classes-1795523270716305227`).
+- Same-build hardened paired-display passes on `145e5940...` (with mandatory producer PDF SHA-256 digests + logical page/occurrence widget matching, `source_sha256: eb1c87d500cf...`): `output/testing/paired-145e5940-1795525313/{2024-paladin,2024-multiclass,2014-druid,2014-artificer,2014-multiclass}/comparison.json` (**5/5 PASS**, `complete_report_pair: true`).
+
+**Atomic commits addressing Findings 1–15**:
+- `58058ac` (F1): Sidebar read-only guard + pending draft discard.
+- `73194db` (F8): Settled manual-calc save in `__host.ready()`.
+- `691abee` (F13): Timer budget check before dequeue in `advance()`.
+- `f08b739` (F12): `PDFDocEncoding` + UTF-8/UTF-16 BOM text-string decoding.
+- `354e1df` + `e39bdfc` (F9): Lazy fallback Unicode font embedding + verified existing-font reuse across saves.
+- `f38c6ac` (F10): Multi-select choice PDF `/V` string array and `/I` integer array persistence.
+- `440f579` (F11): Per-widget `/AA` and `/A` action overrides indexed by widget identity.
+- `68bd49a` (F14): Bounded streaming `read_bounded_file()` for JS/XFDF imports.
+- `3c9df97` (F7): Preserve unretained failed Reader document instead of closing on save error.
+- `b177e6c` (F5): Preserve class level digits in `tools/acrobat/verify.py` `Class and Levels`.
+- `4b1017c`, `19ae168`, `709b103`, `962205b` (F3, F4, F6): `-O`-safe explicit validation checks, mandatory producer PDF digests + logical page parity in `verify-paired-feature-displays.py`, and separated intermediate `capture.json` vs terminal `report.json` in Reader class/Ashnar drivers.
+- F2 & F15: Build-bound matrix in `docs/2024-readiness.md`, trusted-input boundary reinforced in `docs/native-reader.md`.
+
+**Remaining pending work before any future release sign-off**:
+1. Run fresh Real Adobe Acrobat Reader preflight/readiness and mixed-engine runs under the post-`962205b` harness fingerprint on `145e5940...` (note `cloud-lab` Reader auto-updated to `26.3.22110.0`; local `mpmb-windows11` remains at baseline `26.2.22031.0`).
+2. Re-run hardened `verify-paired-feature-displays.py` on `145e5940...` for the remaining 2024 (6), 2014 (9), and Ashnar profiles.
+3. Expand beyond structural subclass audits (`subclass-audit.py` default replies) to per-subclass non-default feature-choice and per-subclass Reader qualification where required by release scope.
+
 ## All 3 fixtures (2024, Ashnar, 2014) override-free parity COMPLETE & all 8/8 review findings resolved — 2026-11-24
 
 All reachable clean Reader functional workflows across **all three authorized fixtures (`2024`, `Ashnar`, and `2014`)** now pass Native, Real Adobe Acrobat Reader `26.2.22031.0`, Cold Reopen, Mixed-Engine Reader->Native follow-up saves, and Hardened Paired-Display verification on the promoted **override-free** runtime `target/debug/mpmb-reader` (`67a800d`, SHA-256 `716a381d1284e2a3917b6be0206043af9553b15aff7635c7b13d326d7da8b963`), with all 8/8 findings from `output/reviews/MPMPAcrobatLinux-developer-review.md` (`0e19a42`) fixed in atomic commits with unit tests. All three paid fixtures match `docs/fixtures.json` SHA-256 byte-for-byte, and `2024_MPMBs-Character-Record-Sheet` is untouched.

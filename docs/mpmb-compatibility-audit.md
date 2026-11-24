@@ -1,5 +1,25 @@
 # MPMB compatibility audit — 2026-10-26
 
+## Adversarial review (cef6e98) 15/15 findings remediated; release sign-off held pending same-build Reader refresh — 2026-11-24
+
+Following the independent adversarial review at `cef6e98` (`docs/reviews/2026-11-24-adversarial-review.md`), all **15/15** findings were remediated in atomic commits (`58058ac`..`962205b`) and the **all-reachable-workflows release sign-off is explicitly HELD** (`docs/2024-readiness.md`, `docs/native-compatibility.json`) with a build-bound case-by-case matrix:
+
+- **Engine & UI fixes on promoted binary `target/debug/mpmb-reader` (`e39bdfc`, SHA-256 `145e594041b411c8335d9a4139d60c9f140bf19f8199c298af115b2cba01f783`)**:
+  - `58058ac` (Finding 1): `SidebarEditor` checks `Field.readonly`, disables read-only/button editors, and provides `"Discard pending edit"` so failed drafts cannot strand earlier unsaved edits.
+  - `73194db` (Finding 8): `__host.ready()` allows saving settled documents with calculations intentionally disabled while still draining startup and `calcStop`/`delay` timers.
+  - `691abee` (Finding 13): `advance()` checks the 100-step timer budget before dequeuing so the 101st due timer survives to the next tick.
+  - `f08b739` (Finding 12): Unmarked PDF text strings decode via ISO 32000-1 Table D.2 `PDFDocEncoding` (with UTF-16BE/LE and UTF-8 BOMs preserved).
+  - `354e1df` + `e39bdfc` (Finding 9): Fallback Unicode font embeds lazily only when an appearance needs it and reuses verified existing matching fonts across cold saves (eliminating ~449.5 KB/save no-op bloat).
+  - `f38c6ac` (Finding 10): Multi-select choice fields preserve PDF `/V` string arrays and `/I` integer arrays through load, snapshot, and projection.
+  - `440f579` (Finding 11): Per-widget `/AA` and `/A` overrides are indexed by widget identity rather than collapsing onto widget 0.
+  - `68bd49a` (Finding 14): `read_bounded_file()` enforces JS (16 MiB) and XFDF (64 MiB) import caps before allocating excess host memory.
+- **Verification harness fixes (`3c9df97`..`962205b`)**:
+  - `3c9df97` (Finding 7): `readiness.py` only closes a failed document after verified retention; failed retention preserves the open state and marks `unresolved: true`.
+  - `b177e6c` (Finding 5): `tools/acrobat/verify.py` preserves class words AND numeric levels in `Class and Levels` (`Fighter 12` vs `Fighter 2` and swapped multiclass levels now fail).
+  - `4b1017c`, `19ae168`, `709b103`, `962205b` (Findings 3, 4, 6): Replaced qualification/guard `assert` statements with explicit checks immune to `PYTHONOPTIMIZE=1`; `verify-paired-feature-displays.py` now requires producer PDF SHA-256 digests and logical page/occurrence widget parity; `profile_qualification.py` separates intermediate `capture.json` from terminal `report.json` so failed/timed-out/deferred paired checks never persist `passed: true`.
+- **Same-build `145e5940...` verification**: `cargo fmt --check`, strict Clippy (0 warnings), **187/187** Rust tests, **74/74** Python tests (both normal Python and `PYTHONOPTIMIZE=1 python3 -O`), `acceptance` (2024 & 2014), 4-case `toolbar` (2024 & 2014), `Ashnar` 5-phase native, 2024 8/8 clean core profiles (44 phases), 2024 Druid Wild Shape upstream repro (`repairs: []`), 2014 14/14 core + Artificer + Multiclass profiles (72 phases), and **5/5** hardened paired-display checks (`output/testing/paired-145e5940-1795525313/{2024-paladin,2024-multiclass,2014-druid,2014-artificer,2014-multiclass}/comparison.json`) all PASS.
+- **Explicitly held / pending**: Fresh same-build Reader readiness & mixed-engine runs under the post-`962205b` harness fingerprint, remaining same-build hardened paired-display reruns, per-subclass non-default feature-choice/Reader qualification, and documented trusted-input/synchronous-JS scope (Finding 15). Three historical pre-`709b103` contradictory driver reports (`1795271463791415733`, `1795272886389588159`, `1795356052260554795`) remain explicitly disclosed alongside their separate passing `comparison.json` runs.
+
 ## Full 3-fixture override-free qualification COMPLETE (2024 + Ashnar + 2014) and all 8/8 review findings resolved — 2026-11-24
 
 Promoted override-free runtime `target/debug/mpmb-reader` (`67a800d`, SHA-256 `716a381d1284e2a3917b6be0206043af9553b15aff7635c7b13d326d7da8b963`) executes original embedded MPMB scripts with **zero runtime script overrides** (former `mpmb-2024-261023-wildshape-pop-typo` removed in `33f6cb4`/`0e19a42`) and passes `cargo fmt --check`, `cargo test --locked -j 1` (**179/179**), `cargo clippy --locked --all-targets -j 1 -- -D warnings` (0 warnings), and **63/63** Python unit tests (`91d1e26`). All three paid fixtures under `Testing/` match `docs/fixtures.json` SHA-256 byte-for-byte, and `2024_MPMBs-Character-Record-Sheet` remains untouched.

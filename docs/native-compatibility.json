@@ -10,9 +10,10 @@
     ],
     "current_release_ready": false,
     "release_gates": "docs/2024-readiness.md",
-    "2024_functional_gates_passed": true,
-    "2014_functional_gates_passed": true,
-    "ashnar_functional_gates_passed": true,
+    "2024_functional_gates_passed": false,
+    "2014_functional_gates_passed": false,
+    "ashnar_functional_gates_passed": false,
+    "release_signoff_status": "HELD pending fresh same-build Reader/mixed-engine readiness under new harness fingerprint, remaining same-build hardened paired displays, and per-subclass feature-choice/Reader qualification (see docs/2024-readiness.md)",
     "runtime_script_overrides": []
   },
   "schema": 4,
@@ -3802,5 +3803,52 @@
       },
       "visual_checks": "output/testing/visual-check/{druid2014,ranger2014,artificer2014}"
     }
+  },
+  "adversarial_review_remediation_2026_11_24": {
+    "review_report": "docs/reviews/2026-11-24-adversarial-review.md",
+    "release_signoff": "HELD (build-bound matrix published in docs/2024-readiness.md)",
+    "promoted_binary": {
+      "commit": "e39bdfc",
+      "harness_commit": "962205b",
+      "path": "target/debug/mpmb-reader",
+      "sha256": "145e594041b411c8335d9a4139d60c9f140bf19f8199c298af115b2cba01f783",
+      "rust_tests": "187/187 PASS (cargo test --locked -j 1)",
+      "clippy": "0 warnings (cargo clippy --locked --all-targets -j 1 -- -D warnings)",
+      "python_tests_normal_and_optimize": "74/74 PASS (normal Python and PYTHONOPTIMIZE=1 python3 -O)",
+      "runtime_script_overrides": []
+    },
+    "findings_resolved": {
+      "1_readonly_sidebar_save_trap": "58058ac — SidebarEditor tracks Field.readonly, disables read-only/button editors, adds explicit pending-draft discard + unit test",
+      "2_same_build_matrix_and_held_signoff": "Build-bound matrix on 145e5940... in docs/2024-readiness.md; pending same-build Reader/paired/per-subclass items marked explicitly",
+      "3_capture_vs_terminal_qualification": "709b103 — tools/native/profile_qualification.py separates capture.json from terminal report.json across 2024/2014/Ashnar Reader drivers + 4 unit tests; 3 historical contradictory reports (1795271463791415733, 1795272886389588159, 1795356052260554795) explicitly disclosed",
+      "4_paired_verifier_provenance_and_pages": "19ae168 — verify-paired-feature-displays.py requires producer PDF sha256 digests and logical page/occurrence widget parity + negative controls",
+      "5_class_and_levels_digits": "b177e6c — tools/acrobat/verify.py preserves class words and numeric levels + test_verify_class_levels.py",
+      "6_python_optimize_safety": "4b1017c, 19ae168, 709b103, 962205b — replaced qualification/guard assert statements with explicit checks; all 74/74 Python tests verified under PYTHONOPTIMIZE=1 python3 -O",
+      "7_preserve_unretained_failed_reader_state": "3c9df97 — readiness.py only closes after verified retention and marks unresolved when save fails + test_readiness_cleanup.py",
+      "8_settled_disabled_calculations_save": "73194db — __host.ready() allows settled disabled calculations without pending timers while still draining startup/calcStop timers + unit test",
+      "9_bounded_noop_and_edited_cold_saves": "354e1df, e39bdfc — lazy fallback Unicode font embedding + verified existing-font reuse across saves + 4-cycle unit test",
+      "10_multiselect_choice_pdf_arrays": "f38c6ac — load/snapshot/project PDF /V string arrays and /I integer arrays for multi-select choice fields + round-trip unit test",
+      "11_widget_specific_actions": "440f579 — per-widget /AA and /A action overrides indexed by widget identity without collapsing onto widget 0 + unit test",
+      "12_pdfdocencoding_text_strings": "f08b739 — ISO 32000-1 Table D.2 PDFDocEncoding + UTF-8/UTF-16 BOM decoding for PDF text strings + unit test",
+      "13_timer_budget_preserves_101st_callback": "691abee — check budget before dequeuing in advance() + unit test",
+      "14_bounded_streaming_import_reads": "68bd49a — read_bounded_file() caps host allocation at limit+1 bytes for JS (16 MiB) and XFDF (64 MiB) imports + unit test",
+      "15_trusted_input_boundary": "Documented explicitly in docs/native-reader.md and docs/2024-readiness.md"
+    },
+    "same_build_145e5940_evidence": {
+      "acceptance_2024": "output/testing/native-acceptance-1795521642609414705/acceptance.json",
+      "acceptance_2014": "output/testing/native-acceptance-1795521677245607888/acceptance.json",
+      "toolbar_2024_4case": "output/testing/native-2024-toolbar-1795521715577554010/toolbar-workflows.json",
+      "toolbar_2014_4case": "output/testing/native-2014-toolbar-1795521810840794811/toolbar-workflows.json",
+      "ashnar_5phase_native": "output/testing/native-ashnar-workflows-1795521931907078191/report.json",
+      "2024_8clean_core_profiles_44phases": "output/testing/native-2024-classes-1795522054082976993/classes-2024.json",
+      "2024_druid_wildshape_upstream_repro": "output/testing/native-2024-classes-1795523238033577881/classes-2024.json",
+      "2014_14comprehensive_profiles_72phases": "output/testing/native-2014-classes-1795523270716305227/classes-2014.json",
+      "hardened_paired_displays_5_profiles_vs_reader_26_2_22031_0": "output/testing/paired-145e5940-1795525313/{2024-paladin,2024-multiclass,2014-druid,2014-artificer,2014-multiclass}/comparison.json (all 5 passed=True, complete_report_pair=True, source_sha256=eb1c87d500cf...)"
+    },
+    "pending_before_release_signoff": [
+      "Fresh Real Adobe Acrobat Reader preflight/readiness and mixed-engine runs under the post-962205b harness fingerprint on 145e5940...",
+      "Re-running hardened verify-paired-feature-displays.py on 145e5940... for the remaining 2024 (6), 2014 (9), and Ashnar profiles",
+      "Per-subclass non-default feature-choice and per-subclass Real Reader qualification beyond structural native subclass audits"
+    ]
   }
 }
