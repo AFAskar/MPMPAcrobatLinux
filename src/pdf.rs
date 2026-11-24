@@ -24,6 +24,8 @@ pub struct Widget {
     pub page: i32,
     pub rect: Vec<f64>,
     pub flags: i64,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub actions: BTreeMap<String, String>,
 }
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Field {
@@ -280,21 +282,26 @@ fn walk(
             );
         }
 
+        let mut widget_actions = BTreeMap::new();
         if let Ok(aa) = wd
             .get(b"AA")
             .and_then(|v| d.dereference(v).map(|(_, v)| v))
             .and_then(Object::as_dict)
         {
             for (k, v) in aa {
-                actions
-                    .entry(String::from_utf8_lossy(k).into())
-                    .or_insert_with(|| action(d, v));
+                let key = String::from_utf8_lossy(k).into_owned();
+                let code = action(d, v);
+                if matches!(key.as_str(), "K" | "F" | "V" | "C") {
+                    actions.entry(key).or_insert(code);
+                } else {
+                    widget_actions.insert(key, code);
+                }
             }
         }
         if let Ok(a) = wd.get(b"A") {
             let code = action(d, a);
             if !code.is_empty() {
-                actions.entry("U".into()).or_insert(code);
+                widget_actions.entry("U".into()).or_insert(code);
             }
         }
         let flags = wd.get(b"F").and_then(Object::as_i64).unwrap_or(4);
@@ -321,6 +328,7 @@ fn walk(
             page: *page_map.get(&wid).unwrap_or(&-1),
             rect,
             flags,
+            actions: widget_actions,
         });
     }
     let items = attrs
@@ -2225,6 +2233,105 @@ mod action_tests {
         assert_eq!(
             rt2.eval("getField('Tags').currentValueIndices").unwrap(),
             json!([0, 1])
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn multi_widget_field_dispatches_per_widget_actions_independently() {
+        let mut doc = Document::new();
+        let page = doc.add_object(
+            dictionary! {"Type"=>"Page","MediaBox"=>vec![0.into(),0.into(),612.into(),792.into()]},
+        );
+        let pages =
+            doc.add_object(dictionary! {"Type"=>"Pages","Kids"=>vec![page.into()],"Count"=>1});
+        doc.get_dictionary_mut(page).unwrap().set("Parent", pages);
+
+        let js_act = |code: &str| {
+            Object::Dictionary(dictionary! {
+                "S"=>"JavaScript",
+                "JS"=>Object::string_literal(code)
+            })
+        };
+        let parent_id = doc.add_object(dictionary! {
+            "FT"=>"Btn",
+            "Ff"=>65536,
+            "T"=>Object::string_literal("MultiBtn")
+        });
+        let w0 = doc.add_object(dictionary! {
+            "Subtype"=>"Widget","Parent"=>parent_id,"P"=>page,"F"=>4,
+            "Rect"=>vec![10.into(),700.into(),50.into(),720.into()],
+            "A"=>js_act("log.push('w0:U')"),
+            "AA"=>dictionary! {
+                "Fo"=>js_act("log.push('w0:Fo')"),
+                "Bl"=>js_act("log.push('w0:Bl')")
+            }
+        });
+        let w1 = doc.add_object(dictionary! {
+            "Subtype"=>"Widget","Parent"=>parent_id,"P"=>page,"F"=>4,
+            "Rect"=>vec![60.into(),700.into(),100.into(),720.into()],
+            "AA"=>dictionary! {
+                "U"=>js_act("log.push('w1:U')"),
+                "Fo"=>js_act("log.push('w1:Fo')"),
+                "Bl"=>js_act("log.push('w1:Bl')")
+            }
+        });
+        // Widget 2 has NO actions of its own; it must NOT run widget 0's handlers.
+        let w2 = doc.add_object(dictionary! {
+            "Subtype"=>"Widget","Parent"=>parent_id,"P"=>page,"F"=>4,
+            "Rect"=>vec![110.into(),700.into(),150.into(),720.into()]
+        });
+        doc.get_dictionary_mut(parent_id)
+            .unwrap()
+            .set("Kids", vec![w0.into(), w1.into(), w2.into()]);
+
+        // Also test a field with a field-level /AA /U fallback overridden only on widget 1.
+        let fallback_parent = doc.add_object(dictionary! {
+            "FT"=>"Btn",
+            "Ff"=>65536,
+            "T"=>Object::string_literal("FallbackBtn"),
+            "AA"=>dictionary! {"U"=>js_act("log.push('field:U')")}
+        });
+        let f0 = doc.add_object(dictionary! {
+            "Subtype"=>"Widget","Parent"=>fallback_parent,"P"=>page,"F"=>4,
+            "Rect"=>vec![10.into(),650.into(),50.into(),670.into()]
+        });
+        let f1 = doc.add_object(dictionary! {
+            "Subtype"=>"Widget","Parent"=>fallback_parent,"P"=>page,"F"=>4,
+            "Rect"=>vec![60.into(),650.into(),100.into(),670.into()],
+            "AA"=>dictionary! {"U"=>js_act("log.push('f1:U')")}
+        });
+        doc.get_dictionary_mut(fallback_parent)
+            .unwrap()
+            .set("Kids", vec![f0.into(), f1.into()]);
+
+        doc.get_dictionary_mut(page).unwrap().set(
+            "Annots",
+            vec![w0.into(), w1.into(), w2.into(), f0.into(), f1.into()],
+        );
+        let form =
+            doc.add_object(dictionary! {"Fields"=>vec![parent_id.into(), fallback_parent.into()]});
+        let root = doc.add_object(dictionary! {"Type"=>"Catalog","Pages"=>pages,"AcroForm"=>form});
+        doc.trailer.set("Root", root);
+
+        let dir = std::env::temp_dir().join(format!("mpmb-widget-actions-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("widgets.pdf");
+        doc.save(&path).unwrap();
+
+        let pdf = std::sync::Arc::new(Pdf::open(&path).unwrap());
+        let rt = crate::runtime::Runtime::new(&pdf, vec![], vec![], false, None, None).unwrap();
+        rt.eval("var log=[];").unwrap();
+        rt.eval("__host.activate('MultiBtn', 1, {});").unwrap();
+        rt.eval("__host.activate('MultiBtn', 0, {});").unwrap();
+        rt.eval("__host.activate('MultiBtn', 2, {});").unwrap();
+        rt.eval("__host.focusField(null);").unwrap();
+        rt.eval("__host.activate('FallbackBtn', 0, {});").unwrap();
+        rt.eval("__host.activate('FallbackBtn', 1, {});").unwrap();
+        assert_eq!(
+            rt.eval("log").unwrap(),
+            json!(["w1:Fo", "w1:U", "w1:Bl", "w0:Fo", "w0:U", "w0:Bl", "field:U", "f1:U"])
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

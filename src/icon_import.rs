@@ -759,6 +759,7 @@ mod tests {
                     page: 0,
                     rect: vec![0., 0., 20., 20.],
                     flags: 4,
+                    actions: std::collections::BTreeMap::new(),
                 }],
                 actions: std::collections::BTreeMap::new(),
                 items: Vec::new(),

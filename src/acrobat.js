@@ -112,7 +112,7 @@ var __host = (function () {
       insertItemAt(label,exp,i){this.items.splice(i===undefined?this.items.length:i,0,exp===undefined?label:[exp,label])},
       deleteItemAt(i){this.items.splice(i,1)},
       checkThisBox(i,on){this.value=on?(this.exportValues[i]||'Yes'):'Off'},isBoxChecked(i){return String(this.value)===(this.exportValues[i]||'Yes')?1:0},
-      setAction(type,code){const key=({Calculate:'C',Validate:'V',Keystroke:'K',Format:'F',MouseUp:'U',MouseDown:'D',OnFocus:'Fo',OnBlur:'Bl'})[type];if(!key)return unsupported('Field.setAction '+type);code=String(code);if(key==='C'){const index=data.order.indexOf(n);if(code&&index<0){data.order.push(n);revision++;}else if(!code&&index>=0){data.order.splice(index,1);revision++;}}if(this._actions[key]!==code){this._actions[key]=code;this._modifiedActions=this._modifiedActions||{};this._modifiedActions[key]=code;revision++;}},
+      setAction(type,code){const key=({Calculate:'C',Validate:'V',Keystroke:'K',Format:'F',MouseUp:'U',MouseDown:'D',OnFocus:'Fo',OnBlur:'Bl'})[type];if(!key)return unsupported('Field.setAction '+type);code=String(code);if(key==='C'){const index=data.order.indexOf(n);if(code&&index<0){data.order.push(n);revision++;}else if(!code&&index>=0){data.order.splice(index,1);revision++;}}if(this._actions[key]!==code){this._actions[key]=code;this._modifiedActions=this._modifiedActions||{};this._modifiedActions[key]=code;revision++;}for(const w of this._widgets)if(w.actions&&Object.prototype.hasOwnProperty.call(w.actions,key)){delete w.actions[key];revision++;}},
       setFocus(){focusField(n);},getArray(){return [this]},
       browseForFileToSubmit(){if(this.type!=='text'||!(xFlags&1048576))throw Error('File selection requires a file-select text field');if(typeof __browsePdf!=='function')return unsupported('Field.browseForFileToSubmit');const path=__browsePdf();if(path!==null)this.value=path;},
       buttonGetIcon(face=0){if(face!==0)return unsupported('Field.buttonGetIcon non-normal face');if(this._icon)return this._icon;return docIconToken(xIconKey?('hash:'+xIconKey):('field:'+n),n)},
@@ -215,7 +215,7 @@ var __host = (function () {
     }
     return null;
   }
-  function eventRun(f,key,value,extra,richInput) {
+  function eventRun(f,key,value,extra,richInput,widgetIndex) {
     let previous=globalThis.event;
     let e=Object.assign({target:f,targetName:f.name,source:importActive?null:(fields[data.focus]||f),name:({C:'Calculate',V:'Validate',K:'Keystroke',F:'Format',U:'Mouse Up',D:'Mouse Down',Fo:'Focus',Bl:'Blur'})[key]||key,type:'Field',value:['K','V','C','F'].includes(key)?String(value):value,rc:true,willCommit:key==='K',change:'',selStart:0,selEnd:0},extra||{});
     let eventValue=e.value,valueWritten=false,richWritten=false;
@@ -224,7 +224,13 @@ var __host = (function () {
     Object.defineProperty(e,'richValue',{enumerable:true,get(){if(f.type!=='text'||!f.richText||!['K','V','C','F'].includes(key))return invalidFieldGet();return copyData(richData)},set(v){if(f.type!=='text'||!f.richText)return unsupported('Event.richValue on plain field');if(v!==null&&!Array.isArray(v))return unsupported('Event.richValue non-array assignment');richData=copyData(v);richWritten=true;}});
     Object.defineProperties(e,{_valueWritten:{get(){return valueWritten}},_richWritten:{get(){return richWritten}},_richData:{get(){return copyData(richData)}}});
     globalThis.event=e;
-    try {if(f._actions[key]) (0,eval)(f._actions[key]);return e;}
+    let actionCode=f._actions[key];
+    if(['D','U','Fo','Bl','E','X'].includes(key)){
+      const idx=widgetIndex!==undefined?widgetIndex:(data.focus===f.name?(data.focusWidget||0):0);
+      const w=f._widgets[idx];
+      if(w&&w.actions&&Object.prototype.hasOwnProperty.call(w.actions,key))actionCode=w.actions[key];
+    }
+    try {if(actionCode) (0,eval)(actionCode);return e;}
     catch(err){let stack;try{stack=err==null?undefined:err.stack}catch(error){stack={getter_error:safeExceptionText(error)}}errors.push({stage:'field',field:f.name,event:key,error:safeExceptionText(err),stack:stack});if(['K','V','F'].includes(key)&&!unsupportedErrors.has(err))return e;throw err}
     finally {globalThis.event=previous;}
   }
@@ -274,9 +280,9 @@ var __host = (function () {
     const f=n===null?null:fields[n];if(n!==null&&!f)throw Error('Unknown field '+n);
     if(f&&index===undefined){index=f._widgets.map(w=>w.page>=0).indexOf(true);if(index<0)index=0;}
     if(data.focus===n&&(!f||(data.focusWidget||0)===index))return;
-    const previous=fields[data.focus];data.focus=null;data.focusWidget=0;
-    if(previous)eventRun(previous,'Bl',previous.value);
-    if(f){data.focus=n;data.focusWidget=index;const page=f._widgets[index]&&f._widgets[index].page;if(page>=0)globalThis.pageNum=page;eventRun(f,'Fo',f.value);}
+    const previous=fields[data.focus],previousWidget=data.focusWidget||0;data.focus=null;data.focusWidget=0;
+    if(previous)eventRun(previous,'Bl',previous.value,undefined,undefined,previousWidget);
+    if(f){data.focus=n;data.focusWidget=index;const page=f._widgets[index]&&f._widgets[index].page;if(page>=0)globalThis.pageNum=page;eventRun(f,'Fo',f.value,undefined,undefined,index);}
   }
   // Applying the desktop editor completes a user edit, including leaving the
   // field. Programmatic edit/value assignment remains a separate operation.
@@ -304,9 +310,9 @@ var __host = (function () {
   function activate(n,index=0,modifiers={}){
     const f=fields[n];if(!f)throw Error('Unknown field '+n);focusField(n,index);
     const mouse={shift:!!modifiers.shift,modifier:!!modifiers.modifier};
-    eventRun(f,'D',f.value,mouse);
+    eventRun(f,'D',f.value,mouse,undefined,index);
     if(!f.readonly&&(f.type==='checkbox'||f.type==='radiobutton'))f.checkThisBox(index,f.type==='radiobutton'||!f.isBoxChecked(index));
-    eventRun(f,'U',f.value,mouse);if(globalThis.calculate&&app.calculate)calculateNow();
+    eventRun(f,'U',f.value,mouse,undefined,index);if(globalThis.calculate&&app.calculate)calculateNow();
   }
   function pageWidgets(page){const result=[];for(const n of names){const f=fields[n];f._widgets.forEach((w,index)=>{const display=widgetDisplay(f,index);if(w.page===page&&display!==1&&display!==3)result.push({name:n,index,rect:w.rect,type:f.type,readonly:f.readonly})})}return result;}
   function advance(ms) {
