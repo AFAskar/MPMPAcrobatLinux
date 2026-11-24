@@ -22,6 +22,11 @@ def case_plan(scope):
     return names
 
 
+def _require(condition, message):
+    if not condition:
+        raise AssertionError(message)
+
+
 def cases_complete(cases, plan):
     return (isinstance(plan, list) and bool(plan)
             and [case['name'] for case in cases] == plan
@@ -106,20 +111,20 @@ def main():
         print(name, 'PASS' if passed else 'FAIL',flush=True)
         if not passed: raise RuntimeError('Readiness stopped: '+name+'; evidence: '+str(report))
     def assert_fields(result,expected):
-        actual=result['fields'];assert all(actual.get(k)==str(v) for k,v in expected.items()),(expected,actual)
+        actual=result['fields'];_require(all(actual.get(k)==str(v) for k,v in expected.items()),(expected,actual))
         return result
     with c.desktop_lock():
         try:
             def isolated_desktop():
                 windows=c.command('inspect')
-                assert not [w for w in windows if w.get('class')=='AcrobatSDIWindow' and '.pdf' in w.get('name','').lower()], 'Pre-existing document must be retained/closed before readiness'
+                _require(not [w for w in windows if w.get('class')=='AcrobatSDIWindow' and '.pdf' in w.get('name','').lower()], 'Pre-existing document must be retained/closed before readiness')
                 return c.command('health')
             record('desktop-session',isolated_desktop)
             record('reader-bridge',lambda:c.script('ping'))
             def reject_outside():
                 try:c.command('open',path=r'C:\Windows\win.ini')
                 except RuntimeError as error:
-                    assert 'Path outside testing workspace' in str(error),str(error)
+                    _require('Path outside testing workspace' in str(error),str(error))
                     return {'refused':True}
                 raise AssertionError('Outside path was accepted')
             record('reject-outside-workspace',reject_outside)
@@ -155,7 +160,7 @@ def main():
                     def companion(p=path,e=expected):
                         before=c.script('read',path=p,fields=[])['pages']
                         result=c.script('call',path=p,name='DoTemplate',args=['AScomp','Add',None,True])
-                        prefix=result['value'];assert result['pages']==before+1,result
+                        prefix=result['value'];_require(result['pages']==before+1,result)
                         c.script('call',path=p,name='ApplyCompRace',args=['wolf',prefix])
                         extra={prefix+'Comp.Race':'wolf',prefix+'Comp.Use.Ability.Str.Score':('12' if fixture=='blank-2014' else '14')}
                         value=assert_fields(c.script('read',path=p,fields=list(extra)),extra)
@@ -166,7 +171,7 @@ def main():
                     from dialog_probe import probe
                     record('ashnar-class-dialog-cancel',lambda p=path:probe(p))
                     def regenerate_spells(p=path):
-                        result=c.script('call',path=p,name='GenerateSpellSheet',args=[True]);assert result.get('value') is True,result
+                        result=c.script('call',path=p,name='GenerateSpellSheet',args=[True]);_require(result.get('value') is True,result)
                         prefixes=c.script('read',path=p,fields=['Template.extras.SSfront'])['fields']['Template.extras.SSfront']
                         prefix=[x for x in prefixes.split(',') if x][-1]
                         expected_spells={prefix+'spells.remember.1':'minor illusion##atwill##monk',prefix+'spells.remember.5':'darkness##2##monk',prefix+'spells.remember.24':'darkness##oncelr##dark elf'}
@@ -185,23 +190,23 @@ def main():
                     set_active(reopened_path)
                     reopened=assert_fields(c.script('read',path=reopened_path,fields=list(e)),e)
                     local=c.fetch(o,c.STATE/(f+'-'+run_id+'-roundtrip.pdf'))
-                    verified=inspect(local,e);assert verified['passed'],verified
+                    verified=inspect(local,e);_require(verified['passed'],verified)
                     source=next(x for x in (c.REPO/'Testing').glob('*.pdf') if ('Ashnar' in x.name if f=='ashnar' else ('_2014_' in x.name if f=='blank-2014' else '_2024_' in x.name)))
-                    assert script_hashes(source)==script_hashes(local),'Embedded document JavaScript changed'
+                    _require(script_hashes(source)==script_hashes(local),'Embedded document JavaScript changed')
                     verified['document_scripts_preserved']=True
                     if f!='ashnar':
                         from pypdf import PdfReader
                         saved_fields=canonical_fields(PdfReader(local))
-                        assert str(saved_fields['User Script'].get('/V','')).replace('\r\n','\n').replace('\r','\n')==(c.REPO/'Testing/addons/readiness-sentinel.js').read_text(),'Manual add-on did not persist'
+                        _require(str(saved_fields['User Script'].get('/V','')).replace('\r\n','\n').replace('\r','\n')==(c.REPO/'Testing/addons/readiness-sentinel.js').read_text(),'Manual add-on did not persist')
                         verified['manual_addon_preserved']=True
                     if f=='ashnar':
                         from pypdf import PdfReader
                         original_fields=canonical_fields(PdfReader(source));saved_fields=canonical_fields(PdfReader(local))
                         key='User_Imported_Files.Stringified'
-                        assert original_fields[key].get('/V')==saved_fields[key].get('/V'),'Imported scripts changed'
+                        _require(original_fields[key].get('/V')==saved_fields[key].get('/V'),'Imported scripts changed')
                         verified['imported_content_preserved']=True
                         remembered=[str(v.get('/V','')) for k,v in saved_fields.items() if 'spells.remember.' in k]
-                        assert any('minor illusion' in x for x in remembered) and any('darkness' in x for x in remembered),'Ashnar spell entries lost'
+                        _require(any('minor illusion' in x for x in remembered) and any('darkness' in x for x in remembered),'Ashnar spell entries lost')
                         verified['saved_spell_entries_preserved']=True
                     c.script('close',path=reopened_path)
                     set_active(None)
@@ -214,11 +219,11 @@ def main():
             for rule in [x for x in scope if x!='ashnar']:
                 record('druid-'+rule+'-spell-generation-roundtrip',lambda r=rule:spell_test(r,run_id,on_active=set_active))
             def audit_resources():
-                assert c.harness_fingerprint()==fingerprint,'Harness or fixture configuration changed during this run'
+                _require(c.harness_fingerprint()==fingerprint,'Harness or fixture configuration changed during this run')
                 evidence=resources.snapshot(started)
-                assert evidence['host']['oom_kills']==host_start['oom_kills'],'Host OOM kill occurred during the suite'
-                assert not evidence['guest']['reader_events'],evidence['guest']['reader_events']
-                assert not evidence['guest']['resource_exhaustion'],evidence['guest']['resource_exhaustion']
+                _require(evidence['host']['oom_kills']==host_start['oom_kills'],'Host OOM kill occurred during the suite')
+                _require(not evidence['guest']['reader_events'],evidence['guest']['reader_events'])
+                _require(not evidence['guest']['resource_exhaustion'],evidence['guest']['resource_exhaustion'])
                 return evidence
             record('no-new-reader-crash-or-resource-exhaustion',audit_resources)
             write_report('complete')

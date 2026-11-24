@@ -1,6 +1,10 @@
 import copy
+import os
+import subprocess
+import sys
 import unittest
-from reference_2024_qualification import expected_cases, require_2024_reference
+from pathlib import Path
+from reference_2024_qualification import expected_cases, require_2024_reference, require_fixture_reference
 
 
 class ReferenceQualificationTests(unittest.TestCase):
@@ -43,6 +47,24 @@ class ReferenceQualificationTests(unittest.TestCase):
             bad['cases'][index]['passed'] = False
             with self.subTest(failed_case=index), self.assertRaises(AssertionError):
                 require_2024_reference(bad, 'current')
+
+    def test_invalid_reports_remain_rejected_under_python_optimize(self):
+        tools_native = str(Path(__file__).resolve().parent)
+        script = (
+            'import sys; '
+            f'sys.path.insert(0, {tools_native!r}); '
+            'from reference_2024_qualification import require_2024_reference, require_fixture_reference; '
+            'from workflow_state_comparison import compare; '
+            'bad = {"passed": False, "status": "failed", "fixture_scope": ["2024"], "harness_sha256": "old", "planned_cases": 0, "expected_cases": [], "cases": []}; '
+            'caught = 0\n'
+            'for fn in (lambda: require_2024_reference(bad, "new"), lambda: require_fixture_reference(bad, "new", "2024"), lambda: compare({"passed": False, "phases": []}, {"passed": True, "phases": []})): \n'
+            '    try: fn()\n'
+            '    except AssertionError: caught += 1\n'
+            'if caught != 3: raise SystemExit(1)\n'
+        )
+        env = dict(os.environ, PYTHONOPTIMIZE='1')
+        proc = subprocess.run([sys.executable, '-O', '-c', script], env=env, capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
 
 
 if __name__ == '__main__':

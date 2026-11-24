@@ -5,24 +5,29 @@ import json
 from pathlib import Path
 
 
+def _require(condition, message=None):
+    if not condition:
+        raise AssertionError(message) if message is not None else AssertionError()
+
+
 def encoded_state(state, ignore_generated_prefixes=False):
     if ignore_generated_prefixes:
-        assert isinstance(state.get('rawPrefixes'), list), 'Missing retained generated addresses'
+        _require(isinstance(state.get('rawPrefixes'), list), 'Missing retained generated addresses')
         state = {key:value for key,value in state.items() if key != 'rawPrefixes'}
     return json.dumps(state, sort_keys=True, ensure_ascii=True, separators=(',', ':'), allow_nan=False)
 
 
 def compare(expected, actual, ignore_generated_prefixes=False):
-    assert expected['passed'] is True and actual['passed'] is True, 'Require complete successful reports'
+    _require(expected['passed'] is True and actual['passed'] is True, 'Require complete successful reports')
     left, right = expected['phases'], actual['phases']
     labels = [p['label'] for p in left]
-    assert labels and len(set(labels)) == len(labels)
-    assert labels == [p['label'] for p in right], 'Different completed case sequences'
+    _require(labels and len(set(labels)) == len(labels), 'Duplicate or empty phase labels')
+    _require(labels == [p['label'] for p in right], 'Different completed case sequences')
     pairs=[]
     for a,b in zip(left,right):
         x=encoded_state(a['state'],ignore_generated_prefixes)
         y=encoded_state(b['state'],ignore_generated_prefixes)
-        assert x == y, ('Captured JSON mismatch',a['label'])
+        _require(x == y, ('Captured JSON mismatch',a['label']))
         pairs.append({'label':a['label'],'sha256':hashlib.sha256(x.encode()).hexdigest(),
                       'expected_raw_prefixes':a['state'].get('rawPrefixes'),
                       'actual_raw_prefixes':b['state'].get('rawPrefixes')})
