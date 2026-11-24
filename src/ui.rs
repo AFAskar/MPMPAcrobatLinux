@@ -1,13 +1,20 @@
+mod state;
+mod theme;
+
 use crate::{pdf::Pdf, render::Renderer, runtime::Runtime};
 use anyhow::{bail, Result};
 use eframe::egui::{self, ColorImage};
 use serde_json::{json, Value};
+use state::{
+    filter_fields, pdf_rect_to_screen, FieldFilter, ProjectionCache, SidebarTab, ZoomState,
+};
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::{Read, Write},
     path::PathBuf,
     sync::{Arc, Mutex},
 };
+use theme::{Palette, ThemeMode};
 
 // Use the release's position and keys: later movement/key releases in the
 // same frame can already have changed InputState's final pointer/key state.
@@ -225,10 +232,40 @@ pub fn main() -> Result<()> {
     }
     let mut editor = SidebarEditor::new("PC Name");
     let _ = editor.refresh(&rt);
+    let initial_tab = if std::env::var_os("MPMB_UI_SMOKE_BOOKMARK").is_some() {
+        SidebarTab::Bookmarks
+    } else {
+        SidebarTab::Fields
+    };
+    let doc_title = pdf
+        .path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "Character Sheet".into());
+    let initial_rev = rt
+        .eval("__host.revision")
+        .ok()
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let mut cache = ProjectionCache::default();
+    cache.ensure_metadata(&rt, &pdf, initial_rev);
     let app = Reader {
-        field_names: pdf.fields.keys().cloned().collect(),
+        doc_title,
         menu_images: BTreeMap::new(),
-        render_revision: 0,
+        render_revision: initial_rev,
+        cache,
+        theme_mode: ThemeMode::from_env(),
+        theme_applied: None,
+        sidebar_open: true,
+        sidebar_tab: initial_tab,
+        field_filter: FieldFilter::All,
+        zoom: ZoomState::default(),
+        rendered_width: 0,
+        rendered_page: -1,
+        rendered_rev: u64::MAX,
+        hovered_field: None,
+        page_jump_buf: "1".into(),
+        save_modal_open: false,
         unsaved: false,
         confirm_close: false,
         allow_close: false,
@@ -241,7 +278,8 @@ pub fn main() -> Result<()> {
         texture: None,
         filter: String::new(),
         editor,
-        status: String::new(),
+        status: "Ready".into(),
+        status_is_error: false,
         last_tick: std::time::Instant::now(),
         bookmarks_pane_applied: false,
         save_path: format!(
@@ -252,7 +290,7 @@ pub fn main() -> Result<()> {
         ),
     };
     eframe::run_native(
-        "MPMB Linux Reader — experimental",
+        "MPMB Linux Reader",
         options(),
         Box::new(|_| Ok(Box::new(app))),
     )
@@ -260,8 +298,42 @@ pub fn main() -> Result<()> {
 }
 fn options() -> eframe::NativeOptions {
     eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1200., 850.]),
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1360., 900.])
+            .with_min_inner_size([920., 620.]),
         ..Default::default()
+    }
+}
+fn dialog_options() -> eframe::NativeOptions {
+    eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([960., 720.])
+            .with_min_inner_size([420., 220.]),
+        ..Default::default()
+    }
+}
+fn browse_save_path(current: &str) -> Option<String> {
+    let out = std::process::Command::new("zenity")
+        .args([
+            "--file-selection",
+            "--save",
+            "--title=Save Character Sheet Copy",
+            "--file-filter=PDF documents | *.pdf",
+        ])
+        .arg(format!("--filename={current}"))
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let path = String::from_utf8(out.stdout).ok()?;
+    let trimmed = path.trim_end_matches(['\r', '\n']).to_owned();
+    if trimmed.is_empty() {
+        None
+    } else if !trimmed.to_ascii_lowercase().ends_with(".pdf") {
+        Some(format!("{trimmed}.pdf"))
+    } else {
+        Some(trimmed)
     }
 }
 struct SidebarEditor {
@@ -354,9 +426,22 @@ impl SidebarEditor {
 }
 
 struct Reader {
-    field_names: Vec<String>,
+    doc_title: String,
     menu_images: BTreeMap<String, egui::TextureHandle>,
     render_revision: u64,
+    cache: ProjectionCache,
+    theme_mode: ThemeMode,
+    theme_applied: Option<ThemeMode>,
+    sidebar_open: bool,
+    sidebar_tab: SidebarTab,
+    field_filter: FieldFilter,
+    zoom: ZoomState,
+    rendered_width: usize,
+    rendered_page: i32,
+    rendered_rev: u64,
+    hovered_field: Option<(String, String)>,
+    page_jump_buf: String,
+    save_modal_open: bool,
     unsaved: bool,
     confirm_close: bool,
     allow_close: bool,
@@ -370,6 +455,7 @@ struct Reader {
     filter: String,
     editor: SidebarEditor,
     status: String,
+    status_is_error: bool,
     last_tick: std::time::Instant,
     bookmarks_pane_applied: bool,
     save_path: String,
@@ -626,9 +712,13 @@ impl Reader {
     fn result(&mut self, r: Result<()>) {
         if r.is_ok() {
             self.unsaved = true;
+            self.status_is_error = false;
+            self.cache.invalidate_metadata();
             if !self.editor.dirty {
                 let _ = self.refresh_editor();
             }
+        } else {
+            self.status_is_error = true;
         }
         self.status = match r {
             Ok(_) => "Completed".into(),
@@ -636,26 +726,1033 @@ impl Reader {
         };
         self.texture = None;
     }
+
+    fn go_to_page(&mut self, target: i32, page_count: i32) {
+        if let Err(error) = self.commit_pending_edit() {
+            self.result(Err(error));
+            return;
+        }
+        let next = target.clamp(0, (page_count - 1).max(0));
+        if next != self.page {
+            self.page = next;
+            self.page_jump_buf = (next + 1).to_string();
+            let _ = self.rt.eval(&format!("pageNum={}", self.page));
+            self.texture = None;
+        }
+    }
+
+    fn perform_save(&mut self) -> bool {
+        let r = self.save_copy();
+        let saved = r.is_ok();
+        let saved_path = self.save_path.clone();
+        self.result(r);
+        if saved {
+            self.unsaved = false;
+            self.status = format!("Saved copy to {saved_path}");
+            self.status_is_error = false;
+        }
+        saved
+    }
+
+    fn handle_shortcuts(&mut self, ctx: &egui::Context, page_count: i32) {
+        let typing = ctx.wants_keyboard_input();
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S)) {
+            self.save_modal_open = true;
+        }
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::B)) {
+            self.sidebar_open = !self.sidebar_open;
+        }
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Equals))
+            || ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Plus))
+        {
+            self.zoom.zoom_in();
+        }
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Minus)) {
+            self.zoom.zoom_out();
+        }
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Num0)) {
+            self.zoom.set_fit_width();
+        }
+        if !typing {
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::PageDown)) {
+                self.go_to_page(self.page + 1, page_count);
+            }
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::PageUp)) {
+                self.go_to_page(self.page - 1, page_count);
+            }
+        }
+    }
+
+    fn draw_toolbar(&mut self, ctx: &egui::Context, p: &Palette, page_count: i32) {
+        let toolbar_frame = egui::Frame::new()
+            .fill(p.toolbar_bg)
+            .inner_margin(egui::Margin::symmetric(12, 8))
+            .stroke(egui::Stroke::new(1.0, p.card_stroke));
+        egui::TopBottomPanel::top("toolbar")
+            .frame(toolbar_frame)
+            .show(ctx, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    if ui
+                        .selectable_label(self.sidebar_open, "☰ Panel")
+                        .on_hover_text("Toggle sidebar (Ctrl+B)")
+                        .clicked()
+                    {
+                        self.sidebar_open = !self.sidebar_open;
+                    }
+                    ui.separator();
+
+                    // Document title & clean/unsaved pill
+                    let display_title = if self.doc_title.chars().count() > 20 {
+                        let clipped: String = self.doc_title.chars().take(19).collect();
+                        format!("{clipped}…")
+                    } else {
+                        self.doc_title.clone()
+                    };
+                    ui.label(egui::RichText::new(display_title).strong())
+                        .on_hover_text(&self.doc_title);
+                    if self.unsaved || self.editor.dirty {
+                        theme::status_pill(ui, "Unsaved", p.warn, p.warn_bg);
+                    } else {
+                        theme::status_pill(ui, "Clean", p.ok, p.ok_bg);
+                    }
+
+                    ui.separator();
+
+                    // Page navigation group
+                    if ui
+                        .add_enabled(self.page > 0, egui::Button::new("◀"))
+                        .on_hover_text("Previous page (PageUp)")
+                        .clicked()
+                    {
+                        self.go_to_page(self.page - 1, page_count);
+                    }
+                    let page_edit = ui.add(
+                        egui::TextEdit::singleline(&mut self.page_jump_buf)
+                            .desired_width(32.0)
+                            .horizontal_align(egui::Align::Center),
+                    );
+                    if page_edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        if let Ok(num) = self.page_jump_buf.trim().parse::<i32>() {
+                            self.go_to_page(num - 1, page_count);
+                        }
+                        self.page_jump_buf = (self.page + 1).to_string();
+                    } else if !page_edit.has_focus() {
+                        let current = (self.page + 1).to_string();
+                        if self.page_jump_buf != current {
+                            self.page_jump_buf = current;
+                        }
+                    }
+                    ui.label(
+                        egui::RichText::new(format!("/ {page_count}")).color(p.text_secondary),
+                    );
+                    if ui
+                        .add_enabled(self.page + 1 < page_count, egui::Button::new("▶"))
+                        .on_hover_text("Next page (PageDown)")
+                        .clicked()
+                    {
+                        self.go_to_page(self.page + 1, page_count);
+                    }
+
+                    ui.separator();
+
+                    // Zoom controls
+                    if ui.button("−").on_hover_text("Zoom out (Ctrl+-)").clicked() {
+                        self.zoom.zoom_out();
+                    }
+                    if ui
+                        .button(self.zoom.percent_label())
+                        .on_hover_text("Fit page width (Ctrl+0)")
+                        .clicked()
+                    {
+                        self.zoom.set_fit_width();
+                    }
+                    if ui.button("+").on_hover_text("Zoom in (Ctrl+=)").clicked() {
+                        self.zoom.zoom_in();
+                    }
+
+                    ui.separator();
+
+                    // Primary MPMB actions
+                    if theme::accent_button(ui, p, "Classes…")
+                        .on_hover_text("Open original MPMB Class Selection dialog")
+                        .clicked()
+                    {
+                        let r = self.commit_pending_edit().and_then(|_| {
+                            self.rt
+                                .eval("__host.invokeMenu('ClassesButton')")
+                                .map(|_| ())
+                        });
+                        self.result(r);
+                    }
+
+                    ui.menu_button("Tools", |ui| match self.rt.eval("__host.menuItems()") {
+                        Ok(items) => {
+                            if let Some(items) = items.as_array() {
+                                for item in items {
+                                    let name = item["name"].as_str().unwrap_or("");
+                                    if !self.menu_images.contains_key(name) {
+                                        if let Some(image) = argb_image(&item["icon"]) {
+                                            self.menu_images.insert(
+                                                name.into(),
+                                                ctx.load_texture(name, image, Default::default()),
+                                            );
+                                        }
+                                    }
+                                    ui.horizontal(|ui| {
+                                        if let Some(image) = self.menu_images.get(name) {
+                                            ui.image(image);
+                                        }
+                                        if ui
+                                            .add_enabled(
+                                                item["enabled"] == true,
+                                                egui::Button::new(format!(
+                                                    "{}{}",
+                                                    if item["marked"] == true {
+                                                        "[x] "
+                                                    } else {
+                                                        ""
+                                                    },
+                                                    item["label"].as_str().unwrap_or(name)
+                                                )),
+                                            )
+                                            .on_hover_text(item["tooltip"].as_str().unwrap_or(""))
+                                            .clicked()
+                                        {
+                                            let r = self.commit_pending_edit().and_then(|_| {
+                                                self.rt
+                                                    .eval(&format!(
+                                                        "__host.invokeMenu({})",
+                                                        serde_json::to_string(name).unwrap()
+                                                    ))
+                                                    .map(|_| ())
+                                            });
+                                            self.result(r);
+                                            ui.close();
+                                        }
+                                    });
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            ui.label(format!("Menu error: {e:#}"));
+                        }
+                    });
+
+                    ui.menu_button("Sheets", |ui| {
+                        for (label, code) in [
+                            ("Add Companion Page", "DoTemplate('AScomp','Add',null,true)"),
+                            (
+                                "Add Wild-Shape Page",
+                                "DoTemplate('WSfront','Add',null,true)",
+                            ),
+                            ("Generate Spell Sheet…", "GenerateSpellSheet()"),
+                        ] {
+                            if ui.button(label).clicked() {
+                                let r = self
+                                    .commit_pending_edit()
+                                    .and_then(|_| self.rt.command(code));
+                                self.result(r);
+                                ui.close();
+                            }
+                        }
+                        ui.separator();
+                        if ui.button("Import User Script…").clicked() {
+                            let r = self.commit_pending_edit().and_then(|_| {
+                                self.rt.eval(TOOLBAR_IMPORT_SCRIPT_ACTION).map(|_| ())
+                            });
+                            self.result(r);
+                            ui.close();
+                        }
+                        if ui.button("Recalculate Sheet").clicked() {
+                            let r = self
+                                .commit_pending_edit()
+                                .and_then(|_| self.rt.eval("calculateNow()").map(|_| ()));
+                            self.result(r);
+                            ui.close();
+                        }
+                        if ui.button("JavaScript Console").clicked() {
+                            if let Err(error) = self.rt.eval("console.show()") {
+                                self.status = format!("Console failed: {error:#}");
+                                self.status_is_error = true;
+                            }
+                            ui.close();
+                        }
+                    });
+
+                    ui.separator();
+
+                    if ui
+                        .button("Save…")
+                        .on_hover_text("Save character sheet to a new PDF file (Ctrl+S)")
+                        .clicked()
+                    {
+                        self.save_modal_open = true;
+                    }
+                    let theme_label = match self.theme_mode {
+                        ThemeMode::Dark => "Light",
+                        ThemeMode::Light => "Dark",
+                    };
+                    if ui
+                        .button(theme_label)
+                        .on_hover_text("Switch color theme (Dark / Light)")
+                        .clicked()
+                    {
+                        self.theme_mode = self.theme_mode.toggled();
+                        set_active_theme(self.theme_mode);
+                    }
+                });
+            });
+    }
+
+    fn draw_save_modal(&mut self, ctx: &egui::Context, p: &Palette) {
+        if !self.save_modal_open {
+            return;
+        }
+        let mut open = self.save_modal_open;
+        egui::Window::new("Save Character Sheet Copy")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.set_min_width(440.0);
+                ui.label(
+                    egui::RichText::new(
+                        "Saves a new interactive PDF preserving all original MPMB scripts. Existing files are never overwritten.",
+                    )
+                    .color(p.text_secondary),
+                );
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.save_path)
+                            .desired_width(340.0)
+                            .hint_text("output/testing/my-character.pdf"),
+                    );
+                    if ui.button("Browse…").clicked() {
+                        if let Some(chosen) = browse_save_path(&self.save_path) {
+                            self.save_path = chosen;
+                        }
+                    }
+                });
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if theme::accent_button(ui, p, "Save Copy").clicked() && self.perform_save() {
+                        self.save_modal_open = false;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.save_modal_open = false;
+                    }
+                });
+                if self.status_is_error {
+                    ui.add_space(6.0);
+                    egui::Frame::new()
+                        .fill(p.err_bg)
+                        .corner_radius(egui::CornerRadius::same(6))
+                        .inner_margin(egui::Margin::symmetric(8, 6))
+                        .show(ui, |ui| {
+                            ui.label(egui::RichText::new(&self.status).color(p.err));
+                        });
+                }
+            });
+        if !open {
+            self.save_modal_open = false;
+        }
+    }
+
+    fn draw_character_card(&self, ui: &mut egui::Ui, p: &Palette) {
+        let s = &self.cache.summary;
+        theme::card_frame(p).show(ui, |ui| {
+            let name = if s.name.is_empty() {
+                "Unnamed Character"
+            } else {
+                &s.name
+            };
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(name).strong().size(15.0));
+                if !s.level.is_empty() {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        theme::badge(ui, &format!("Lv {}", s.level), p.accent, p.accent_soft);
+                    });
+                }
+            });
+            if !s.class_and_levels.is_empty() {
+                ui.label(
+                    egui::RichText::new(&s.class_and_levels)
+                        .small()
+                        .color(p.text_secondary),
+                );
+            }
+            let has_vitals = !s.ac.is_empty() || !s.hp_max.is_empty() || !s.proficiency.is_empty();
+            if has_vitals {
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    if !s.ac.is_empty() {
+                        theme::badge(ui, &format!("AC {}", s.ac), p.text_primary, p.ro_badge_bg);
+                    }
+                    if !s.hp_max.is_empty() {
+                        let hp = if s.hp_current.is_empty() {
+                            format!("HP {}", s.hp_max)
+                        } else {
+                            format!("HP {}/{}", s.hp_current, s.hp_max)
+                        };
+                        theme::badge(ui, &hp, p.ok, p.ok_bg);
+                    }
+                    if !s.proficiency.is_empty() {
+                        let prof = if s.proficiency.starts_with('+') {
+                            format!("Prof {}", s.proficiency)
+                        } else {
+                            format!("Prof +{}", s.proficiency)
+                        };
+                        theme::badge(ui, &prof, p.text_secondary, p.ro_badge_bg);
+                    }
+                });
+            }
+            if !s.abilities.is_empty() {
+                ui.add_space(6.0);
+                ui.columns(s.abilities.len(), |cols| {
+                    for (col, ab) in cols.iter_mut().zip(&s.abilities) {
+                        col.vertical_centered(|ui| {
+                            ui.label(egui::RichText::new(ab.label).small().color(p.text_muted));
+                            let score = if ab.score.is_empty() {
+                                "—"
+                            } else {
+                                &ab.score
+                            };
+                            ui.label(egui::RichText::new(score).strong());
+                            let formatted_mod = if ab.modifier.is_empty() {
+                                " ".to_string()
+                            } else if let Ok(n) = ab.modifier.trim().parse::<i32>() {
+                                if n > 0 {
+                                    format!("+{n}")
+                                } else {
+                                    n.to_string()
+                                }
+                            } else {
+                                ab.modifier.clone()
+                            };
+                            ui.label(egui::RichText::new(formatted_mod).small().color(p.accent));
+                        });
+                    }
+                });
+            }
+        });
+    }
+
+    fn draw_sidebar(&mut self, ctx: &egui::Context, p: &Palette) {
+        if !self.sidebar_open {
+            return;
+        }
+        let want_bookmarks = !self.bookmarks_pane_applied
+            && self
+                .rt
+                .eval("pane")
+                .ok()
+                .and_then(|v| v.as_str().map(|s| s == "bookmarks"))
+                .unwrap_or(false);
+        if want_bookmarks {
+            self.bookmarks_pane_applied = true;
+            self.sidebar_tab = SidebarTab::Bookmarks;
+        }
+        let page_widget_names: BTreeSet<String> = self
+            .cache
+            .widgets_for_page(&self.rt, self.page, self.render_revision)
+            .iter()
+            .filter_map(|w| w["name"].as_str().map(str::to_owned))
+            .collect();
+
+        let side_frame = egui::Frame::new()
+            .fill(p.panel_bg)
+            .inner_margin(egui::Margin::same(10))
+            .stroke(egui::Stroke::new(1.0, p.card_stroke));
+        egui::SidePanel::left("fields")
+            .frame(side_frame)
+            .default_width(330.0)
+            .min_width(270.0)
+            .max_width(480.0)
+            .show(ctx, |ui| {
+                self.draw_character_card(ui, p);
+                ui.add_space(8.0);
+
+                // Tab bar
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.sidebar_tab, SidebarTab::Fields, "Fields");
+                    ui.selectable_value(&mut self.sidebar_tab, SidebarTab::Bookmarks, "Bookmarks");
+                    ui.selectable_value(
+                        &mut self.sidebar_tab,
+                        SidebarTab::Diagnostics,
+                        "Diagnostics",
+                    );
+                });
+                ui.separator();
+
+                match self.sidebar_tab {
+                    SidebarTab::Fields => {
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.filter)
+                                    .desired_width(ui.available_width() - 28.0)
+                                    .hint_text("Search fields…"),
+                            );
+                            if !self.filter.is_empty() && ui.small_button("×").clicked() {
+                                self.filter.clear();
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(&mut self.field_filter, FieldFilter::All, "All");
+                            ui.selectable_value(
+                                &mut self.field_filter,
+                                FieldFilter::CurrentPage,
+                                "This page",
+                            );
+                            ui.selectable_value(
+                                &mut self.field_filter,
+                                FieldFilter::Writable,
+                                "Writable",
+                            );
+                        });
+                        ui.add_space(4.0);
+
+                        let filtered = filter_fields(
+                            &self.cache.field_catalog,
+                            &self.filter,
+                            self.field_filter,
+                            &page_widget_names,
+                        );
+                        ui.label(
+                            egui::RichText::new(format!("{} matching fields", filtered.len()))
+                                .small()
+                                .color(p.text_muted),
+                        );
+                        let list_height = (ui.available_height() - 145.0).clamp(56.0, 420.0);
+                        let mut selected = None;
+                        egui::ScrollArea::vertical()
+                            .id_salt("field-catalog")
+                            .max_height(list_height)
+                            .show(ui, |ui| {
+                                for entry in &filtered {
+                                    let is_sel = self.editor.name == entry.name;
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            egui::RichText::new(entry.short_type())
+                                                .monospace()
+                                                .small()
+                                                .color(if entry.readonly {
+                                                    p.text_muted
+                                                } else {
+                                                    p.accent
+                                                }),
+                                        );
+                                        let label = if entry.readonly {
+                                            format!("{} [RO]", entry.name)
+                                        } else {
+                                            entry.name.clone()
+                                        };
+                                        if ui.selectable_label(is_sel, label).clicked() {
+                                            selected = Some(entry.name.clone());
+                                        }
+                                    });
+                                }
+                            });
+                        if let Some(name) = selected {
+                            if let Err(error) = self.select_editor(&name) {
+                                self.result(Err(error));
+                            }
+                        }
+
+                        ui.add_space(8.0);
+                        // Field Inspector Card
+                        let mut chosen = None;
+                        let mut commit_clicked = false;
+                        let mut discard_clicked = false;
+                        theme::card_frame(p).show(ui, |ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(egui::RichText::new(&self.editor.name).strong());
+                                theme::badge(
+                                    ui,
+                                    &self.editor.kind,
+                                    p.text_secondary,
+                                    p.ro_badge_bg,
+                                );
+                                if self.editor.readonly {
+                                    theme::badge(ui, "Read-only", p.warn, p.warn_bg);
+                                }
+                            });
+                            ui.add_space(4.0);
+                            let editable_here = self.editor.can_edit();
+                            let is_choice =
+                                matches!(self.editor.kind.as_str(), "combobox" | "listbox");
+                            ui.add_enabled_ui(editable_here, |ui| {
+                                if is_choice && !self.editor.items.is_empty() {
+                                    let selected_label = self
+                                        .editor
+                                        .items
+                                        .iter()
+                                        .find(|(exp, _)| *exp == self.editor.value)
+                                        .map(|(_, label)| label.clone())
+                                        .unwrap_or_else(|| self.editor.value.clone());
+                                    egui::ComboBox::from_id_salt((
+                                        "sidebar-choice",
+                                        &self.editor.name,
+                                    ))
+                                    .width(ui.available_width())
+                                    .selected_text(selected_label)
+                                    .show_ui(ui, |ui| {
+                                        for (exp, label) in &self.editor.items {
+                                            let display =
+                                                if label.is_empty() { "(blank)" } else { label };
+                                            if ui
+                                                .selectable_label(
+                                                    self.editor.value == *exp,
+                                                    display,
+                                                )
+                                                .clicked()
+                                            {
+                                                chosen = Some(exp.clone());
+                                            }
+                                        }
+                                    });
+                                }
+                                if !is_choice
+                                    || self.editor.editable
+                                    || self.editor.items.is_empty()
+                                {
+                                    let resp = ui.add(
+                                        egui::TextEdit::multiline(&mut self.editor.value)
+                                            .desired_width(f32::INFINITY)
+                                            .desired_rows(2),
+                                    );
+                                    if resp.changed() {
+                                        self.editor.dirty = true;
+                                        self.unsaved = true;
+                                    }
+                                    if resp.has_focus()
+                                        && self.editor.dirty
+                                        && ui.input_mut(|i| {
+                                            i.consume_key(
+                                                egui::Modifiers::COMMAND,
+                                                egui::Key::Enter,
+                                            )
+                                        })
+                                    {
+                                        commit_clicked = true;
+                                    }
+                                    if resp.has_focus()
+                                        && self.editor.dirty
+                                        && ui.input_mut(|i| {
+                                            i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+                                        })
+                                    {
+                                        discard_clicked = true;
+                                    }
+                                }
+                            });
+                            if editable_here || self.editor.dirty {
+                                ui.add_space(6.0);
+                                ui.horizontal(|ui| {
+                                    if editable_here
+                                        && theme::accent_button(ui, p, "Apply Edit")
+                                            .on_hover_text("Commit edit (Ctrl+Enter)")
+                                            .clicked()
+                                    {
+                                        commit_clicked = true;
+                                    }
+                                    if self.editor.dirty
+                                        && ui
+                                            .button("Discard pending edit")
+                                            .on_hover_text("Revert uncommitted draft (Esc)")
+                                            .clicked()
+                                    {
+                                        discard_clicked = true;
+                                    }
+                                });
+                            }
+                        });
+                        if let Some(exp) = chosen {
+                            self.editor.value = exp.clone();
+                            let r = self.commit_choice(&exp);
+                            self.result(r);
+                        }
+                        if commit_clicked {
+                            let r = self.commit_editor();
+                            self.result(r);
+                        }
+                        if discard_clicked {
+                            let r = self.discard_editor();
+                            self.result(r);
+                        }
+                    }
+                    SidebarTab::Bookmarks => {
+                        let mut action = None;
+                        let tree = self.cache.bookmarks.clone();
+                        egui::ScrollArea::vertical()
+                            .id_salt("bookmarks")
+                            .show(ui, |ui| {
+                                bookmark_items(ui, &tree, "bookmarkRoot", &mut action);
+                            });
+                        if let Some(code) = action {
+                            let r = self
+                                .commit_pending_edit()
+                                .and_then(|_| self.rt.eval(&code).map(|_| ()));
+                            self.result(r);
+                        }
+                    }
+                    SidebarTab::Diagnostics => {
+                        let d = &self.cache.diagnostics;
+                        theme::card_frame(p).show(ui, |ui| {
+                            let rows = [
+                                ("Fields", d["field_count"].as_u64().unwrap_or(0).to_string()),
+                                (
+                                    "Menus",
+                                    d["menus"]
+                                        .as_array()
+                                        .map(|a| a.len())
+                                        .unwrap_or(0)
+                                        .to_string(),
+                                ),
+                                (
+                                    "Pending timers",
+                                    d["timers"].as_u64().unwrap_or(0).to_string(),
+                                ),
+                                (
+                                    "Script errors",
+                                    d["errors"]
+                                        .as_array()
+                                        .map(|a| a.len())
+                                        .unwrap_or(0)
+                                        .to_string(),
+                                ),
+                                (
+                                    "API gaps",
+                                    d["gaps"]
+                                        .as_array()
+                                        .map(|a| a.len())
+                                        .unwrap_or(0)
+                                        .to_string(),
+                                ),
+                                (
+                                    "Script overrides",
+                                    d["repairs"]
+                                        .as_array()
+                                        .map(|a| a.len())
+                                        .unwrap_or(0)
+                                        .to_string(),
+                                ),
+                                ("PDF projections", self.cache.projection_builds.to_string()),
+                            ];
+                            egui::Grid::new("diag-grid")
+                                .num_columns(2)
+                                .spacing(egui::vec2(16.0, 4.0))
+                                .show(ui, |ui| {
+                                    for (k, v) in rows {
+                                        ui.label(egui::RichText::new(k).color(p.text_secondary));
+                                        ui.label(egui::RichText::new(v).strong().monospace());
+                                        ui.end_row();
+                                    }
+                                });
+                        });
+                        ui.add_space(6.0);
+                        egui::CollapsingHeader::new("Raw diagnostics JSON").show(ui, |ui| {
+                            egui::ScrollArea::vertical()
+                                .max_height(260.0)
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        egui::RichText::new(
+                                            serde_json::to_string_pretty(d)
+                                                .unwrap_or_else(|_| d.to_string()),
+                                        )
+                                        .monospace()
+                                        .small(),
+                                    );
+                                });
+                        });
+                    }
+                }
+            });
+    }
+
+    fn draw_canvas(&mut self, ctx: &egui::Context, p: &Palette) {
+        let canvas_frame = egui::Frame::new()
+            .fill(p.canvas_bg)
+            .inner_margin(egui::Margin::same(16));
+        egui::CentralPanel::default()
+            .frame(canvas_frame)
+            .show(ctx, |ui| {
+                // Support Ctrl+Scroll wheel zooming over the sheet canvas
+                let scroll_zoom = ctx.input(|i| {
+                    if i.modifiers.command {
+                        i.smooth_scroll_delta.y
+                    } else {
+                        0.0
+                    }
+                });
+                if scroll_zoom > 4.0 {
+                    self.zoom.zoom_in();
+                } else if scroll_zoom < -4.0 {
+                    self.zoom.zoom_out();
+                }
+
+                let avail_w = ui.available_width();
+                let target_px = self
+                    .zoom
+                    .render_pixel_width(avail_w, ctx.pixels_per_point());
+                let display_w = self.zoom.display_width(avail_w);
+                let need_render = self.texture.is_none()
+                    || self.rendered_page != self.page
+                    || self.rendered_rev != self.render_revision
+                    || self.rendered_width != target_px;
+                if need_render {
+                    match self
+                        .cache
+                        .projected_bytes(&self.rt, &self.pdf, self.render_revision)
+                        .and_then(|bytes| self.renderer.render(bytes, self.page, target_px))
+                    {
+                        Ok((w, h, pixels)) => {
+                            self.texture = Some(ctx.load_texture(
+                                "PDF page",
+                                ColorImage::from_rgba_unmultiplied([w, h], &pixels),
+                                egui::TextureOptions::LINEAR,
+                            ));
+                            self.rendered_width = target_px;
+                            self.rendered_page = self.page;
+                            self.rendered_rev = self.render_revision;
+                        }
+                        Err(e) => {
+                            self.status = format!("Render failed: {e:#}");
+                            self.status_is_error = true;
+                        }
+                    }
+                }
+
+                self.hovered_field = None;
+                let widgets = self
+                    .cache
+                    .widgets_for_page(&self.rt, self.page, self.render_revision)
+                    .to_vec();
+                let page_size = self.renderer.page_size.get();
+
+                egui::ScrollArea::both().show(ui, |ui| {
+                    ui.vertical_centered(|ui| {
+                        if let Some(t) = &self.texture {
+                            let tex_size = t.size_vec2();
+                            let aspect = if tex_size.x > 0.0 {
+                                tex_size.y / tex_size.x
+                            } else {
+                                1.294
+                            };
+                            let img_size = egui::vec2(display_w, display_w * aspect);
+                            let page_frame = egui::Frame::new()
+                                .fill(egui::Color32::WHITE)
+                                .shadow(p.page_shadow)
+                                .stroke(egui::Stroke::new(1.0, p.card_stroke));
+                            let inner = page_frame.show(ui, |ui| {
+                                ui.add(
+                                    egui::Image::new((t.id(), img_size))
+                                        .sense(egui::Sense::click()),
+                                )
+                            });
+                            let response = inner.inner;
+                            let painter = ui.painter();
+
+                            // Highlight currently selected sidebar field on this page
+                            for w in &widgets {
+                                if w["name"].as_str() == Some(self.editor.name.as_str()) {
+                                    if let Some(rect) = w["rect"].as_array().and_then(|r| {
+                                        pdf_rect_to_screen(r, page_size, response.rect)
+                                    }) {
+                                        painter.rect(
+                                            rect,
+                                            egui::CornerRadius::same(2),
+                                            p.widget_selected_fill,
+                                            egui::Stroke::new(1.5, p.widget_selected_stroke),
+                                            egui::StrokeKind::Outside,
+                                        );
+                                    }
+                                }
+                            }
+
+                            // Hover readout + subtle highlight
+                            if let Some(hover_pos) = response.hover_pos() {
+                                let (pw, ph) = page_size;
+                                if pw > 0.0 && ph > 0.0 {
+                                    let x = (hover_pos.x - response.rect.left())
+                                        / response.rect.width()
+                                        * pw;
+                                    let y = ph
+                                        - (hover_pos.y - response.rect.top())
+                                            / response.rect.height()
+                                            * ph;
+                                    if let Some(hit) = page_widget_hit(&widgets, x, y) {
+                                        let hname = hit["name"].as_str().unwrap_or("").to_owned();
+                                        let htype =
+                                            hit["type"].as_str().unwrap_or("field").to_owned();
+                                        let hro = hit["readonly"].as_bool().unwrap_or(false);
+                                        if let Some(rect) = hit["rect"].as_array().and_then(|r| {
+                                            pdf_rect_to_screen(r, page_size, response.rect)
+                                        }) {
+                                            painter.rect(
+                                                rect,
+                                                egui::CornerRadius::same(2),
+                                                p.widget_hover_fill,
+                                                egui::Stroke::new(1.25, p.widget_hover_stroke),
+                                                egui::StrokeKind::Outside,
+                                            );
+                                        }
+                                        if !hro {
+                                            ctx.set_cursor_icon(if htype == "text" {
+                                                egui::CursorIcon::Text
+                                            } else {
+                                                egui::CursorIcon::PointingHand
+                                            });
+                                        }
+                                        self.hovered_field = Some((
+                                            hname,
+                                            if hro {
+                                                format!("{htype}, read-only")
+                                            } else {
+                                                htype
+                                            },
+                                        ));
+                                    }
+                                }
+                            }
+
+                            if response.clicked() {
+                                if let Some((pos, modifiers)) = ctx
+                                    .input(|input| activation_input(&input.events, response.rect))
+                                {
+                                    let (width, height) = page_size;
+                                    let x = (pos.x - response.rect.left()) / response.rect.width()
+                                        * width;
+                                    let y = height
+                                        - (pos.y - response.rect.top()) / response.rect.height()
+                                            * height;
+                                    if let Some(w) = page_widget_hit(&widgets, x, y) {
+                                        let r = (|| -> Result<()> {
+                                            self.select_editor(w["name"].as_str().unwrap_or(""))?;
+                                            let name = serde_json::to_string(&self.editor.name)?;
+                                            self.rt.eval(&format!(
+                                                "__host.activate({name},{},{modifiers})",
+                                                w["index"]
+                                            ))?;
+                                            self.refresh_editor()
+                                        })();
+                                        self.result(r);
+                                    }
+                                }
+                            }
+                        }
+                    });
+                });
+            });
+    }
+
+    fn draw_status_bar(&self, ctx: &egui::Context, p: &Palette, page_count: i32) {
+        let bar_frame = egui::Frame::new()
+            .fill(p.toolbar_bg)
+            .inner_margin(egui::Margin::symmetric(12, 5))
+            .stroke(egui::Stroke::new(1.0, p.card_stroke));
+        egui::TopBottomPanel::bottom("status_bar")
+            .frame(bar_frame)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    let dot_color = if self.status_is_error {
+                        p.err
+                    } else if self.unsaved {
+                        p.warn
+                    } else {
+                        p.ok
+                    };
+                    theme::status_dot(ui, dot_color);
+                    ui.label(egui::RichText::new(&self.status).small().color(
+                        if self.status_is_error {
+                            p.err
+                        } else {
+                            p.text_secondary
+                        },
+                    ));
+                    if let Some((name, kind)) = &self.hovered_field {
+                        ui.separator();
+                        ui.label(
+                            egui::RichText::new(format!("Field: {name} ({kind})"))
+                                .small()
+                                .color(p.accent),
+                        );
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Page {}/{}  •  {}  •  {} fields  •  Rev {}",
+                                self.page + 1,
+                                page_count,
+                                self.zoom.percent_label(),
+                                self.cache.field_catalog.len(),
+                                self.render_revision
+                            ))
+                            .small()
+                            .color(p.text_muted),
+                        );
+                    });
+                });
+            });
+    }
 }
+
+static ACTIVE_THEME: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+fn set_active_theme(mode: ThemeMode) {
+    ACTIVE_THEME.store(
+        match mode {
+            ThemeMode::Dark => 0,
+            ThemeMode::Light => 1,
+        },
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+fn active_theme_env() -> &'static str {
+    if ACTIVE_THEME.load(std::sync::atomic::Ordering::Relaxed) == 1 {
+        ThemeMode::Light.as_env()
+    } else {
+        ThemeMode::Dark.as_env()
+    }
+}
+
 impl eframe::App for Reader {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        let palette = if self.theme_applied != Some(self.theme_mode) {
+            self.theme_applied = Some(self.theme_mode);
+            set_active_theme(self.theme_mode);
+            theme::apply(ctx, self.theme_mode)
+        } else {
+            Palette::for_mode(self.theme_mode)
+        };
+
         if self.confirm_close {
             egui::Window::new("Save your changes?")
                 .collapsible(false)
                 .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .show(ctx, |ui| {
+                    ui.set_min_width(420.0);
                     ui.label("The current document has changes. Save a new copy before closing.");
-                    ui.text_edit_singleline(&mut self.save_path);
+                    ui.add_space(6.0);
                     ui.horizontal(|ui| {
-                        if ui.button("Save and close").clicked() {
-                            let r = self.save_copy();
-                            let saved = r.is_ok();
-                            self.result(r);
-                            if saved {
-                                self.unsaved = false;
-                                self.allow_close = true;
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.save_path).desired_width(320.0),
+                        );
+                        if ui.button("Browse…").clicked() {
+                            if let Some(chosen) = browse_save_path(&self.save_path) {
+                                self.save_path = chosen;
                             }
+                        }
+                    });
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if theme::accent_button(ui, &palette, "Save and close").clicked()
+                            && self.perform_save()
+                        {
+                            self.allow_close = true;
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                         }
                         if ui.button("Discard changes").clicked() {
                             self.allow_close = true;
@@ -665,7 +1762,10 @@ impl eframe::App for Reader {
                             self.confirm_close = false;
                         }
                     });
-                    ui.label(&self.status);
+                    if self.status_is_error {
+                        ui.add_space(4.0);
+                        ui.label(egui::RichText::new(&self.status).color(palette.err));
+                    }
                 });
         }
         if std::env::var_os("MPMB_UI_SMOKE_CONSOLE").is_some() {
@@ -693,9 +1793,11 @@ impl eframe::App for Reader {
                     .rt
                     .eval(if print_smoke {
                         "__host.command(\"Value('Print Remember','false!#TheListSeparator#!0,CSfront');PrintTheSheet()\")"
-                    } else if std::env::var_os("MPMB_UI_SMOKE_BOOKMARK").is_some(){
+                    } else if std::env::var_os("MPMB_UI_SMOKE_BOOKMARK").is_some() {
                         "bookmarkRoot.children[0].execute();if(pageNum!==1||What('PC Name')!=='Native bookmark navigation')throw Error('Bookmark navigation failed')"
-                    } else { "__host.invokeMenu('ClassesButton')" })
+                    } else {
+                        "__host.invokeMenu('ClassesButton')"
+                    })
                     .map(|_| ());
                 let diagnostics = self.rt.diagnostics().unwrap_or(Value::Null);
                 let passed = r.is_ok()
@@ -729,32 +1831,22 @@ impl eframe::App for Reader {
             self.last_tick = std::time::Instant::now();
             if let Err(e) = self.rt.advance(elapsed) {
                 self.status = format!("Timer failed: {e:#}");
+                self.status_is_error = true;
             }
         }
         if let Ok(value) = self.rt.eval("__host.revision") {
             let revision = value.as_u64().unwrap_or(0);
             if revision != self.render_revision {
                 self.render_revision = revision;
-                if let Ok(names) = self.rt.eval("__host.names") {
-                    if let Some(names) = names.as_array() {
-                        self.field_names = names
-                            .iter()
-                            .filter_map(|v| v.as_str().map(str::to_owned))
-                            .collect();
-                    }
-                }
                 if !self.editor.dirty {
                     let _ = self.refresh_editor();
                 }
                 self.texture = None;
             }
         }
-        let page_count = self
-            .rt
-            .eval("numPages")
-            .ok()
-            .and_then(|v| v.as_u64())
-            .unwrap_or(self.pdf.doc.get_pages().len() as u64) as i32;
+        self.cache
+            .ensure_metadata(&self.rt, &self.pdf, self.render_revision);
+        let page_count = self.cache.page_count;
         self.page = self
             .rt
             .eval("pageNum")
@@ -762,309 +1854,13 @@ impl eframe::App for Reader {
             .and_then(|v| v.as_i64())
             .unwrap_or(self.page as i64)
             .clamp(0, (page_count - 1).max(0) as i64) as i32;
-        egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                if ui.button("Previous").clicked() {
-                    if let Err(error) = self.commit_pending_edit() {
-                        self.result(Err(error));
-                    } else {
-                        self.page = (self.page - 1).max(0);
-                        let _ = self.rt.eval(&format!("pageNum={}", self.page));
-                        self.texture = None
-                    }
-                }
-                ui.label(format!("Page {} / {}", self.page + 1, page_count));
-                if ui.button("Next").clicked() {
-                    if let Err(error) = self.commit_pending_edit() {
-                        self.result(Err(error));
-                    } else {
-                        self.page = (self.page + 1).min(page_count - 1);
-                        let _ = self.rt.eval(&format!("pageNum={}", self.page));
-                        self.texture = None
-                    }
-                }
-                if ui.button("Select class…").clicked() {
-                    let r = self.commit_pending_edit().and_then(|_| {
-                        self.rt
-                            .eval("__host.invokeMenu('ClassesButton')")
-                            .map(|_| ())
-                    });
-                    self.result(r)
-                }
-                if ui.button("Import script…").clicked() {
-                    let r = self
-                        .commit_pending_edit()
-                        .and_then(|_| self.rt.eval(TOOLBAR_IMPORT_SCRIPT_ACTION).map(|_| ()));
-                    self.result(r)
-                }
-                for (label, code) in [
-                    ("Add companion", "DoTemplate('AScomp','Add',null,true)"),
-                    (
-                        "Add wild-shape page",
-                        "DoTemplate('WSfront','Add',null,true)",
-                    ),
-                    ("Generate spells", "GenerateSpellSheet()"),
-                ] {
-                    if ui.button(label).clicked() {
-                        let r = self
-                            .commit_pending_edit()
-                            .and_then(|_| self.rt.command(code));
-                        self.result(r)
-                    }
-                }
-                if ui.button("Calculate").clicked() {
-                    let r = self
-                        .commit_pending_edit()
-                        .and_then(|_| self.rt.eval("calculateNow()").map(|_| ()));
-                    self.result(r)
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.label("New copy:");
-                ui.text_edit_singleline(&mut self.save_path);
-                if ui.button("Save").clicked() {
-                    let r = self.save_copy();
-                    let saved = r.is_ok();
-                    self.result(r);
-                    if saved {
-                        self.unsaved = false;
-                    }
-                }
-            });
-            ui.menu_button("MPMB tools", |ui| {
-                match self.rt.eval("__host.menuItems()") {
-                    Ok(items) => {
-                        if let Some(items) = items.as_array() {
-                            for item in items {
-                                let name = item["name"].as_str().unwrap_or("");
-                                if !self.menu_images.contains_key(name) {
-                                    if let Some(image) = argb_image(&item["icon"]) {
-                                        self.menu_images.insert(
-                                            name.into(),
-                                            ctx.load_texture(name, image, Default::default()),
-                                        );
-                                    }
-                                }
-                                ui.horizontal(|ui| {
-                                    if let Some(image) = self.menu_images.get(name) {
-                                        ui.image(image);
-                                    }
-                                    if ui
-                                        .add_enabled(
-                                            item["enabled"] == true,
-                                            egui::Button::new(format!(
-                                                "{}{}",
-                                                if item["marked"] == true { "✓ " } else { "" },
-                                                item["label"].as_str().unwrap_or(name)
-                                            )),
-                                        )
-                                        .on_hover_text(item["tooltip"].as_str().unwrap_or(""))
-                                        .clicked()
-                                    {
-                                        let r = self.commit_pending_edit().and_then(|_| {
-                                            self.rt
-                                                .eval(&format!(
-                                                    "__host.invokeMenu({})",
-                                                    serde_json::to_string(name).unwrap()
-                                                ))
-                                                .map(|_| ())
-                                        });
-                                        self.result(r);
-                                        ui.close();
-                                    }
-                                });
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        ui.label(format!("Menu error: {e:#}"));
-                    }
-                }
-            });
-            if ui.button("Console").clicked() {
-                if let Err(error) = self.rt.eval("console.show()") {
-                    self.status = format!("Console failed: {error:#}");
-                }
-            }
-            ui.label(&self.status);
-        });
-        egui::SidePanel::left("fields")
-            .default_width(310.)
-            .show(ctx, |ui| {
-                let want_bookmarks = !self.bookmarks_pane_applied
-                    && self
-                        .rt
-                        .eval("pane")
-                        .ok()
-                        .and_then(|v| v.as_str().map(|s| s == "bookmarks"))
-                        .unwrap_or(false);
-                if want_bookmarks {
-                    self.bookmarks_pane_applied = true;
-                }
-                let mut bookmarks_header = egui::CollapsingHeader::new("Bookmarks")
-                    .default_open(std::env::var_os("MPMB_UI_SMOKE_BOOKMARK").is_some());
-                if want_bookmarks {
-                    bookmarks_header = bookmarks_header.open(Some(true));
-                }
-                bookmarks_header.show(ui,|ui|{
-                    if let Ok(tree)=self.rt.eval("JSON.parse(JSON.stringify(bookmarkRoot))"){
-                        let mut action=None;
-                        egui::ScrollArea::vertical().id_salt("bookmarks").max_height(220.).show(ui,|ui|{bookmark_items(ui,&tree,"bookmarkRoot",&mut action);});
-                        if let Some(code)=action{let r=self.commit_pending_edit().and_then(|_|self.rt.eval(&code).map(|_|()));self.result(r);}
-                    }
-                });
-                ui.heading("Form fields");
-                ui.text_edit_singleline(&mut self.filter);
-                let mut selected = None;
-                egui::ScrollArea::vertical()
-                    .max_height(350.)
-                    .show(ui, |ui| {
-                        for name in &self.field_names {
-                            if name.to_lowercase().contains(&self.filter.to_lowercase())
-                                && ui
-                                    .selectable_label(self.editor.name == *name, name)
-                                    .clicked()
-                            {
-                                selected = Some(name.clone());
-                            }
-                        }
-                    });
-                if let Some(name) = selected {
-                    if let Err(error) = self.select_editor(&name) {
-                        self.result(Err(error));
-                    }
-                }
-                ui.separator();
-                let header = if self.editor.readonly {
-                    format!("{} (read-only)", self.editor.name)
-                } else if self.editor.kind == "button" {
-                    format!("{} (button)", self.editor.name)
-                } else {
-                    self.editor.name.clone()
-                };
-                ui.label(header);
-                let editable_here = self.editor.can_edit();
-                let is_choice = matches!(self.editor.kind.as_str(), "combobox" | "listbox");
-                let mut chosen = None;
-                let mut commit_clicked = false;
-                let mut discard_clicked = false;
-                ui.add_enabled_ui(editable_here, |ui| {
-                    if is_choice && !self.editor.items.is_empty() {
-                        let selected_label = self
-                            .editor
-                            .items
-                            .iter()
-                            .find(|(exp, _)| *exp == self.editor.value)
-                            .map(|(_, label)| label.clone())
-                            .unwrap_or_else(|| self.editor.value.clone());
-                        egui::ComboBox::from_id_salt(("sidebar-choice", &self.editor.name))
-                            .width(280.)
-                            .selected_text(selected_label)
-                            .show_ui(ui, |ui| {
-                                for (exp, label) in &self.editor.items {
-                                    let display = if label.is_empty() { "(blank)" } else { label };
-                                    if ui
-                                        .selectable_label(self.editor.value == *exp, display)
-                                        .clicked()
-                                    {
-                                        chosen = Some(exp.clone());
-                                    }
-                                }
-                            });
-                    }
-                    if !is_choice || self.editor.editable || self.editor.items.is_empty() {
-                        if ui.text_edit_multiline(&mut self.editor.value).changed() {
-                            self.editor.dirty = true;
-                            self.unsaved = true;
-                        }
-                        if ui.button("Commit field edit").clicked() {
-                            commit_clicked = true;
-                        }
-                    }
-                });
-                if self.editor.dirty && ui.button("Discard pending edit").clicked() {
-                    discard_clicked = true;
-                }
-                if let Some(exp) = chosen {
-                    self.editor.value = exp.clone();
-                    let r = self.commit_choice(&exp);
-                    self.result(r);
-                }
-                if commit_clicked {
-                    let r = self.commit_editor();
-                    self.result(r);
-                }
-                if discard_clicked {
-                    let r = self.discard_editor();
-                    self.result(r);
-                }
-                if let Ok(values)=self.rt.eval("['Str','Str Mod','Character Level','Proficiency Bonus'].map(n=>[n,getField(n).valueAsString])"){
-                    if let Some(values)=values.as_array(){for item in values{ui.label(format!("{}: {}",item[0].as_str().unwrap_or(""),item[1].as_str().unwrap_or("")));}}
-                }
-                if let Ok(d) = self.rt.diagnostics() {
-                    egui::CollapsingHeader::new("Compatibility diagnostics").show(ui, |ui| {
-                        ui.label(d.to_string());
-                    });
-                }
-            });
-        egui::CentralPanel::default().show(ctx, |ui| {
-            if self.texture.is_none() {
-                match self
-                    .rt
-                    .snapshot()
-                    .and_then(|s| self.pdf.project(&s))
-                    .and_then(|b| self.renderer.render(&b, self.page, 1000))
-                {
-                    Ok((w, h, p)) => {
-                        self.texture = Some(ctx.load_texture(
-                            "PDF page",
-                            ColorImage::from_rgba_unmultiplied([w, h], &p),
-                            Default::default(),
-                        ))
-                    }
-                    Err(e) => self.status = format!("Render failed: {e:#}"),
-                }
-            }
-            egui::ScrollArea::both().show(ui, |ui| {
-                if let Some(t) = &self.texture {
-                    let response = ui.add(egui::Image::new(t).sense(egui::Sense::click()));
-                    if response.clicked() {
-                        if let Some((pos, modifiers)) =
-                            ctx.input(|input| activation_input(&input.events, response.rect))
-                        {
-                            let (width, height) = self.renderer.page_size.get();
-                            let x = (pos.x - response.rect.left()) / response.rect.width() * width;
-                            let y = height
-                                - (pos.y - response.rect.top()) / response.rect.height() * height;
-                            let hit = (|| -> Result<Option<Value>> {
-                                let widgets = self
-                                    .rt
-                                    .eval(&format!("__host.pageWidgets({})", self.page))?;
-                                Ok(widgets
-                                    .as_array()
-                                    .and_then(|widgets| page_widget_hit(widgets, x, y)))
-                            })();
-                            match hit {
-                                Ok(Some(w)) => {
-                                    let r = (|| -> Result<()> {
-                                        self.select_editor(w["name"].as_str().unwrap_or(""))?;
-                                        let name = serde_json::to_string(&self.editor.name)?;
-                                        self.rt.eval(&format!(
-                                            "__host.activate({name},{},{modifiers})",
-                                            w["index"]
-                                        ))?;
-                                        self.refresh_editor()
-                                    })();
-                                    self.result(r);
-                                }
-                                Err(e) => self.status = format!("Field interaction failed: {e:#}"),
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-            });
-        });
+
+        self.handle_shortcuts(ctx, page_count);
+        self.draw_toolbar(ctx, &palette, page_count);
+        self.draw_status_bar(ctx, &palette, page_count);
+        self.draw_sidebar(ctx, &palette);
+        self.draw_canvas(ctx, &palette);
+        self.draw_save_modal(ctx, &palette);
         self.draw_console(ctx);
         // Process this after text input so a close request in the same frame
         // as the final typed character cannot discard an uncommitted edit.
@@ -1085,6 +1881,7 @@ impl eframe::App for Reader {
 pub fn modal(request: &Value) -> Result<Value> {
     let mut child = std::process::Command::new(std::env::current_exe()?)
         .arg("--dialog")
+        .env("MPMB_THEME", active_theme_env())
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()?;
@@ -1129,12 +1926,14 @@ fn dialog_process() -> Result<()> {
         focus_requested: false,
         edited_controls: BTreeSet::new(),
         alert_type: data["alert_type"].as_i64(),
+        theme_mode: ThemeMode::from_env(),
+        theme_applied: false,
     };
     let title = data["description"]["name"]
         .as_str()
         .unwrap_or("MPMB dialog")
         .to_owned();
-    eframe::run_native(&title, options(), Box::new(|_| Ok(Box::new(app))))
+    eframe::run_native(&title, dialog_options(), Box::new(|_| Ok(Box::new(app))))
         .map_err(|e| anyhow::anyhow!(e.to_string()))?;
     println!("{}", result.lock().unwrap());
     Ok(())
@@ -1153,6 +1952,8 @@ struct Dialog {
     focus_requested: bool,
     edited_controls: BTreeSet<String>,
     alert_type: Option<i64>,
+    theme_mode: ThemeMode,
+    theme_applied: bool,
 }
 fn argb_image(value: &Value) -> Option<ColorImage> {
     let argb = value["argb"].as_str()?;
@@ -1627,6 +2428,10 @@ fn capture(ctx: &egui::Context, path: &std::path::Path) -> bool {
 }
 impl eframe::App for Dialog {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        if !self.theme_applied {
+            theme::apply(ctx, self.theme_mode);
+            self.theme_applied = true;
+        }
         if self.dismiss_alert(ctx) {
             return;
         }
@@ -1766,6 +2571,8 @@ mod dialog_tests {
             focus_requested: false,
             edited_controls: BTreeSet::new(),
             alert_type: kind,
+            theme_mode: ThemeMode::Dark,
+            theme_applied: true,
         }
     }
 
@@ -1922,6 +2729,8 @@ mod dialog_tests {
             focus_requested: false,
             edited_controls: BTreeSet::new(),
             alert_type: None,
+            theme_mode: ThemeMode::Dark,
+            theme_applied: true,
         };
         for events in [vec![], vec![egui::Event::Text("changed".into())]] {
             let _ = ctx.run(
@@ -2029,6 +2838,8 @@ mod dialog_tests {
             focus_requested: false,
             edited_controls: BTreeSet::new(),
             alert_type: None,
+            theme_mode: ThemeMode::Dark,
+            theme_applied: true,
         };
         let control = json!({"type":"edit_text","item_id":"text"});
         let mut frame = |events: Vec<egui::Event>| {
