@@ -312,7 +312,8 @@ var __host = (function () {
   function advance(ms) {
     const target=clock+ms;let count=0;
     while(true){let due=Array.from(timers.values()).filter(t=>t.at<=target).sort((a,b)=>a.at-b.at||a.id-b.id)[0];if(!due)break;
-      clock=due.at;timers.delete(due.id);if(++count>100)throw Error('timer budget exceeded');
+      if(count>=100)throw Error('timer budget exceeded');
+      count++;clock=due.at;timers.delete(due.id);
       try{(0,eval)(due.code)}catch(e){errors.push({stage:'timer',code:due.code,error:String(e),stack:e.stack});throw e}
     }clock=target;
   }

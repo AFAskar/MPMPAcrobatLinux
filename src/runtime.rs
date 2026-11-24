@@ -1509,4 +1509,17 @@ mod tests {
           settledManual&&drainedCalcStop&&stuckFailed"#,
         );
     }
+    #[test]
+    fn timer_budget_preserves_101st_due_callback_for_next_advance() {
+        host(
+            r#"var hits=[];
+          for(var i=0;i<101;i++)app.setTimeOut('hits.push('+i+')',10);
+          var budgetHit=false;
+          try{__host.advance(10);}catch(e){budgetHit=String(e).indexOf('timer budget exceeded')>=0;}
+          var afterFirst=hits.length;
+          __host.advance(10);
+          var unique=new Set(hits).size;
+          budgetHit&&afterFirst===100&&hits.length===101&&unique===101&&hits[100]===100"#,
+        );
+    }
 }
