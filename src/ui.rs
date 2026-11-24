@@ -713,7 +713,10 @@ impl Reader {
         if r.is_ok() {
             self.unsaved = true;
             self.status_is_error = false;
-            self.cache.invalidate_metadata();
+            if let Ok(value) = self.rt.eval("__host.revision") {
+                self.render_revision = value.as_u64().unwrap_or(self.render_revision);
+            }
+            self.cache.invalidate_all();
             if !self.editor.dirty {
                 let _ = self.refresh_editor();
             }
@@ -1479,14 +1482,18 @@ impl Reader {
         egui::CentralPanel::default()
             .frame(canvas_frame)
             .show(ctx, |ui| {
-                // Support Ctrl+Scroll wheel zooming over the sheet canvas
-                let scroll_zoom = ctx.input(|i| {
-                    if i.modifiers.command {
-                        i.smooth_scroll_delta.y
-                    } else {
-                        0.0
-                    }
-                });
+                // Support Ctrl+Scroll wheel zooming only when pointer is over the sheet canvas
+                let scroll_zoom = if ui.rect_contains_pointer(ui.max_rect()) {
+                    ctx.input(|i| {
+                        if i.modifiers.command {
+                            i.smooth_scroll_delta.y
+                        } else {
+                            0.0
+                        }
+                    })
+                } else {
+                    0.0
+                };
                 if scroll_zoom > 4.0 {
                     self.zoom.zoom_in();
                 } else if scroll_zoom < -4.0 {

@@ -256,7 +256,8 @@ impl ProjectionCache {
         self.diagnostics = rt.diagnostics().unwrap_or(Value::Null);
     }
 
-    pub fn invalidate_metadata(&mut self) {
+    pub fn invalidate_all(&mut self) {
+        self.projected = None;
         self.metadata_revision = None;
         self.page_widgets = None;
     }
@@ -474,6 +475,11 @@ mod tests {
         cache.ensure_metadata(&rt, &pdf, rev1);
         assert_eq!(cache.summary.name, "Lyra");
         assert_eq!(cache.page_count, 1);
+
+        // Explicit invalidation forces a fresh projection even at the same revision.
+        cache.invalidate_all();
+        let _ = cache.projected_bytes(&rt, &pdf, rev1).unwrap();
+        assert_eq!(cache.projection_builds, 3);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
