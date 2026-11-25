@@ -30,8 +30,10 @@ fn text(doc: &Document, object: &Object) -> String {
     if bytes.starts_with(&[254, 255]) {
         String::from_utf16_lossy(
             &bytes[2..]
-                .chunks_exact(2)
-                .map(|b| u16::from_be_bytes([b[0], b[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|b| u16::from_be_bytes(*b))
                 .collect::<Vec<_>>(),
         )
     } else {
@@ -53,7 +55,7 @@ pub fn read(doc: &Document) -> Result<BTreeMap<String, DataObject>> {
             if names.len() % 2 != 0 {
                 bail!("invalid embedded file name pairs")
             }
-            for pair in names.chunks_exact(2) {
+            for pair in names.as_chunks::<2>().0 {
                 let name = text(doc, &pair[0]);
                 let spec = doc.dereference(&pair[1])?.1.as_dict()?;
                 let ef = doc.dereference(spec.get(b"EF")?)?.1.as_dict()?;

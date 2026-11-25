@@ -189,7 +189,7 @@ pub fn main() -> Result<()> {
                                 step["path"].as_str().unwrap_or("output/testing/render.ppm"),
                             )?;
                             write!(file, "P6\n{w} {h}\n255\n")?;
-                            for p in pixels.chunks_exact(4) {
+                            for p in pixels.as_chunks::<4>().0 {
                                 file.write_all(&p[..3])?
                             }
                             Ok(json!({"width":w,"height":h}))
@@ -813,7 +813,7 @@ impl Reader {
         let toolbar_frame = egui::Frame::new()
             .fill(p.toolbar_bg)
             .inner_margin(egui::Margin::symmetric(12, 8))
-            .stroke(egui::Stroke::new(1.0, p.card_stroke));
+            .stroke(egui::Stroke::new(1.0_f32, p.card_stroke));
         egui::TopBottomPanel::top("toolbar")
             .frame(toolbar_frame)
             .show(ctx, |ui| {
@@ -1191,7 +1191,7 @@ impl Reader {
         let side_frame = egui::Frame::new()
             .fill(p.panel_bg)
             .inner_margin(egui::Margin::same(10))
-            .stroke(egui::Stroke::new(1.0, p.card_stroke));
+            .stroke(egui::Stroke::new(1.0_f32, p.card_stroke));
         egui::SidePanel::left("fields")
             .frame(side_frame)
             .default_width(330.0)
@@ -1575,7 +1575,7 @@ impl Reader {
                             let page_frame = egui::Frame::new()
                                 .fill(egui::Color32::WHITE)
                                 .shadow(p.page_shadow)
-                                .stroke(egui::Stroke::new(1.0, p.card_stroke));
+                                .stroke(egui::Stroke::new(1.0_f32, p.card_stroke));
                             let inner = page_frame.show(ui, |ui| {
                                 ui.add(
                                     egui::Image::new((t.id(), img_size))
@@ -1595,7 +1595,7 @@ impl Reader {
                                             rect,
                                             egui::CornerRadius::same(2),
                                             p.widget_selected_fill,
-                                            egui::Stroke::new(1.5, p.widget_selected_stroke),
+                                            egui::Stroke::new(1.5_f32, p.widget_selected_stroke),
                                             egui::StrokeKind::Outside,
                                         );
                                     }
@@ -1625,7 +1625,7 @@ impl Reader {
                                                 rect,
                                                 egui::CornerRadius::same(2),
                                                 p.widget_hover_fill,
-                                                egui::Stroke::new(1.25, p.widget_hover_stroke),
+                                                egui::Stroke::new(1.25_f32, p.widget_hover_stroke),
                                                 egui::StrokeKind::Outside,
                                             );
                                         }
@@ -1682,7 +1682,7 @@ impl Reader {
         let bar_frame = egui::Frame::new()
             .fill(p.toolbar_bg)
             .inner_margin(egui::Margin::symmetric(12, 5))
-            .stroke(egui::Stroke::new(1.0, p.card_stroke));
+            .stroke(egui::Stroke::new(1.0_f32, p.card_stroke));
         egui::TopBottomPanel::bottom("status_bar")
             .frame(bar_frame)
             .show(ctx, |ui| {
@@ -1993,7 +1993,7 @@ fn argb_image(value: &Value) -> Option<ColorImage> {
         return None;
     }
     let mut rgba = Vec::with_capacity(w * h * 4);
-    for pixel in argb.as_bytes().chunks_exact(8) {
+    for pixel in argb.as_bytes().as_chunks::<8>().0 {
         let n = u32::from_str_radix(std::str::from_utf8(pixel).ok()?, 16).ok()?;
         rgba.extend_from_slice(&[
             ((n >> 16) & 255) as u8,
@@ -2383,7 +2383,7 @@ impl Dialog {
                             {
                                 let mut rgba = Vec::new();
                                 let mut valid = true;
-                                for pixel in argb.as_bytes().chunks_exact(8) {
+                                for pixel in argb.as_bytes().as_chunks::<8>().0 {
                                     if let Ok(hex) = std::str::from_utf8(pixel) {
                                         if let Ok(n) = u32::from_str_radix(hex, 16) {
                                             rgba.extend_from_slice(&[

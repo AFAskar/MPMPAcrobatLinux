@@ -16,7 +16,9 @@ fn unhex(text: &str) -> Result<Vec<u8>> {
         bail!("Invalid icon payload size")
     }
     text.as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|b| {
             let s = std::str::from_utf8(b)?;
             Ok(u8::from_str_radix(s, 16)?)
@@ -495,7 +497,7 @@ pub fn icon_stream(pdf: &crate::pdf::Pdf, icon: &Value) -> Result<Value> {
     let (width, pdf_bytes) = icon_stream_pdf(pdf, icon)?;
     let (w, h, rgba) = crate::render::Renderer::new()?.render_transparent(&pdf_bytes, 0, width)?;
     let mut argb = String::with_capacity(w * h * 8);
-    for px in rgba.chunks_exact(4) {
+    for px in rgba.as_chunks::<4>().0 {
         use std::fmt::Write;
         let _ = write!(
             &mut argb,

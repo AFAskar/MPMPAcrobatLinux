@@ -15,7 +15,7 @@ pub struct Template {
 fn name_entries(d: &Document, node: &Object, out: &mut Vec<(String, ObjectId)>) -> Result<()> {
     let node = resolved(d, node)?.as_dict()?;
     if let Ok(a) = node.get(b"Names").and_then(Object::as_array) {
-        for pair in a.chunks_exact(2) {
+        for pair in a.as_chunks::<2>().0 {
             out.push((text(d, &pair[0]), pair[1].as_reference()?));
         }
     }

@@ -142,15 +142,19 @@ fn decode_bom(b: &[u8]) -> Option<String> {
     if b.starts_with(&[254, 255]) {
         Some(String::from_utf16_lossy(
             &b[2..]
-                .chunks_exact(2)
-                .map(|x| u16::from_be_bytes([x[0], x[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|x| u16::from_be_bytes(*x))
                 .collect::<Vec<_>>(),
         ))
     } else if b.starts_with(&[255, 254]) {
         Some(String::from_utf16_lossy(
             &b[2..]
-                .chunks_exact(2)
-                .map(|x| u16::from_le_bytes([x[0], x[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|x| u16::from_le_bytes(*x))
                 .collect::<Vec<_>>(),
         ))
     } else if b.starts_with(&[0xEF, 0xBB, 0xBF]) {
@@ -184,7 +188,7 @@ fn action(d: &Document, o: &Object) -> String {
 fn names(d: &Document, o: &Object, out: &mut Vec<(String, String)>) -> Result<()> {
     let n = resolved(d, o)?.as_dict()?;
     if let Ok(a) = n.get(b"Names").and_then(Object::as_array) {
-        for p in a.chunks_exact(2) {
+        for p in a.as_chunks::<2>().0 {
             out.push((text(d, &p[0]), action(d, &p[1])));
         }
     }

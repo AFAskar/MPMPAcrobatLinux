@@ -143,38 +143,38 @@ pub fn apply(ctx: &egui::Context, mode: ThemeMode) -> Palette {
     visuals.faint_bg_color = p.card_bg;
     visuals.window_corner_radius = CornerRadius::same(10);
     visuals.menu_corner_radius = CornerRadius::same(8);
-    visuals.window_stroke = Stroke::new(1.0, p.card_stroke);
+    visuals.window_stroke = Stroke::new(1.0_f32, p.card_stroke);
     visuals.selection.bg_fill = p.accent_soft;
-    visuals.selection.stroke = Stroke::new(1.2, p.accent);
+    visuals.selection.stroke = Stroke::new(1.2_f32, p.accent);
     visuals.hyperlink_color = p.accent;
     visuals.override_text_color = Some(p.text_primary);
 
     visuals.widgets.noninteractive.bg_fill = p.panel_bg;
     visuals.widgets.noninteractive.weak_bg_fill = p.card_bg;
-    visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, p.card_stroke);
+    visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, p.card_stroke);
     visuals.widgets.noninteractive.corner_radius = CornerRadius::same(6);
-    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, p.text_primary);
+    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, p.text_primary);
 
     visuals.widgets.inactive.bg_fill = p.card_bg;
     visuals.widgets.inactive.weak_bg_fill = p.card_bg;
-    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, p.card_stroke);
+    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, p.card_stroke);
     visuals.widgets.inactive.corner_radius = CornerRadius::same(6);
-    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, p.text_primary);
+    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, p.text_primary);
 
     visuals.widgets.hovered.bg_fill = match mode {
         ThemeMode::Dark => Color32::from_rgb(48, 56, 72),
         ThemeMode::Light => Color32::from_rgb(236, 240, 246),
     };
     visuals.widgets.hovered.weak_bg_fill = visuals.widgets.hovered.bg_fill;
-    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, p.accent);
+    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, p.accent);
     visuals.widgets.hovered.corner_radius = CornerRadius::same(6);
-    visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, p.text_primary);
+    visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, p.text_primary);
 
     visuals.widgets.active.bg_fill = p.accent_soft;
     visuals.widgets.active.weak_bg_fill = p.accent_soft;
-    visuals.widgets.active.bg_stroke = Stroke::new(1.2, p.accent);
+    visuals.widgets.active.bg_stroke = Stroke::new(1.2_f32, p.accent);
     visuals.widgets.active.corner_radius = CornerRadius::same(6);
-    visuals.widgets.active.fg_stroke = Stroke::new(1.0, p.text_primary);
+    visuals.widgets.active.fg_stroke = Stroke::new(1.0_f32, p.text_primary);
 
     let mut style = (*ctx.style()).clone();
     style.visuals = visuals;
@@ -209,7 +209,7 @@ pub fn apply(ctx: &egui::Context, mode: ThemeMode) -> Palette {
 pub fn card_frame(p: &Palette) -> egui::Frame {
     egui::Frame::new()
         .fill(p.card_bg)
-        .stroke(Stroke::new(1.0, p.card_stroke))
+        .stroke(Stroke::new(1.0_f32, p.card_stroke))
         .corner_radius(CornerRadius::same(8))
         .inner_margin(Margin::same(10))
 }
@@ -247,7 +247,7 @@ pub fn accent_button(ui: &mut egui::Ui, p: &Palette, label: &str) -> egui::Respo
     ui.add(
         egui::Button::new(egui::RichText::new(label).strong().color(p.accent_text))
             .fill(p.accent)
-            .stroke(Stroke::new(1.0, p.accent))
+            .stroke(Stroke::new(1.0_f32, p.accent))
             .corner_radius(CornerRadius::same(6)),
     )
 }
