@@ -65,9 +65,11 @@ install -Dm644 "$ROOT/packaging/assets/io.github.afaskar.MpmbReader.metainfo.xml
   "$APPDIR/usr/share/metainfo/io.github.afaskar.MpmbReader.metainfo.xml"
 install -Dm644 "$ROOT/packaging/assets/io.github.afaskar.MpmbReader.svg" \
   "$APPDIR/usr/share/icons/hicolor/scalable/apps/io.github.afaskar.MpmbReader.svg"
-install -Dm644 "$ROOT/packaging/assets/io.github.afaskar.MpmbReader.svg" \
-  "$APPDIR/io.github.afaskar.MpmbReader.svg"
-ln -sf io.github.afaskar.MpmbReader.svg "$APPDIR/.DirIcon"
+install -Dm644 "$ROOT/packaging/assets/io.github.afaskar.MpmbReader.png" \
+  "$APPDIR/usr/share/icons/hicolor/256x256/apps/io.github.afaskar.MpmbReader.png"
+install -Dm644 "$ROOT/packaging/assets/io.github.afaskar.MpmbReader.png" \
+  "$APPDIR/io.github.afaskar.MpmbReader.png"
+ln -sf io.github.afaskar.MpmbReader.png "$APPDIR/.DirIcon"
 
 cat > "$APPDIR/AppRun" <<'EOF'
 #!/usr/bin/env bash
