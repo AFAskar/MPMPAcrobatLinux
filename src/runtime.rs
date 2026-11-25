@@ -11,10 +11,23 @@ use std::{
 };
 mod document_context;
 mod documents;
+
+/// Pluggable host callback for interactive dialogs, alerts, and URL opens.
+/// Desktop mode leaves this unset (falling back to native egui dialogs);
+/// web/server mode supplies a bridge that forwards requests over WebSocket.
+pub trait InteractionHandler: Send + Sync {
+    fn modal(&self, request: &Value) -> Result<Value>;
+    fn alert(&self, request: &Value) -> Result<Value>;
+    fn launch_url(&self, _url: &str, _new_frame: bool) -> Result<bool> {
+        Ok(false)
+    }
+}
+
 struct DocumentServices {
     dialogs: Arc<Mutex<VecDeque<Value>>>,
     alerts: Arc<Mutex<VecDeque<Value>>>,
     interactive: bool,
+    interaction: Option<Arc<dyn InteractionHandler>>,
     print_output_dir: Option<PathBuf>,
     attachment_output_dir: Option<PathBuf>,
     trace_dir: Option<PathBuf>,
@@ -248,6 +261,25 @@ impl Runtime {
         print_output_dir: Option<std::path::PathBuf>,
         attachment_output_dir: Option<std::path::PathBuf>,
     ) -> Result<Self> {
+        Self::new_with_interaction(
+            pdf,
+            dialogs,
+            alerts,
+            interactive,
+            print_output_dir,
+            attachment_output_dir,
+            None,
+        )
+    }
+    pub fn new_with_interaction(
+        pdf: &Arc<Pdf>,
+        dialogs: Vec<Value>,
+        alerts: Vec<Value>,
+        interactive: bool,
+        print_output_dir: Option<std::path::PathBuf>,
+        attachment_output_dir: Option<std::path::PathBuf>,
+        interaction: Option<Arc<dyn InteractionHandler>>,
+    ) -> Result<Self> {
         let engine = Engine::new()?;
         engine.set_memory_limit(512 * 1024 * 1024);
         engine.set_max_stack_size(2 * 1024 * 1024);
@@ -256,6 +288,7 @@ impl Runtime {
             dialogs: Arc::new(Mutex::new(VecDeque::from(dialogs))),
             alerts: Arc::new(Mutex::new(VecDeque::from(alerts))),
             interactive,
+            interaction,
             print_output_dir,
             attachment_output_dir,
             trace_dir: std::env::var_os("MPMB_DIALOG_TRACE_DIR").map(PathBuf::from),
@@ -333,12 +366,18 @@ impl Runtime {
             .parent()
             .unwrap_or(std::path::Path::new("."))
             .to_owned();
+        let icon_interaction = services.interaction.clone();
         ctx.globals().set("__iconImport", Function::new(ctx.clone(), move |ctx: Ctx, input: String| -> rquickjs::Result<String> {
             (|| -> Result<String> {
                 let request: Value = serde_json::from_str(&input)?;
                 let result = crate::icon_import::request(&request, interactive, &icon_base)?;
                 if interactive && result["code"].as_i64().is_some_and(|v| v < 0) {
-                    crate::ui::alert(&json!({"cTitle":"Import image or PDF icon", "cMsg":result["reason"].as_str().unwrap_or("The selected page is invalid"), "nType":0, "nIcon":0}))?;
+                    let alert_req = json!({"cTitle":"Import image or PDF icon", "cMsg":result["reason"].as_str().unwrap_or("The selected page is invalid"), "nType":0, "nIcon":0});
+                    if let Some(handler) = &icon_interaction {
+                        handler.alert(&alert_req)?;
+                    } else {
+                        crate::ui::alert(&alert_req)?;
+                    }
                 }
                 Ok(result.to_string())
             })().map_err(|e| Exception::throw_message(&ctx, &format!("{e:#}")))
@@ -395,6 +434,7 @@ impl Runtime {
                 },
             )?,
         )?;
+        let launch_interaction = services.interaction.clone();
         ctx.globals().set(
             "__launchUrl",
             Function::new(
@@ -410,8 +450,12 @@ impl Runtime {
                         }
                         let mut launched = false;
                         if interactive {
-                            crate::platform::open_url_detached(&url)?;
-                            launched = true;
+                            if let Some(handler) = &launch_interaction {
+                                launched = handler.launch_url(&url, new_frame)?;
+                            } else {
+                                crate::platform::open_url_detached(&url)?;
+                                launched = true;
+                            }
                         }
                         Ok(
                             json!({"url":url,"new_frame":new_frame,"launched":launched})
@@ -434,6 +478,7 @@ impl Runtime {
         let trace_count = Arc::clone(&services.dialog_count);
         let control_errors = Arc::clone(&services.control_errors);
         let dialog_document = pdf.path.clone();
+        let dialog_interaction = services.interaction.clone();
         ctx.globals().set(
             "__dialog",
             Function::new(
@@ -488,6 +533,12 @@ impl Runtime {
                                 request["description"]["name"]
                             ));
                         }
+                        if let Some(handler) = &dialog_interaction {
+                            return handler
+                                .modal(&request)
+                                .map(|v| v.to_string())
+                                .map_err(|e| e.to_string());
+                        }
                         crate::ui::modal(&request)
                             .map(|v| v.to_string())
                             .map_err(|e| e.to_string())
@@ -510,6 +561,7 @@ impl Runtime {
         let alert_count = Arc::clone(&services.alert_count);
         let alert_control_errors = Arc::clone(&services.control_errors);
         let alert_document = pdf.path.clone();
+        let alert_interaction = services.interaction.clone();
         ctx.globals().set(
             "__alert",
             Function::new(
@@ -534,6 +586,12 @@ impl Runtime {
                         }
                         if !interactive {
                             return Err(format!("Unanswered alert: {}", v["cTitle"]));
+                        }
+                        if let Some(handler) = &alert_interaction {
+                            return handler
+                                .alert(&v)
+                                .map(|v| v.to_string())
+                                .map_err(|e| e.to_string());
                         }
                         crate::ui::alert(&v)
                             .map(|v| v.to_string())
@@ -1562,6 +1620,110 @@ mod tests {
                 .unwrap()
                 .len(),
             17
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    #[test]
+    fn custom_interaction_handler_intercepts_dialogs_alerts_and_urls() {
+        struct RecordingHandler {
+            modals: Mutex<Vec<Value>>,
+            alerts: Mutex<Vec<Value>>,
+            urls: Mutex<Vec<(String, bool)>>,
+        }
+        impl InteractionHandler for RecordingHandler {
+            fn modal(&self, request: &Value) -> Result<Value> {
+                self.modals.lock().unwrap().push(request.clone());
+                if request.to_string().contains("\"menu0\"") {
+                    return Ok(json!({"event": "menu0"}));
+                }
+                Ok(json!({"result": "ok", "values": {"name": "Aelar"}}))
+            }
+            fn alert(&self, request: &Value) -> Result<Value> {
+                self.alerts.lock().unwrap().push(request.clone());
+                Ok(json!({"button": 4, "checked": true}))
+            }
+            fn launch_url(&self, url: &str, new_frame: bool) -> Result<bool> {
+                self.urls.lock().unwrap().push((url.to_owned(), new_frame));
+                Ok(true)
+            }
+        }
+
+        // Build a minimal valid PDF on disk so Runtime::new_with_interaction exercises full host wiring.
+        use lopdf::dictionary;
+        let dir =
+            std::env::temp_dir().join(format!("mpmb-interaction-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let pdf_path = dir.join("minimal.pdf");
+        let mut doc = lopdf::Document::with_version("1.7");
+        let pages_id = doc.new_object_id();
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+        });
+        doc.objects.insert(
+            pages_id,
+            lopdf::Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => vec![page_id.into()],
+                "Count" => 1,
+            }),
+        );
+        let form_id = doc.add_object(dictionary! {
+            "Fields" => Vec::<lopdf::Object>::new(),
+        });
+        let catalog_id = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+            "AcroForm" => form_id,
+        });
+        doc.trailer.set("Root", catalog_id);
+        doc.save(&pdf_path).unwrap();
+
+        let pdf = Arc::new(Pdf::open(&pdf_path).unwrap());
+        let handler = Arc::new(RecordingHandler {
+            modals: Mutex::new(Vec::new()),
+            alerts: Mutex::new(Vec::new()),
+            urls: Mutex::new(Vec::new()),
+        });
+        let rt = Runtime::new_with_interaction(
+            &pdf,
+            vec![],
+            vec![],
+            true,
+            None,
+            None,
+            Some(handler.clone()),
+        )
+        .unwrap();
+
+        let dialog_val = rt
+            .eval(
+                r#"(function(){
+                    var out = '';
+                    var res = app.execDialog({
+                        description: { name: 'Rename', elements: [{ type: 'edit_text', item_id: 'name' }] },
+                        commit(d){ out = d.store().name; }
+                    });
+                    var menu = app.popUpMenuEx({ cName: 'Action', cReturn: 'rest#short' });
+                    var chk = { cMsg: 'Remember', bInitialValue: false };
+                    var btn = app.alert({ cTitle: 'Confirm', cMsg: 'Rest?', nType: 2, oCheckbox: chk });
+                    app.launchURL('https://example.test/mpmb', true);
+                    return { res: res, out: out, menu: menu, btn: btn, checked: chk.bAfterValue };
+                })()"#,
+            )
+            .unwrap();
+        assert_eq!(dialog_val["res"], json!("ok"));
+        assert_eq!(dialog_val["out"], json!("Aelar"));
+        assert_eq!(dialog_val["menu"], json!("rest#short"));
+        assert_eq!(dialog_val["btn"], json!(4));
+        assert_eq!(dialog_val["checked"], json!(true));
+        assert_eq!(handler.modals.lock().unwrap().len(), 2);
+        assert_eq!(handler.alerts.lock().unwrap().len(), 1);
+        assert_eq!(
+            *handler.urls.lock().unwrap(),
+            vec![("https://example.test/mpmb".to_owned(), true)]
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
