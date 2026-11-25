@@ -1,6 +1,67 @@
 use anyhow::{bail, Result};
 use libloading::Library;
 use std::ffi::c_void;
+use std::path::{Path, PathBuf};
+
+fn resolve_pdfium_path_from(
+    env_override: Option<String>,
+    exe_dir: Option<&Path>,
+    is_windows: bool,
+) -> PathBuf {
+    if let Some(path) = env_override.filter(|s| !s.trim().is_empty()) {
+        return PathBuf::from(path);
+    }
+    let mut candidates = Vec::new();
+    if let Some(dir) = exe_dir {
+        if is_windows {
+            candidates.push(dir.join("pdfium.dll"));
+            candidates.push(dir.join("bin").join("pdfium.dll"));
+            candidates.push(dir.join("..").join("bin").join("pdfium.dll"));
+        } else {
+            candidates.push(dir.join("libpdfium.so"));
+            candidates.push(dir.join("..").join("lib").join("libpdfium.so"));
+            candidates.push(
+                dir.join("..")
+                    .join("lib64")
+                    .join("mpmb-reader")
+                    .join("libpdfium.so"),
+            );
+            candidates.push(
+                dir.join("..")
+                    .join("lib")
+                    .join("mpmb-reader")
+                    .join("libpdfium.so"),
+            );
+        }
+    }
+    if !is_windows {
+        candidates.push(PathBuf::from("/app/lib/libpdfium.so"));
+        candidates.push(PathBuf::from("/usr/lib64/mpmb-reader/libpdfium.so"));
+        candidates.push(PathBuf::from("/usr/lib/mpmb-reader/libpdfium.so"));
+        candidates.push(PathBuf::from("output/deps/lib/libpdfium.so"));
+    } else {
+        candidates.push(PathBuf::from("output/deps/bin/pdfium.dll"));
+    }
+    if let Some(found) = candidates.into_iter().find(|p| p.is_file()) {
+        return found;
+    }
+    PathBuf::from(if is_windows {
+        "pdfium.dll"
+    } else {
+        "output/deps/lib/libpdfium.so"
+    })
+}
+
+pub fn resolve_pdfium_path() -> PathBuf {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf));
+    resolve_pdfium_path_from(
+        std::env::var("MPMB_PDFIUM").ok(),
+        exe_dir.as_deref(),
+        cfg!(target_os = "windows"),
+    )
+}
 type Handle = *mut c_void;
 static USERS: std::sync::Mutex<usize> = std::sync::Mutex::new(0);
 #[repr(C)]
@@ -29,10 +90,14 @@ pub struct Renderer {
 }
 impl Renderer {
     pub fn new() -> Result<Self> {
-        let path =
-            std::env::var("MPMB_PDFIUM").unwrap_or_else(|_| "output/deps/lib/libpdfium.so".into());
+        let path = resolve_pdfium_path();
         unsafe {
-            let lib = Library::new(path)?;
+            let lib = Library::new(&path).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to load PDFium library from {}: {e} (set MPMB_PDFIUM to override)",
+                    path.display()
+                )
+            })?;
             let mut users = USERS.lock().unwrap();
             if *users == 0 {
                 (lib.get::<unsafe extern "C" fn()>(b"FPDF_InitLibrary\0")?)();
@@ -276,5 +341,35 @@ impl Drop for Renderer {
                 f();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_pdfium_prefers_env_then_bundled_executable_dir() {
+        let dir = std::env::temp_dir().join(format!("mpmb-pdfium-resolve-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        let bundled_win = dir.join("pdfium.dll");
+        let bundled_nix = dir.join("libpdfium.so");
+        std::fs::write(&bundled_win, b"stub").unwrap();
+        std::fs::write(&bundled_nix, b"stub").unwrap();
+
+        assert_eq!(
+            resolve_pdfium_path_from(Some("/custom/pdfium.so".into()), Some(&dir), false),
+            PathBuf::from("/custom/pdfium.so")
+        );
+        assert_eq!(
+            resolve_pdfium_path_from(None, Some(&dir), true),
+            bundled_win
+        );
+        assert_eq!(
+            resolve_pdfium_path_from(None, Some(&dir), false),
+            bundled_nix
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -60,11 +60,42 @@ pub fn main() -> Result<()> {
     if args.first().map(String::as_str) == Some("--dialog") {
         return dialog_process();
     }
-    if args.is_empty() {
-        println!("mpmb-reader <sheet.pdf> [--probe <scenario.json> <report.json>]\nPDFium: MPMB_PDFIUM or output/deps/lib/libpdfium.so\nNative UI: edit fields, class selection, page navigation and save a new copy.");
+    if matches!(
+        args.first().map(String::as_str),
+        Some("-h" | "--help" | "--version")
+    ) {
+        println!(
+            "mpmb-reader {} — native desktop reader for MPMB Character Record Sheets\n\
+             Usage: mpmb-reader [<sheet.pdf>] [--probe <scenario.json> <report.json>]\n\
+             PDFium: auto-discovered (MPMB_PDFIUM overrides)\n\
+             Theme: MPMB_THEME=dark|light",
+            env!("CARGO_PKG_VERSION")
+        );
         return Ok(());
     }
-    let pdf = Arc::new(Pdf::open(std::path::Path::new(&args[0]))?);
+    let pdf_path = if let Some(first) = args.first() {
+        PathBuf::from(first)
+    } else {
+        match crate::platform::open_file_dialog(
+            "Open MPMB Character Sheet",
+            "PDF documents",
+            &["*.pdf"],
+            None,
+            false,
+        ) {
+            Ok(Some(chosen)) => chosen,
+            Ok(None) => return Ok(()),
+            Err(_) => {
+                println!(
+                    "mpmb-reader <sheet.pdf> [--probe <scenario.json> <report.json>]\n\
+                     PDFium: auto-discovered (MPMB_PDFIUM overrides)\n\
+                     Native UI: edit fields, class selection, page navigation and save a new copy."
+                );
+                return Ok(());
+            }
+        }
+    };
+    let pdf = Arc::new(Pdf::open(&pdf_path)?);
     if args.get(1).map(String::as_str) == Some("--probe") {
         let scenario: Value = serde_json::from_slice(&std::fs::read(
             args.get(2)
@@ -313,21 +344,13 @@ fn dialog_options() -> eframe::NativeOptions {
     }
 }
 fn browse_save_path(current: &str) -> Option<String> {
-    let out = std::process::Command::new("zenity")
-        .args([
-            "--file-selection",
-            "--save",
-            "--title=Save Character Sheet Copy",
-            "--file-filter=PDF documents | *.pdf",
-        ])
-        .arg(format!("--filename={current}"))
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let path = String::from_utf8(out.stdout).ok()?;
-    let trimmed = path.trim_end_matches(['\r', '\n']).to_owned();
+    let chosen = crate::platform::save_file_dialog(
+        "Save Character Sheet Copy",
+        Some(("PDF documents", &["*.pdf"])),
+        Some(current),
+    )
+    .ok()??;
+    let trimmed = chosen.to_string_lossy().into_owned();
     if trimmed.is_empty() {
         None
     } else if !trimmed.to_ascii_lowercase().ends_with(".pdf") {

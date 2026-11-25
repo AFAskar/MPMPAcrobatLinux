@@ -5,25 +5,56 @@ use super::{appearance::RichFontMetrics, EmbeddedFont};
 use anyhow::Context;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::Path,
+    path::{Path, PathBuf},
     process::Command,
 };
 
-/// Preserve explicit overrides, but find the same default face on other Linux
-/// distributions. Fontconfig's successful exit alone does not identify a face.
+fn bundled_font_candidates(filename: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Some(dir) = std::env::var_os("MPMB_FONT_DIR") {
+        out.push(PathBuf::from(dir).join(filename));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            out.push(dir.join("fonts").join(filename));
+            out.push(dir.join(filename));
+            out.push(
+                dir.join("..")
+                    .join("share")
+                    .join("mpmb-reader")
+                    .join("fonts")
+                    .join(filename),
+            );
+        }
+    }
+    out.push(PathBuf::from("output/deps/fonts").join(filename));
+    out.push(PathBuf::from("/app/share/mpmb-reader/fonts").join(filename));
+    out
+}
+
+/// Preserve explicit overrides, but find the same default face across packaged
+/// bundles and other OS/Linux distributions. Fontconfig's successful exit alone
+/// does not identify a face.
 pub(super) fn fallback_bytes() -> anyhow::Result<Vec<u8>> {
     if let Some(path) = std::env::var_os("MPMB_FONT") {
         return std::fs::read(path).context("read Unicode appearance font (MPMB_FONT)");
+    }
+    for path in bundled_font_candidates("DejaVuSans.ttf") {
+        if let Some(bytes) = default_font_at(&path) {
+            return Ok(bytes);
+        }
     }
     for path in [
         "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "C:\\Windows\\Fonts\\DejaVuSans.ttf",
     ] {
         if let Some(bytes) = default_font_at(Path::new(path)) {
             return Ok(bytes);
         }
     }
+    #[cfg(not(target_os = "windows"))]
     if let Ok(output) = Command::new("fc-match")
         .args(["-f", "%{file}", "--", ":postscriptname=DejaVuSans"])
         .output()
@@ -33,6 +64,18 @@ pub(super) fn fallback_bytes() -> anyhow::Result<Vec<u8>> {
                 if let Some(bytes) = default_font_at(Path::new(path)) {
                     return Ok(bytes);
                 }
+            }
+        }
+    }
+    #[cfg(target_os = "windows")]
+    for path in [
+        "C:\\Windows\\Fonts\\segoeui.ttf",
+        "C:\\Windows\\Fonts\\arial.ttf",
+        "C:\\Windows\\Fonts\\calibri.ttf",
+    ] {
+        if let Ok(bytes) = std::fs::read(path) {
+            if ttf_parser::Face::parse(&bytes, 0).is_ok() {
+                return Ok(bytes);
             }
         }
     }
@@ -215,25 +258,23 @@ fn matching_name(face: &ttf_parser::Face<'_>, requested: &str) -> Option<String>
         .find(|actual| actual == requested || *actual == requested.replace(',', "-"))
 }
 
-/// Tests require these exact faces, but their package directories vary by distro.
+/// Tests require these exact faces, but their package directories vary by distro/OS.
 #[cfg(test)]
-pub(super) fn test_font_path(face: &str) -> &'static Path {
-    let paths = match face {
-        "DejaVuSans" => [
-            "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/TTF/DejaVuSans.ttf",
-        ],
-        "DejaVuSans-Bold" => [
-            "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-            "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
-        ],
+pub(super) fn test_font_path(face: &str) -> PathBuf {
+    let filename = match face {
+        "DejaVuSans" => "DejaVuSans.ttf",
+        "DejaVuSans-Bold" => "DejaVuSans-Bold.ttf",
         _ => panic!("Unknown required test face {face}"),
     };
+    let mut paths = bundled_font_candidates(filename);
+    paths.extend([
+        PathBuf::from(format!("/usr/share/fonts/dejavu-sans-fonts/{filename}")),
+        PathBuf::from(format!("/usr/share/fonts/truetype/dejavu/{filename}")),
+        PathBuf::from(format!("/usr/share/fonts/TTF/{filename}")),
+        PathBuf::from(format!("C:\\Windows\\Fonts\\{filename}")),
+    ]);
     paths
         .into_iter()
-        .map(Path::new)
         .find(|path| {
             std::fs::read(path).ok().is_some_and(|bytes| {
                 ttf_parser::Face::parse(&bytes, 0)
@@ -241,7 +282,11 @@ pub(super) fn test_font_path(face: &str) -> &'static Path {
                     .is_some_and(|font| matching_name(&font, face).as_deref() == Some(face))
             })
         })
-        .unwrap_or_else(|| panic!("Install the exact {face} TrueType face to run font tests"))
+        .unwrap_or_else(|| {
+            panic!(
+                "Install the exact {face} TrueType face (or set MPMB_FONT_DIR) to run font tests"
+            )
+        })
 }
 
 #[cfg(test)]
@@ -282,15 +327,13 @@ mod tests {
         let bytes =
             std::fs::read(crate::pdf::installed_fonts::test_font_path("DejaVuSans")).unwrap();
         assert_eq!(
-            default_font_at(Path::new(crate::pdf::installed_fonts::test_font_path(
-                "DejaVuSans"
-            ))),
+            default_font_at(&crate::pdf::installed_fonts::test_font_path("DejaVuSans")),
             Some(bytes.clone())
         );
         assert!(
-            default_font_at(Path::new(crate::pdf::installed_fonts::test_font_path(
+            default_font_at(&crate::pdf::installed_fonts::test_font_path(
                 "DejaVuSans-Bold"
-            )))
+            ))
             .is_none()
         );
         let face = ttf_parser::Face::parse(&bytes, 0).unwrap();

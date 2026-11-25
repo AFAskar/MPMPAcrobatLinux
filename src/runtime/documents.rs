@@ -143,9 +143,14 @@ impl Documents {
         ctx.globals().set("__browsePdf", Function::new(ctx.clone(), move |ctx: Ctx<'js>| -> rquickjs::Result<Option<String>> {
             (|| -> Result<Option<String>> {
                 if !interactive {bail!("PDF file picker requires interactive mode; scripted imports must supply an explicit path")}
-                let output=std::process::Command::new("zenity").args(["--file-selection","--title=Select MPMB source PDF","--file-filter=PDF | *.pdf"]).output()?;
-                if !output.status.success(){return Ok(None)}
-                Ok(Some(String::from_utf8(output.stdout)?.trim_end_matches('\n').to_owned()))
+                let chosen = crate::platform::open_file_dialog(
+                    "Select MPMB source PDF",
+                    "PDF",
+                    &["*.pdf"],
+                    None,
+                    false,
+                )?;
+                Ok(chosen.map(|p| p.to_string_lossy().into_owned()))
             })().map_err(|error|Exception::throw_message(&ctx,&format!("{error:#}")))
         })?)?;
         Ok(())

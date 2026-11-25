@@ -306,12 +306,16 @@ impl Runtime {
             (|| -> Result<String> {
                 let selected = if path.is_empty() {
                     if !interactive { bail!("XFDF file picker requires interactive mode or an explicit local path") }
-                    let output = std::process::Command::new("zenity").args(["--file-selection", "--title=Import XFDF form data", "--file-filter=XFDF | *.xfdf *.xml"]).arg(format!("--filename={}/", xfdf_base.display())).output()?;
-                    if !output.status.success() {
-                        if output.status.code() == Some(1) { return Ok(json!({"cancelled":true}).to_string()) }
-                        bail!("Native XFDF file picker failed")
-                    }
-                    String::from_utf8(output.stdout)?.trim_end_matches(['\r', '\n']).to_owned()
+                    let Some(chosen) = crate::platform::open_file_dialog(
+                        "Import XFDF form data",
+                        "XFDF",
+                        &["*.xfdf", "*.xml"],
+                        Some(&xfdf_base),
+                        false,
+                    )? else {
+                        return Ok(json!({"cancelled":true}).to_string());
+                    };
+                    chosen.to_string_lossy().into_owned()
                 } else { path };
                 if selected.contains("://") { bail!("XFDF import requires a local filesystem path") }
                 let path = std::path::Path::new(&selected);
@@ -406,13 +410,7 @@ impl Runtime {
                         }
                         let mut launched = false;
                         if interactive {
-                            std::process::Command::new("xdg-open")
-                                .arg(&url)
-                                .stdin(std::process::Stdio::null())
-                                .stdout(std::process::Stdio::null())
-                                .stderr(std::process::Stdio::null())
-                                .spawn()
-                                .context("launch URL with xdg-open")?;
+                            crate::platform::open_url_detached(&url)?;
                             launched = true;
                         }
                         Ok(
@@ -566,19 +564,17 @@ impl Runtime {
                                     "file picker requires interactive mode or explicit local path"
                                 )
                             }
-                            let out = std::process::Command::new("zenity")
-                                .args([
-                                    "--file-selection",
-                                    "--title=Import MPMB JavaScript",
-                                    "--file-filter=JavaScript | *.js",
-                                ])
-                                .output()?;
-                            if !out.status.success() {
+                            let Some(chosen) = crate::platform::open_file_dialog(
+                                "Import MPMB JavaScript",
+                                "JavaScript",
+                                &["*.js"],
+                                None,
+                                false,
+                            )?
+                            else {
                                 return Ok("null".into());
-                            }
-                            String::from_utf8(out.stdout)?
-                                .trim_end_matches('\n')
-                                .to_owned()
+                            };
+                            chosen.to_string_lossy().into_owned()
                         } else {
                             path
                         };

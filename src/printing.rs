@@ -3,7 +3,10 @@ use crate::{pdf::Pdf, render::Renderer};
 use anyhow::{bail, Context, Result};
 use lopdf::{dictionary, Document, Object};
 use serde_json::{json, Value};
+#[cfg(not(target_os = "windows"))]
 use std::{io::Write, path::Path, process::Command, time::SystemTime};
+#[cfg(target_os = "windows")]
+use std::{io::Write, path::Path, time::SystemTime};
 
 pub fn pages(params: &Value, count: usize) -> Result<Vec<i32>> {
     let mut pages = Vec::new();
@@ -51,6 +54,7 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(target_os = "windows"))]
 fn choose(args: &[&str]) -> Result<Option<String>> {
     let result = Command::new("zenity")
         .args(args)
@@ -130,6 +134,7 @@ pub fn execute(
     let token = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)?
         .as_nanos();
+    #[cfg(not(target_os = "windows"))]
     let mut printer = None;
     let destination = if let Some(dir) = output_dir {
         std::fs::create_dir_all(dir)?;
@@ -138,58 +143,73 @@ pub fn execute(
         if !interactive {
             bail!("printing requires an explicit probe print_output_dir or native print dialog")
         }
-        let mut destinations = vec![
-            "--list".to_string(),
-            "--title=Print MPMB sheet".into(),
-            format!(
-                "--text={} selected page(s), {duplex}. Choose a destination.",
-                selected.len()
-            ),
-            "--column=Destination".into(),
-            "Save print PDF".into(),
-        ];
-        let printers = Command::new("lpstat")
-            .arg("-a")
-            .output()
-            .context("list CUPS printers")?;
-        if printers.status.success() {
-            for line in String::from_utf8(printers.stdout)?.lines() {
-                if let Some(name) = line.split_whitespace().next() {
-                    destinations.push(name.to_owned())
-                }
-            }
-        }
-        let refs = destinations.iter().map(String::as_str).collect::<Vec<_>>();
-        let Some(choice) = choose(&refs)? else {
-            return Ok(json!({"status":"cancelled"}));
-        };
-        if choice == "Save print PDF" {
-            let Some(path) = choose(&[
-                "--file-selection",
-                "--save",
-                "--title=Save flattened print PDF (new file)",
-                "--filename=mpmb-print.pdf",
-            ])?
+        #[cfg(target_os = "windows")]
+        {
+            let Some(path) = crate::platform::save_file_dialog(
+                "Save flattened print PDF (new file)",
+                Some(("PDF documents", &["*.pdf"])),
+                Some("mpmb-print.pdf"),
+            )?
             else {
                 return Ok(json!({"status":"cancelled"}));
             };
-            std::path::PathBuf::from(path)
-        } else {
-            if !destinations.iter().skip(5).any(|p| p == &choice) {
-                bail!("unknown print destination")
+            path
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let mut destinations = vec![
+                "--list".to_string(),
+                "--title=Print MPMB sheet".into(),
+                format!(
+                    "--text={} selected page(s), {duplex}. Choose a destination.",
+                    selected.len()
+                ),
+                "--column=Destination".into(),
+                "Save print PDF".into(),
+            ];
+            let printers = Command::new("lpstat")
+                .arg("-a")
+                .output()
+                .context("list CUPS printers")?;
+            if printers.status.success() {
+                for line in String::from_utf8(printers.stdout)?.lines() {
+                    if let Some(name) = line.split_whitespace().next() {
+                        destinations.push(name.to_owned())
+                    }
+                }
             }
-            let text = format!("Send {} page(s) to {choice} with {duplex}?", selected.len());
-            if choose(&[
-                "--question",
-                "--title=Submit print job",
-                &format!("--text={text}"),
-            ])?
-            .is_none()
-            {
+            let refs = destinations.iter().map(String::as_str).collect::<Vec<_>>();
+            let Some(choice) = choose(&refs)? else {
                 return Ok(json!({"status":"cancelled"}));
+            };
+            if choice == "Save print PDF" {
+                let Some(path) = choose(&[
+                    "--file-selection",
+                    "--save",
+                    "--title=Save flattened print PDF (new file)",
+                    "--filename=mpmb-print.pdf",
+                ])?
+                else {
+                    return Ok(json!({"status":"cancelled"}));
+                };
+                std::path::PathBuf::from(path)
+            } else {
+                if !destinations.iter().skip(5).any(|p| p == &choice) {
+                    bail!("unknown print destination")
+                }
+                let text = format!("Send {} page(s) to {choice} with {duplex}?", selected.len());
+                if choose(&[
+                    "--question",
+                    "--title=Submit print job",
+                    &format!("--text={text}"),
+                ])?
+                .is_none()
+                {
+                    return Ok(json!({"status":"cancelled"}));
+                }
+                printer = Some(choice);
+                std::env::temp_dir().join(format!("mpmb-print-{}-{token}.pdf", std::process::id()))
             }
-            printer = Some(choice);
-            std::env::temp_dir().join(format!("mpmb-print-{}-{token}.pdf", std::process::id()))
         }
     };
     let flattened = Renderer::new()?.print_copy(&projected, &selected)?;
@@ -209,6 +229,7 @@ pub fn execute(
     let mut bytes = Vec::new();
     doc.save_to(&mut bytes)?;
     write_new(&destination, &bytes)?;
+    #[cfg(not(target_os = "windows"))]
     if let Some(printer) = printer {
         let result = Command::new("lp")
             .arg("-d")

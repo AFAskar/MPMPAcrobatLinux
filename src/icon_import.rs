@@ -287,23 +287,19 @@ pub fn request(request: &Value, interactive: bool, base: &Path) -> Result<Value>
         if !interactive {
             bail!("Icon file selection requires interactive mode or an explicit local path")
         }
-        let selected = std::process::Command::new("zenity")
-            .args([
-                "--file-selection",
-                "--title=Import image or PDF icon",
-                "--file-filter=Images and PDF | *.pdf *.png *.jpg *.jpeg *.bmp *.gif *.tif *.tiff",
-                "--file-filter=All files | *",
-            ])
-            .output()?;
-        if !selected.status.success() {
-            if selected.status.code() == Some(1) {
-                return Ok(json!({"code":1}));
-            }
-            bail!("Native icon file picker failed")
-        }
-        String::from_utf8(selected.stdout)?
-            .trim_end_matches(['\r', '\n'])
-            .to_owned()
+        let Some(chosen) = crate::platform::open_file_dialog(
+            "Import image or PDF icon",
+            "Images and PDF",
+            &[
+                "*.pdf", "*.png", "*.jpg", "*.jpeg", "*.bmp", "*.gif", "*.tif", "*.tiff",
+            ],
+            None,
+            true,
+        )?
+        else {
+            return Ok(json!({"code":1}));
+        };
+        chosen.to_string_lossy().into_owned()
     };
     let path = Path::new(&path);
     let path = if path.is_absolute() {

@@ -7,7 +7,6 @@ use std::{
     collections::BTreeMap,
     io::Write,
     path::{Path, PathBuf},
-    process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -170,21 +169,15 @@ impl Exporter {
             std::env::temp_dir().join(format!("mpmb-{stamp}-{}", filename.to_string_lossy()))
         } else {
             let suggested = filename.to_string_lossy();
-            let output = Command::new("zenity")
-                .args([
-                    "--file-selection",
-                    "--save",
-                    "--title=Export MPMB attachment",
-                    &format!("--filename={suggested}"),
-                ])
-                .output()?;
-            if output.status.code() == Some(1) {
+            let Some(chosen) = crate::platform::save_file_dialog(
+                "Export MPMB attachment",
+                None,
+                Some(&suggested),
+            )?
+            else {
                 return Ok(json!({"status":"cancelled","name":name}));
-            }
-            if !output.status.success() {
-                bail!("attachment destination dialog failed")
-            }
-            PathBuf::from(String::from_utf8(output.stdout)?.trim_end_matches('\n'))
+            };
+            chosen
         };
         let mut file = std::fs::OpenOptions::new()
             .write(true)
@@ -197,12 +190,7 @@ impl Exporter {
             self.temporary.push(destination.clone());
         }
         let launched = launch > 0 && output_dir.is_none();
-        if launched
-            && !Command::new("xdg-open")
-                .arg(&destination)
-                .status()?
-                .success()
-        {
+        if launched && !crate::platform::open_file_blocking(&destination)? {
             bail!("could not open exported PDF attachment")
         }
         Ok(

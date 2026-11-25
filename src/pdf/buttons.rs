@@ -184,7 +184,8 @@ mod tests {
         }
         let bytes = std::fs::read(
             std::env::var("MPMB_FONT")
-                .unwrap_or_else(|_| "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf".into()),
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| crate::pdf::installed_fonts::test_font_path("DejaVuSans")),
         )
         .unwrap();
         let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
