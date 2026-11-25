@@ -187,41 +187,8 @@ impl SheetStore {
 
     pub fn resolve_safe_pdf_path(&self, rel: &str) -> Result<(String, PathBuf)> {
         let raw = rel.replace('\\', "/");
-        if raw.is_empty() || raw.len() > 240 {
-            bail!("invalid sheet path");
-        }
-        if raw.bytes().any(|b| b < 0x20 || b == 0x7f) {
-            bail!("sheet path contains control characters");
-        }
-        let path = Path::new(&raw);
-        let mut parts = Vec::new();
-        for comp in path.components() {
-            match comp {
-                Component::Normal(seg) => {
-                    let s = seg
-                        .to_str()
-                        .ok_or_else(|| anyhow!("sheet path must be valid UTF-8"))?;
-                    if s.is_empty() || s.starts_with('.') || s == ".git" {
-                        bail!("sheet path cannot contain hidden or .git segments");
-                    }
-                    if s != s.trim() {
-                        bail!("sheet path segments cannot have leading or trailing whitespace");
-                    }
-                    parts.push(s.to_owned());
-                }
-                Component::CurDir => {}
-                Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                    bail!("sheet path must stay inside the sheet store");
-                }
-            }
-        }
-        if parts.is_empty() {
-            bail!("sheet path is empty");
-        }
+        let parts = validate_safe_rel_pdf_path(&raw)?;
         let normalized = parts.join("/");
-        if !normalized.to_ascii_lowercase().ends_with(".pdf") {
-            bail!("sheet path must end with .pdf");
-        }
         let abs = self.ensure_within_store(&parts)?;
         Ok((normalized, abs))
     }
@@ -1235,7 +1202,15 @@ fn kill_process_tree(child: &mut std::process::Child) {
         }
     }
     let _ = child.kill();
-    let _ = child.wait();
+    // Bound the reap step so an unkillable child (e.g. kernel D-state) cannot
+    // hold the store mutex indefinitely past the Git deadline.
+    let reap_deadline = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < reap_deadline {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => break,
+            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+        }
+    }
 }
 
 fn wait_child_with_timeout(
@@ -1610,12 +1585,56 @@ fn collect_stageable_paths(root: &Path, dir: &Path, out: &mut Vec<String>) -> Re
     Ok(())
 }
 
+fn validate_safe_rel_pdf_path(rel: &str) -> Result<Vec<String>> {
+    if rel.is_empty() || rel.len() > 240 {
+        bail!("invalid sheet path");
+    }
+    if rel.bytes().any(|b| b < 0x20 || b == 0x7f) {
+        bail!("sheet path contains control characters");
+    }
+    let path = Path::new(rel);
+    let mut parts = Vec::new();
+    for comp in path.components() {
+        match comp {
+            Component::Normal(seg) => {
+                let s = seg
+                    .to_str()
+                    .ok_or_else(|| anyhow!("sheet path must be valid UTF-8"))?;
+                if s.is_empty() || s.starts_with('.') || s == ".git" {
+                    bail!("sheet path cannot contain hidden or .git segments");
+                }
+                if s != s.trim() {
+                    bail!("sheet path segments cannot have leading or trailing whitespace");
+                }
+                parts.push(s.to_owned());
+            }
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                bail!("sheet path must stay inside the sheet store");
+            }
+        }
+    }
+    if parts.is_empty() {
+        bail!("sheet path is empty");
+    }
+    let normalized = parts.join("/");
+    if !normalized.to_ascii_lowercase().ends_with(".pdf") {
+        bail!("sheet path must end with .pdf");
+    }
+    Ok(parts)
+}
+
 fn sheet_entry_from_path(root: &Path, abs: &Path) -> Result<SheetEntry> {
     let rel_path = abs.strip_prefix(root).unwrap_or(abs);
     let rel = rel_path
         .to_str()
         .ok_or_else(|| anyhow!("sheet path must be valid UTF-8"))?
         .replace('\\', "/");
+    // Enforce the exact same identifier validation as `resolve_safe_pdf_path`
+    // (UTF-8, <=240 bytes, no control chars, no hidden/whitespace-padded segments)
+    // so every discovered sheet identifier is guaranteed to reopen cleanly.
+    let parts = validate_safe_rel_pdf_path(&rel)?;
+    let rel = parts.join("/");
     let name = abs
         .file_name()
         .and_then(|n| n.to_str())
@@ -2582,12 +2601,16 @@ mod tests {
             use std::os::unix::ffi::OsStrExt;
             use std::os::unix::process::CommandExt;
 
-            // 9a. Non-UTF-8 filenames are skipped during discovery & staging so
-            // they never alias UTF-8 replacement-character filenames.
+            // 9a. Non-UTF-8, control-char, and >240-byte paths are skipped during
+            // discovery so every listed sheet identifier reopens cleanly.
             let non_utf8_name = std::ffi::OsStr::from_bytes(b"bad\xff.pdf");
             fs::write(work_a.join(non_utf8_name), b"%PDF-1.7\n%non-utf8\n").unwrap();
             let repl_name = "bad\u{FFFD}.pdf";
             fs::write(work_a.join(repl_name), b"%PDF-1.7\n%utf8-repl\n").unwrap();
+            fs::write(work_a.join("bad\nnewline.pdf"), b"%PDF-1.7\n%nl\n").unwrap();
+            let deep_dir = work_a.join("a".repeat(120)).join("b".repeat(120));
+            fs::create_dir_all(&deep_dir).unwrap();
+            fs::write(deep_dir.join("too-long.pdf"), b"%PDF-1.7\n%long\n").unwrap();
             let listed_paths: Vec<String> = store_a
                 .list_sheets()
                 .unwrap()
@@ -2599,6 +2622,18 @@ mod tests {
                 1,
                 "non-UTF-8 file must not alias replacement-char filename"
             );
+            assert!(
+                !listed_paths.iter().any(|p| p.contains('\n')),
+                "control-char filename must be skipped during discovery"
+            );
+            assert!(
+                !listed_paths.iter().any(|p| p.len() > 240),
+                "over-240-byte path must be skipped during discovery"
+            );
+            for p in &listed_paths {
+                let (re_norm, _) = store_a.resolve_safe_pdf_path(p).unwrap();
+                assert_eq!(&re_norm, p);
+            }
             let mut stageable = Vec::new();
             collect_stageable_paths(&work_a, &work_a, &mut stageable).unwrap();
             assert_eq!(
@@ -2608,44 +2643,61 @@ mod tests {
             );
             fs::remove_file(work_a.join(non_utf8_name)).unwrap();
             fs::remove_file(work_a.join(repl_name)).unwrap();
+            fs::remove_file(work_a.join("bad\nnewline.pdf")).unwrap();
+            fs::remove_dir_all(work_a.join("a".repeat(120))).unwrap();
 
-            // 9b. Direct process-group signaling terminates descendant holding stderr.
-            let pid_file = base.join("grandchild.pid");
-            let script = format!("sleep 30 >&2 & echo $! > {}; exit 0", pid_file.display());
-            let mut cmd = Command::new("sh");
-            cmd.process_group(0)
-                .args(["-c", &script])
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
-            let child = cmd.spawn().unwrap();
-            let started = Instant::now();
-            let res = wait_child_with_timeout(child, Duration::from_millis(250), "pipe-holder");
-            assert!(res.is_err(), "grandchild holding stderr should time out");
-            assert!(
-                started.elapsed() < Duration::from_secs(3),
-                "wait_child_with_timeout hung past deadline: {:?}",
-                started.elapsed()
-            );
-            let grandchild_pid: i32 = fs::read_to_string(&pid_file)
-                .unwrap()
-                .trim()
-                .parse()
-                .unwrap();
-            // Wait briefly for OS cleanup, then assert the grandchild is no longer alive.
-            let mut alive = true;
-            for _ in 0..40 {
-                let rc = unsafe { kill(grandchild_pid, 0) };
-                if rc != 0 {
-                    alive = false;
-                    break;
+            // 9b. Direct process-group signaling terminates BOTH:
+            //     (i) a descendant holding stderr open after child exits, and
+            //     (ii) a live child + descendant on the active timeout path.
+            for (label, script) in [
+                (
+                    "exited-child-pipe-holder",
+                    "sleep 30 >&2 & echo $! > PID; exit 0",
+                ),
+                (
+                    "live-child-timeout",
+                    "sleep 30 >&2 & echo $! > PID; exec sleep 30",
+                ),
+            ] {
+                let pid_file = base.join(format!("{label}.pid"));
+                let cmd_script = script.replace("PID", &pid_file.display().to_string());
+                let mut cmd = Command::new("sh");
+                cmd.process_group(0)
+                    .args(["-c", &cmd_script])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped());
+                let child = cmd.spawn().unwrap();
+                let child_pid = i32::try_from(child.id()).unwrap();
+                let started = Instant::now();
+                let res = wait_child_with_timeout(child, Duration::from_millis(250), label);
+                assert!(res.is_err(), "{label} should time out");
+                assert!(
+                    started.elapsed() < Duration::from_secs(3),
+                    "{label} hung past deadline: {:?}",
+                    started.elapsed()
+                );
+                let grandchild_pid: i32 = fs::read_to_string(&pid_file)
+                    .unwrap()
+                    .trim()
+                    .parse()
+                    .unwrap();
+                for target_pid in [child_pid, grandchild_pid] {
+                    let mut alive = true;
+                    for _ in 0..40 {
+                        let rc = unsafe { kill(target_pid, 0) };
+                        if rc != 0 {
+                            alive = false;
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(25));
+                    }
+                    assert!(
+                        !alive,
+                        "{label}: process {target_pid} survived kill_process_tree"
+                    );
                 }
-                std::thread::sleep(Duration::from_millis(25));
             }
-            assert!(
-                !alive,
-                "grandchild process {grandchild_pid} survived kill_process_tree"
-            );
         }
 
         // 10. Two independent SheetStore instances sharing the same root serialize
