@@ -22,10 +22,11 @@
 ## Local Usage
 
 ```bash
-# Local directory mode
-mpmb-reader serve --bind 127.0.0.1:8080 --dir ~/MPMB-Sheets
+# Local directory mode (defaults to loopback 127.0.0.1:8080)
+mpmb-reader serve --dir ~/MPMB-Sheets
 
-# Private GitHub repo mode (SSH deploy key; always set MPMB_AUTH_TOKEN when binding 0.0.0.0)
+# Private GitHub repo mode (non-loopback binds require MPMB_AUTH_TOKEN / --auth-token,
+# or an explicit --allow-unauthenticated / MPMB_ALLOW_UNAUTHENTICATED=1 opt-in behind an authenticating proxy)
 MPMB_AUTH_TOKEN="replace-with-a-strong-random-token" mpmb-reader serve \
   --bind 0.0.0.0:8080 \
   --dir /data/sheets \
@@ -35,7 +36,7 @@ MPMB_AUTH_TOKEN="replace-with-a-strong-random-token" mpmb-reader serve \
   --git-auto-sync-secs 300
 ```
 
-> **Note:** Paid MPMB Patreon PDFs and private character sheets must be stored in a **private** repository separate from this public source repository.
+> **Note:** Keep paid Patreon reference fixtures strictly local per `AGENTS.md` and never commit them to this repository. When configuring `--git-repo`, point it at your own **private** repository containing only your personal character sheets.
 
 ## Container Build & Kubernetes (k3s) Deployment
 
