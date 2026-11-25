@@ -51,6 +51,7 @@ if [[ -d "$PDFIUM_DIR/licenses" ]]; then
   cp -r "$PDFIUM_DIR/licenses/." "$STAGE/licenses/"
 fi
 cp "$FONT_SRC" "$STAGE/DejaVuSans.ttf"
+cp "$ROOT/packaging/assets/LICENSE-DEJAVU.txt" "$STAGE/LICENSE-DEJAVU.txt"
 cp "$ROOT/packaging/assets/io.github.afaskar.MpmbReader.desktop" "$STAGE/"
 cp "$ROOT/packaging/assets/io.github.afaskar.MpmbReader.metainfo.xml" "$STAGE/"
 cp "$ROOT/packaging/assets/io.github.afaskar.MpmbReader.svg" "$STAGE/"

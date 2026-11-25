@@ -15,6 +15,11 @@ import sys
 import time
 from pathlib import Path
 
+def _require(condition, message=None):
+    if not condition:
+        raise AssertionError(message)
+
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "tools/acrobat"), str(ROOT / "tools/native")]
 from verify import inspect, script_hashes
@@ -96,37 +101,37 @@ def run_profile(profile_name, source, instrumentation, binary, out_root, style, 
             )
         data = json.loads(probe.read_text()) if probe.exists() else {"passed": False, "error": f"Missing {probe}"}
         messages = data.get("diagnostics", {}).get("console", {}).get("messages", [])
-        assert [m["text"] for m in messages] == [CONSOLE_SENTINEL], (profile_name, label, messages, data.get("error"))
+        _require([m["text"] for m in messages] == [CONSOLE_SENTINEL], (profile_name, label, messages, data.get("error")))
         strict = copy.deepcopy(data)
         strict["diagnostics"]["console"]["messages"] = []
         checked = qualification.qualify_probe(proc.returncode, strict, label)
         report["probe_qualifications"].append(dict(checked, probe=str(probe), expected_console=messages))
-        assert checked["passed"], (profile_name, label, checked)
+        _require(checked["passed"], (profile_name, label, checked))
         markers = [
             s["result"]
             for s in data["stages"]
             if isinstance(s.get("result"), str) and s["result"].startswith(diagnostics.DONE)
         ]
-        assert markers == [diagnostics.DONE + str(i + 1) for i in range(len(capture_specs))], (
+        _require(markers == [diagnostics.DONE + str(i + 1) for i in range(len(capture_specs))], (
             profile_name,
             label,
             markers,
-        )
+        ))
         results = []
         for cap_label, summary_idx, saved_pdf in capture_specs:
             state = style.saved_capture(saved_pdf, data["stages"][summary_idx]["result"], source)
             validate_profile_state(profile_name, cap_label, state)
-            assert script_hashes(saved_pdf) == expected_scripts, (profile_name, cap_label, "script hashes changed")
+            _require(script_hashes(saved_pdf) == expected_scripts, (profile_name, cap_label, "script hashes changed"))
             canonical_check = fields_mod.compare(saved_pdf, dict(state["fields"], **state["resources"]))
             populated = {k: v for k, v in state["fields"].items() if str(v).strip()}
             visible_check = inspect(saved_pdf, populated)
-            assert visible_check["actual"] == populated, (profile_name, cap_label, "canonical mismatch")
+            _require(visible_check["actual"] == populated, (profile_name, cap_label, "canonical mismatch"))
             missing_ap = [
                 w["name"]
                 for w in visible_check["widgets"]
                 if w["visible"] and (not w["appearance"] or not (w["appearance_text"] or "").strip())
             ]
-            assert not missing_ap, (profile_name, cap_label, "missing visible AP text", missing_ap)
+            _require(not missing_ap, (profile_name, cap_label, "missing visible AP text", missing_ap))
             results.append(
                 {
                     "label": cap_label,
@@ -203,19 +208,19 @@ def run_profile(profile_name, source, instrumentation, binary, out_root, style, 
         )
     data = json.loads(probe.read_text())
     messages = data["diagnostics"]["console"]["messages"]
-    assert [m["text"] for m in messages] == [CONSOLE_SENTINEL], (profile_name, "reopen", messages)
+    _require([m["text"] for m in messages] == [CONSOLE_SENTINEL], (profile_name, "reopen", messages))
     strict = copy.deepcopy(data)
     strict["diagnostics"]["console"]["messages"] = []
     checked = qualification.qualify_probe(proc.returncode, strict, "reopen")
     report["probe_qualifications"].append(dict(checked, probe=str(probe), expected_console=messages))
-    assert checked["passed"], (profile_name, "reopen", checked)
+    _require(checked["passed"], (profile_name, "reopen", checked))
 
     cold_state = style.saved_capture(cold_pdf, data["stages"][cold_caps[0][1]]["result"], source)
-    assert encoded_state(cold_state) == encoded_state(last_phase["state"]), (
+    _require(encoded_state(cold_state) == encoded_state(last_phase["state"]), (
         profile_name,
         "Cold reopen logical state diverged",
-    )
-    assert script_hashes(cold_pdf) == expected_scripts
+    ))
+    _require(script_hashes(cold_pdf) == expected_scripts, 'script_hashes(cold_pdf) == expected_scripts')
     reopen_results.append(
         {
             "label": cold_label,
@@ -228,7 +233,7 @@ def run_profile(profile_name, source, instrumentation, binary, out_root, style, 
 
     follow_state = style.saved_capture(follow_pdf, data["stages"][cold_caps[1][1]]["result"], source)
     validate_profile_state(profile_name, follow_label, follow_state)
-    assert script_hashes(follow_pdf) == expected_scripts
+    _require(script_hashes(follow_pdf) == expected_scripts, 'script_hashes(follow_pdf) == expected_scripts')
     reopen_results.append(
         {
             "label": follow_label,
@@ -256,10 +261,10 @@ def main():
 
     source = args.input.resolve()
     manifest = json.loads(args.instrumentation.read_text())
-    assert manifest["passed"] and manifest["mode"] == "startup-script-timer"
-    assert Path(manifest["input"]).resolve() == source and manifest["input_sha256"] == sha256_file(source)
-    assert manifest["observer_sha256"] == sha256_file(ROOT / "tools/native/class-2024-observer.js")
-    assert manifest["diagnostic_helper_sha256"] == sha256_file(Path(diagnostics.__file__))
+    _require(manifest["passed"] and manifest["mode"] == "startup-script-timer", 'manifest["passed"] and manifest["mode"] == "startup-script-timer"')
+    _require(Path(manifest["input"]).resolve() == source and manifest["input_sha256"] == sha256_file(source), 'Path(manifest["input"]).resolve() == source and manifest["input_sha256"] == sha256_file(source)')
+    _require(manifest["observer_sha256"] == sha256_file(ROOT / "tools/native/class-2024-observer.js"), 'manifest["observer_sha256"] == sha256_file(ROOT / "tools/native/class-2024-observer.js")')
+    _require(manifest["diagnostic_helper_sha256"] == sha256_file(Path(diagnostics.__file__)), 'manifest["diagnostic_helper_sha256"] == sha256_file(Path(diagnostics.__file__))')
 
     selected = args.profile or [
         name for name, cfg in PROFILES.items() if args.batch == "all" or cfg["batch"] == args.batch

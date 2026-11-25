@@ -46,6 +46,7 @@ Name: "openwithpdf"; Description: "Register MPMB Reader in the Windows 'Open wit
 Source: "{#StageDir}\mpmb-reader.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\pdfium.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\LICENSE-PDFIUM.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#StageDir}\LICENSE-DEJAVU.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\licenses\*"; DestDir: "{app}\licenses"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 Source: "{#StageDir}\README.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\fonts\*"; DestDir: "{app}\fonts"; Flags: ignoreversion recursesubdirs createallsubdirs

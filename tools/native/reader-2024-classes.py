@@ -21,6 +21,11 @@ import sys
 import time
 from pathlib import Path
 
+def _require(condition, message=None):
+    if not condition:
+        raise AssertionError(message)
+
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "tools/acrobat"), str(ROOT / "tools/native")]
 import control as c
@@ -46,7 +51,7 @@ def sha256_file(path):
 
 def parse_cmd_call(cmd_str):
     m = re.match(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\((.*)\)\s*$", cmd_str)
-    assert m, f"Unsupported command syntax for Reader adapter: {cmd_str}"
+    _require(m, f"Unsupported command syntax for Reader adapter: {cmd_str}")
     fn = m.group(1)
     raw_args = m.group(2).strip()
     if not raw_args:
@@ -61,7 +66,7 @@ def parse_cmd_call(cmd_str):
 def parse_spend_eval(code):
     m_prefix = re.search(r"indexOf\((\"[^\"]+\")\)===0", code)
     m_amt = re.search(r"value=(\"[^\"]+\")", code)
-    assert m_prefix and m_amt, f"Cannot parse spend helper for Reader: {code}"
+    _require(m_prefix and m_amt, f"Cannot parse spend helper for Reader: {code}")
     return json.loads(m_prefix.group(1)), json.loads(m_amt.group(1))
 
 
@@ -90,10 +95,10 @@ def run_reader_profile(
     skip_paired_display=False,
 ):
     native = json.loads(native_profile_report_path.read_text())
-    assert native["passed"], (profile_name, "Native report did not pass")
+    _require(native["passed"], (profile_name, "Native report did not pass"))
     wanted = {p["label"]: p["state"] for p in native["phases"]}
     source = Path(native["input"]).resolve()
-    assert sha256_file(source) == native["input_sha256"]
+    _require(sha256_file(source) == native["input_sha256"], 'sha256_file(source) == native["input_sha256"]')
     expected_scripts = script_hashes(source)
     cfg = PROFILES[profile_name]
 
@@ -128,7 +133,7 @@ def run_reader_profile(
             marker = c.script("read", path=remote, fields=["User Script"])["fields"]["User Script"]
             if marker == "// MPMB workflow observer installed":
                 return
-            assert time.monotonic() < deadline, ("Observer installation timeout", profile_name, marker)
+            _require(time.monotonic() < deadline, ("Observer installation timeout", profile_name, marker))
             time.sleep(0.25)
 
     def check_console(request=True):
@@ -140,19 +145,19 @@ def run_reader_profile(
             roots = [r for r in rows if r["class"] == "#32770" and r["name"] == "JavaScript Debugger"]
             if roots:
                 break
-            assert time.monotonic() < deadline, (profile_name, "Console debugger did not appear")
+            _require(time.monotonic() < deadline, (profile_name, "Console debugger did not appear"))
             time.sleep(0.2)
-        assert len(roots) == 1
+        _require(len(roots) == 1, 'len(roots) == 1')
         owner = roots[0]["handle"]
         edits = [r for r in rows if r["owner"] == owner and r["class"] == "RICHEDIT50W"]
-        assert len(edits) == 1
+        _require(len(edits) == 1, 'len(edits) == 1')
         observed = console_mod.read_console_text(owner, edits[0]["handle"])
         report["console_checks"].append(observed)
         observed["close"] = console_mod.close_console(observed)
-        assert observed["live"]["text"].rstrip("\r\n") == CONSOLE_SENTINEL, (
+        _require(observed["live"]["text"].rstrip("\r\n") == CONSOLE_SENTINEL, (
             profile_name,
             observed["live"]["text"],
-        )
+        ))
 
     pending_ident = None
 
@@ -225,9 +230,9 @@ def run_reader_profile(
                 report["inputs"].append({"call": fn, "args": fn_args, "reply": reply})
             elif kind == "eval":
                 prefix, amt = parse_spend_eval(op[1])
-                assert last_state is not None
+                _require(last_state is not None, 'last_state is not None')
                 matches = [r for r in last_state["rows"] if r["name"].startswith(prefix)]
-                assert len(matches) == 1, (profile_name, prefix, matches)
+                _require(len(matches) == 1, (profile_name, prefix, matches))
                 field = "Limited Feature Used " + matches[0]["row"]
                 reply = c.script("set", path=remote, values={field: amt})
                 report["inputs"].append({"spend": [prefix, field, amt], "reply": reply})
@@ -244,12 +249,12 @@ def run_reader_profile(
         remote = output
         pdf = c.fetch(remote, folder / f"{label}.pdf")
         observed = style.saved_capture(pdf, summary, source)
-        assert encoded_state(observed) == encoded_state(wanted[label]), (
+        _require(encoded_state(observed) == encoded_state(wanted[label]), (
             profile_name,
             label,
             "Reader vs Native state mismatch",
-        )
-        assert script_hashes(pdf) == expected_scripts
+        ))
+        _require(script_hashes(pdf) == expected_scripts, 'script_hashes(pdf) == expected_scripts')
         canonical = fields_mod.compare(pdf, dict(observed["fields"], **observed["resources"]))
         point = {
             "label": label,
@@ -266,11 +271,11 @@ def run_reader_profile(
     try:
         with c.desktop_lock():
             try:
-                assert not [
+                _require(not [
                     r
                     for r in c.command("inspect")
                     if r["class"] == "AcrobatSDIWindow" and ".pdf" in r["name"].lower()
-                ], "Pre-existing Reader document"
+                ], "Pre-existing Reader document")
                 scp_to_windows(source, remote)
                 opened = True
                 c.ensure_document(remote)
@@ -336,7 +341,7 @@ def run_reader_profile(
                         report["cleanup_error"] = str(cerr)
 
         # Further Native Mixed-Engine Reopen & Changed Save on Reader's final PDF (required)
-        assert binary is not None, "Mixed-engine native binary is required for Reader class parity"
+        _require(binary is not None, "Mixed-engine native binary is required for Reader class parity")
         mixed_pdf = folder / "further-native-changed.pdf"
         mixed_scenario = folder / "further-native-scenario.json"
         mixed_probe = folder / "further-native-probe.json"
@@ -367,20 +372,20 @@ def run_reader_profile(
             )
         mdata = json.loads(mixed_probe.read_text())
         msgs = mdata["diagnostics"]["console"]["messages"]
-        assert [m["text"] for m in msgs] == [CONSOLE_SENTINEL], (profile_name, "mixed", msgs)
+        _require([m["text"] for m in msgs] == [CONSOLE_SENTINEL], (profile_name, "mixed", msgs))
         strict = copy.deepcopy(mdata)
         strict["diagnostics"]["console"]["messages"] = []
         mchecked = qualification.qualify_probe(proc.returncode, strict, "further-native")
-        assert mchecked["passed"], (profile_name, mchecked)
-        assert script_hashes(mixed_pdf) == expected_scripts
+        _require(mchecked["passed"], (profile_name, mchecked))
+        _require(script_hashes(mixed_pdf) == expected_scripts, 'script_hashes(mixed_pdf) == expected_scripts')
         mixed_summary = mdata["stages"][5]["result"]
         mixed_state = style.saved_capture(mixed_pdf, mixed_summary, source)
-        assert mixed_state["notesAndActions"]["Extra.Notes"] == expected_note, (profile_name, "mixed note mismatch")
-        assert mixed_state["identity"] == pt_follow["state"]["identity"], (profile_name, "mixed identity mismatch")
-        assert mixed_state["fields"] == pt_follow["state"]["fields"], (profile_name, "mixed fields mismatch")
-        assert mixed_state["resources"] == pt_follow["state"]["resources"], (profile_name, "mixed resources mismatch")
-        assert mixed_state["templates"] == pt_follow["state"]["templates"], (profile_name, "mixed templates mismatch")
-        assert mixed_state["pages"] == pt_follow["state"]["pages"], (profile_name, "mixed pages mismatch")
+        _require(mixed_state["notesAndActions"]["Extra.Notes"] == expected_note, (profile_name, "mixed note mismatch"))
+        _require(mixed_state["identity"] == pt_follow["state"]["identity"], (profile_name, "mixed identity mismatch"))
+        _require(mixed_state["fields"] == pt_follow["state"]["fields"], (profile_name, "mixed fields mismatch"))
+        _require(mixed_state["resources"] == pt_follow["state"]["resources"], (profile_name, "mixed resources mismatch"))
+        _require(mixed_state["templates"] == pt_follow["state"]["templates"], (profile_name, "mixed templates mismatch"))
+        _require(mixed_state["pages"] == pt_follow["state"]["pages"], (profile_name, "mixed pages mismatch"))
         mixed_expected = {
             "Extra.Notes": expected_note,
             "Character Level": pt_follow["state"]["fields"]["Character Level"],
@@ -388,12 +393,12 @@ def run_reader_profile(
             "Class and Levels": pt_follow["state"]["fields"]["Class and Levels"],
         }
         mixed_inspect = inspect(mixed_pdf, mixed_expected)
-        assert mixed_inspect["actual"] == mixed_expected, (profile_name, "mixed canonical inspect mismatch")
+        _require(mixed_inspect["actual"] == mixed_expected, (profile_name, "mixed canonical inspect mismatch"))
         note_widgets = [w for w in mixed_inspect["widgets"] if w["name"] == "Extra.Notes" and w["visible"]]
-        assert note_widgets and all((w.get("appearance_text") or "").strip() for w in note_widgets), (
+        _require(note_widgets and all((w.get("appearance_text") or "").strip() for w in note_widgets), (
             profile_name,
             "mixed Extra.Notes missing visible AP",
-        )
+        ))
         report["mixed_native"] = {
             "passed": True,
             "probe": str(mixed_probe),
@@ -438,7 +443,7 @@ def main():
     ready = json.loads(args.readiness.read_text())
     reference = require_2024_reference(ready, c.harness_fingerprint())
     native_summary = json.loads((args.native_dir / "classes-2024.json").read_text())
-    assert native_summary["passed"], "Native summary must pass before Reader comparison"
+    _require(native_summary["passed"], "Native summary must pass before Reader comparison")
 
     selected = args.profile or [
         name

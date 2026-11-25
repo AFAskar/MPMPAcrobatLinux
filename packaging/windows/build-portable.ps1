@@ -34,6 +34,7 @@ Copy-Item $FontRegular (Join-Path $StageDir "fonts\DejaVuSans.ttf")
 $FontBold = Join-Path $DepsDir "fonts\DejaVuSans-Bold.ttf"
 if (Test-Path $FontBold) { Copy-Item $FontBold (Join-Path $StageDir "fonts\DejaVuSans-Bold.ttf") }
 
+Copy-Item (Join-Path $Root "packaging\assets\LICENSE-DEJAVU.txt") (Join-Path $StageDir "LICENSE-DEJAVU.txt")
 if (Test-Path $LicenseFile) {
     Copy-Item $LicenseFile (Join-Path $StageDir "LICENSE-PDFIUM.txt")
 } else {

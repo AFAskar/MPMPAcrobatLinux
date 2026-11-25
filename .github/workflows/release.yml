@@ -121,6 +121,8 @@ jobs:
             "${{ needs.prepare.outputs.version }}" \
             "$PWD/target/release/mpmb-reader" \
             "$PWD/output/dist"
+          chmod +x output/dist/*.AppImage
+          APPIMAGE_EXTRACT_AND_RUN=1 output/dist/*.AppImage --help
 
       - name: Upload AppImage artifact
         uses: actions/upload-artifact@v4
@@ -219,11 +221,18 @@ jobs:
       - name: Build Windows release binary
         run: cargo build --release --locked -j 1
 
-      - name: Build Windows Portable ZIP
+      - name: Build Windows Portable ZIP & smoke-test staged bundle
         shell: pwsh
         run: |
           .\packaging\windows\build-portable.ps1 `
             -Version "${{ needs.prepare.outputs.version }}"
+          & "output\dist\windows-stage\mpmb-reader.exe" --help
+          if ($LASTEXITCODE -ne 0) { throw "Staged Windows binary --help failed" }
+          foreach ($req in @("pdfium.dll", "LICENSE-PDFIUM.txt", "LICENSE-DEJAVU.txt", "fonts\DejaVuSans.ttf", "fonts\DejaVuSans-Bold.ttf")) {
+            if (-not (Test-Path (Join-Path "output\dist\windows-stage" $req))) {
+              throw "Missing required staged Windows asset: $req"
+            }
+          }
 
       - name: Ensure Inno Setup 6 is available
         shell: pwsh

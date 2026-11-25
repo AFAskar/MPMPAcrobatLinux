@@ -20,6 +20,11 @@ import time
 from pathlib import Path
 from pypdf import PdfReader
 
+def _require(condition, message=None):
+    if not condition:
+        raise AssertionError(message)
+
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "tools/acrobat"), str(ROOT / "tools/native")]
 import control as c
@@ -73,13 +78,13 @@ def run_native_probe(binary, pdf, scenario, folder, label, timeout=300):
             timeout=timeout,
         )
     data = json.loads(evidence.read_text())
-    assert proc.returncode == 0 and data.get("passed") is True, (label, data.get("error"), str(log))
-    assert not data["diagnostics"]["errors"], (label, data["diagnostics"]["errors"])
+    _require(proc.returncode == 0 and data.get("passed") is True, (label, data.get("error"), str(log)))
+    _require(not data["diagnostics"]["errors"], (label, data["diagnostics"]["errors"]))
     msgs = [
         (m["text"] if isinstance(m, dict) else str(m)).rstrip("\r\n")
         for m in data["diagnostics"]["console"]["messages"]
     ]
-    assert msgs == [CONSOLE_SENTINEL], (label, msgs)
+    _require(msgs == [CONSOLE_SENTINEL], (label, msgs))
     return data
 
 
@@ -87,7 +92,7 @@ def read_payload(pdf):
     fields = canonical_fields(PdfReader(pdf))
     raw = fields["PC Name"]["/V"]
     data = json.loads(raw)
-    assert data.pop("sentinel", None) == "\u00a0\u2028\U0001f600", "Missing Unicode sentinel"
+    _require(data.pop("sentinel", None) == "\u00a0\u2028\U0001f600", "Missing Unicode sentinel")
     return data
 
 
@@ -109,7 +114,7 @@ def main():
         x for x in json.loads((ROOT / "docs/fixtures.json").read_text()) if "_2014_" in x["file"]
     )
     orig_pdf = ROOT / "Testing" / fixture_item["file"]
-    assert sha256_file(orig_pdf) == fixture_item["sha256"]
+    _require(sha256_file(orig_pdf) == fixture_item["sha256"], 'sha256_file(orig_pdf) == fixture_item["sha256"]')
     prep = subprocess.run(
         [
             sys.executable,
@@ -161,7 +166,7 @@ def main():
         out,
         "native-p1",
     )
-    assert script_hashes(nat_s1) == expected_scripts
+    _require(script_hashes(nat_s1) == expected_scripts, 'script_hashes(nat_s1) == expected_scripts')
     nat_state_1 = read_payload(nat_s1)
 
     nat_steps_2 = [
@@ -177,7 +182,7 @@ def main():
         out,
         "native-p2",
     )
-    assert script_hashes(nat_s2) == expected_scripts
+    _require(script_hashes(nat_s2) == expected_scripts, 'script_hashes(nat_s2) == expected_scripts')
     nat_state_2 = read_payload(nat_s2)
     print("Native 2014 toolbar parity phases 1 & 2: PASS", flush=True)
 
@@ -207,7 +212,7 @@ def main():
             marker = c.script("read", path=remote, fields=["User Script"])["fields"]["User Script"]
             if marker == "// MPMB workflow observer installed":
                 return
-            assert time.monotonic() < deadline, ("Observer installation timeout", marker)
+            _require(time.monotonic() < deadline, ("Observer installation timeout", marker))
             time.sleep(0.25)
 
     def check_console():
@@ -218,23 +223,23 @@ def main():
             roots = [r for r in rows if r["class"] == "#32770" and r["name"] == "JavaScript Debugger"]
             if roots:
                 break
-            assert time.monotonic() < deadline, "Console debugger did not appear"
+            _require(time.monotonic() < deadline, "Console debugger did not appear")
             time.sleep(0.2)
         owner = roots[0]["handle"]
         edits = [r for r in rows if r["owner"] == owner and r["class"] == "RICHEDIT50W"]
         observed = console_mod.read_console_text(owner, edits[0]["handle"])
         report["console_checks"].append(observed)
         observed["close"] = console_mod.close_console(observed)
-        assert observed["live"]["text"].rstrip("\r\n") == CONSOLE_SENTINEL, observed["live"]["text"]
+        _require(observed["live"]["text"].rstrip("\r\n") == CONSOLE_SENTINEL, observed["live"]["text"])
 
     try:
         with c.desktop_lock():
             try:
-                assert not [
+                _require(not [
                     r
                     for r in c.command("inspect")
                     if r["class"] == "AcrobatSDIWindow" and ".pdf" in r["name"].lower()
-                ], "Pre-existing Reader document"
+                ], "Pre-existing Reader document")
                 scp_to_windows(source, remote)
                 opened = True
                 c.ensure_document(remote)
@@ -260,16 +265,16 @@ def main():
                 remote = rdr_remote_1
                 rdr_s1 = c.fetch(remote, out / "reader-phase1-mobile.pdf")
                 rdr_state_1 = style.saved_capture(rdr_s1, summary1, source)
-                assert script_hashes(rdr_s1) == expected_scripts
+                _require(script_hashes(rdr_s1) == expected_scripts, 'script_hashes(rdr_s1) == expected_scripts')
                 check_console()
                 report["phase1_close"] = closing.close_saved(c, remote)
                 opened = False
 
-                assert encoded_state(rdr_state_1) == encoded_state(nat_state_1), (
+                _require(encoded_state(rdr_state_1) == encoded_state(nat_state_1), (
                     "Phase 1 Reader vs Native mismatch",
                     rdr_state_1,
                     nat_state_1,
-                )
+                ))
                 report["reader_states"]["phase1"] = {"state": rdr_state_1, "timer": timer1, "pdf": str(rdr_s1)}
                 print("Reader 2014 toolbar parity phase 1: PASS", flush=True)
 
@@ -285,7 +290,7 @@ def main():
                 remote = rdr_remote_2
                 rdr_s2 = c.fetch(remote, out / "reader-phase2-unmobile.pdf")
                 rdr_state_2 = style.saved_capture(rdr_s2, summary2, source)
-                assert script_hashes(rdr_s2) == expected_scripts
+                _require(script_hashes(rdr_s2) == expected_scripts, 'script_hashes(rdr_s2) == expected_scripts')
                 check_console()
                 report["phase2_close"] = closing.close_saved(c, remote)
                 opened = False
@@ -293,7 +298,7 @@ def main():
                 report["reader_states"]["phase2"] = {"state": rdr_state_2, "timer": timer2, "pdf": str(rdr_s2)}
                 # Compare core persistent state cleanly (recording any Reader-VM app.calculate/monitor nuances explicitly)
                 for key in ("alLog", "highlightingFill", "notesLeft", "preMobile", "mobile", "pages", "errors"):
-                    assert rdr_state_2[key] == nat_state_2[key], (key, rdr_state_2[key], nat_state_2[key])
+                    _require(rdr_state_2[key] == nat_state_2[key], (key, rdr_state_2[key], nat_state_2[key]))
                 print("Reader 2014 toolbar parity phase 2 (cold reopen + MakeMobileReady false): PASS", flush=True)
             finally:
                 if opened:
@@ -311,8 +316,8 @@ def main():
             r_date_ap = [w["appearance_text"].strip() for w in r_ins["widgets"] if w["name"] == al_pre_chk + "AdvLog.1.date"]
             n_gold_ap = [w["appearance_text"].strip() for w in n_ins["widgets"] if w["name"] == al_pre_chk + "AdvLog.1.gold.gain"]
             r_gold_ap = [w["appearance_text"].strip() for w in r_ins["widgets"] if w["name"] == al_pre_chk + "AdvLog.1.gold.gain"]
-            assert n_date_ap == r_date_ap == ["6 Mar 2024"], (label, n_date_ap, r_date_ap)
-            assert n_gold_ap == r_gold_ap == ["1.234,5"], (label, n_gold_ap, r_gold_ap)
+            _require(n_date_ap == r_date_ap == ["6 Mar 2024"], (label, n_date_ap, r_date_ap))
+            _require(n_gold_ap == r_gold_ap == ["1.234,5"], (label, n_gold_ap, r_gold_ap))
             report["display_checks"][label] = {
                 "date_ap_native": n_date_ap,
                 "date_ap_reader": r_date_ap,
@@ -328,13 +333,13 @@ def main():
             out,
             "mixed-native",
         )
-        assert script_hashes(mixed_pdf) == expected_scripts
+        _require(script_hashes(mixed_pdf) == expected_scripts, 'script_hashes(mixed_pdf) == expected_scripts')
         mixed_state = read_payload(mixed_pdf)
-        assert encoded_state(mixed_state) == encoded_state(nat_state_2), (
+        _require(encoded_state(mixed_state) == encoded_state(nat_state_2), (
             "Mixed Native vs Native phase 2 mismatch",
             mixed_state,
             nat_state_2,
-        )
+        ))
         report["mixed_native"] = {"passed": True, "pdf": str(mixed_pdf), "state": mixed_state}
         report["passed"] = True
         print("Mixed-engine Native reopen of Reader 2014 mobile/color/non-BMP/ALlog PDF: PASS", flush=True)

@@ -54,6 +54,7 @@ if [[ -d "$PDFIUM_DIR/licenses" ]]; then
 fi
 if [[ -n "$FONT_SRC" && -f "$FONT_SRC" ]]; then
   install -Dm644 "$FONT_SRC" "$APPDIR/usr/share/mpmb-reader/fonts/DejaVuSans.ttf"
+  install -Dm644 "$ROOT/packaging/assets/LICENSE-DEJAVU.txt" "$APPDIR/usr/share/licenses/mpmb-reader/LICENSE-DEJAVU.txt"
 fi
 
 install -Dm644 "$ROOT/packaging/assets/io.github.afaskar.MpmbReader.desktop" \

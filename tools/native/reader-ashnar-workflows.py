@@ -22,6 +22,11 @@ import time
 from pathlib import Path
 from pypdf import PdfReader
 
+def _require(condition, message=None):
+    if not condition:
+        raise AssertionError(message)
+
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "tools/acrobat"), str(ROOT / "tools/native")]
 import control as c
@@ -92,10 +97,10 @@ def main():
 
     reference = require_full_three_fixture_reference(args.readiness)
     native = json.loads(args.native.read_text())
-    assert native["passed"] is True, "Native Ashnar report must pass first"
+    _require(native["passed"] is True, "Native Ashnar report must pass first")
     wanted = {p["label"]: p["state"] for p in native["phases"]}
     source = Path(native["input"]).resolve()
-    assert sha256_file(source) == native["input_sha256"]
+    _require(sha256_file(source) == native["input_sha256"], 'sha256_file(source) == native["input_sha256"]')
     expected_scripts = script_hashes(source)
     orig_digests = native["original_payload_digests"]
 
@@ -145,7 +150,7 @@ def main():
             marker = c.script("read", path=remote, fields=["User Script"])["fields"]["User Script"]
             if marker == "// MPMB workflow observer installed":
                 return
-            assert time.monotonic() < deadline, ("Observer installation timeout", marker)
+            _require(time.monotonic() < deadline, ("Observer installation timeout", marker))
             time.sleep(0.25)
 
     def check_console():
@@ -156,14 +161,14 @@ def main():
             roots = [r for r in rows if r["class"] == "#32770" and r["name"] == "JavaScript Debugger"]
             if roots:
                 break
-            assert time.monotonic() < deadline, "Console debugger did not appear"
+            _require(time.monotonic() < deadline, "Console debugger did not appear")
             time.sleep(0.2)
         owner = roots[0]["handle"]
         edits = [r for r in rows if r["owner"] == owner and r["class"] == "RICHEDIT50W"]
         observed = console_mod.read_console_text(owner, edits[0]["handle"])
         report["console_checks"].append(observed)
         observed["close"] = console_mod.close_console(observed)
-        assert observed["live"]["text"].rstrip("\r\n") == CONSOLE_SENTINEL, observed["live"]["text"]
+        _require(observed["live"]["text"].rstrip("\r\n") == CONSOLE_SENTINEL, observed["live"]["text"])
 
     def dismiss_modal_dialogs():
         dismissed = []
@@ -207,13 +212,13 @@ def main():
         remote = output
         pdf = c.fetch(remote, out / f"{label}.pdf")
         observed = style.saved_capture(pdf, summary, source)
-        assert encoded_state(observed) == encoded_state(wanted[label]), (
+        _require(encoded_state(observed) == encoded_state(wanted[label]), (
             label,
             "Reader vs Native Ashnar mismatch",
-        )
-        assert script_hashes(pdf) == expected_scripts
+        ))
+        _require(script_hashes(pdf) == expected_scripts, 'script_hashes(pdf) == expected_scripts')
         digests = imported_and_spell_digests(pdf)
-        assert digests == orig_digests, (label, "Ashnar imported/spell payload changed in Reader", digests)
+        _require(digests == orig_digests, (label, "Ashnar imported/spell payload changed in Reader", digests))
         canonical = fields_mod.compare(pdf, dict(observed["fields"], **observed["resources"]))
         pt = {
             "label": label,
@@ -232,10 +237,10 @@ def main():
     try:
         with c.desktop_lock():
             try:
-                assert not [
+                _require(not [
                     r for r in c.command("inspect")
                     if r["class"] == "AcrobatSDIWindow" and ".pdf" in r["name"].lower()
-                ], "Pre-existing Reader document"
+                ], "Pre-existing Reader document")
                 scp_to_windows(source, remote)
                 opened = True
                 c.ensure_document(remote)
@@ -323,19 +328,19 @@ def main():
             )
         mdata = json.loads(mixed_probe.read_text())
         msgs = mdata["diagnostics"]["console"]["messages"]
-        assert [m["text"] for m in msgs] == [CONSOLE_SENTINEL], ("mixed", msgs)
+        _require([m["text"] for m in msgs] == [CONSOLE_SENTINEL], ("mixed", msgs))
         strict = copy.deepcopy(mdata)
         strict["diagnostics"]["console"]["messages"] = []
         mchecked = qualification.qualify_probe(proc.returncode, strict, "further-native")
-        assert mchecked["passed"], mchecked
-        assert script_hashes(mixed_pdf) == expected_scripts
-        assert imported_and_spell_digests(mixed_pdf) == orig_digests
+        _require(mchecked["passed"], mchecked)
+        _require(script_hashes(mixed_pdf) == expected_scripts, 'script_hashes(mixed_pdf) == expected_scripts')
+        _require(imported_and_spell_digests(mixed_pdf) == orig_digests, 'imported_and_spell_digests(mixed_pdf) == orig_digests')
         mixed_expected = {"Wis": "22", "Wis Mod": "6", "AC": "28", "Character Level": "14"}
         mixed_inspect = inspect(mixed_pdf, mixed_expected)
-        assert mixed_inspect["actual"] == mixed_expected, ("Ashnar mixed canonical mismatch", mixed_inspect["actual"])
+        _require(mixed_inspect["actual"] == mixed_expected, ("Ashnar mixed canonical mismatch", mixed_inspect["actual"]))
         for fname in mixed_expected:
             vis = [w for w in mixed_inspect["widgets"] if w["name"] == fname and w["visible"]]
-            assert vis and all((w.get("appearance_text") or "").strip() for w in vis), ("Ashnar mixed missing visible AP", fname)
+            _require(vis and all((w.get("appearance_text") or "").strip() for w in vis), ("Ashnar mixed missing visible AP", fname))
         report["mixed_native"] = {
             "passed": True,
             "pdf": str(mixed_pdf),
