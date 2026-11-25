@@ -25,8 +25,8 @@
 # Local directory mode
 mpmb-reader serve --bind 127.0.0.1:8080 --dir ~/MPMB-Sheets
 
-# Private GitHub repo mode (SSH deploy key)
-mpmb-reader serve \
+# Private GitHub repo mode (SSH deploy key; always set MPMB_AUTH_TOKEN when binding 0.0.0.0)
+MPMB_AUTH_TOKEN="replace-with-a-strong-random-token" mpmb-reader serve \
   --bind 0.0.0.0:8080 \
   --dir /data/sheets \
   --git-repo git@github.com:YOUR_USER/mpmb-characters-private.git \

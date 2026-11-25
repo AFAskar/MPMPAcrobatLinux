@@ -19,11 +19,20 @@ spec:
       nodeSelector:
         kubernetes.io/arch: amd64
       securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
         fsGroup: 1000
       containers:
         - name: mpmb-reader
           image: localhost/mpmb-reader:latest
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           ports:
             - name: http
               containerPort: 8080
@@ -42,6 +51,8 @@ spec:
           volumeMounts:
             - name: sheets
               mountPath: /data/sheets
+            - name: tmp
+              mountPath: /tmp
             - name: git-ssh-key
               mountPath: /etc/mpmb-git
               readOnly: true
@@ -60,7 +71,7 @@ spec:
             periodSeconds: 10
           livenessProbe:
             httpGet:
-              path: /healthz
+              path: /livez
               port: http
             initialDelaySeconds: 10
             periodSeconds: 30
@@ -68,6 +79,8 @@ spec:
         - name: sheets
           persistentVolumeClaim:
             claimName: mpmb-sheets
+        - name: tmp
+          emptyDir: {}
         - name: git-ssh-key
           secret:
             secretName: mpmb-git-ssh
