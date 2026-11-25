@@ -1,7 +1,7 @@
 use crate::{
     pdf::Pdf,
     render::Renderer,
-    runtime::{InteractionHandler, Runtime},
+    runtime::{HostCapabilities, InteractionHandler, Runtime},
     storage::{GitConfig, GitStatus, SaveResult, SheetStore, StoreConfig},
 };
 use anyhow::{anyhow, bail, Context, Result};
@@ -335,6 +335,11 @@ impl InteractionBridge {
             }
             active.take().unwrap()
         };
+        // Clear the interaction and broadcast `interaction_cleared` BEFORE checking
+        // in-flight jobs or waking the worker so a rejected reply never strands a
+        // prompt and WebSocket clients never see the next modal before this clear.
+        let _ = self.interaction_tx.send(None);
+        let _ = self.events_tx.send(json!({"type": "interaction_cleared"}));
         let done_rx = self
             .in_flight_jobs
             .lock()
@@ -342,12 +347,10 @@ impl InteractionBridge {
             .get(&pending.job_id)
             .cloned()
             .ok_or_else(|| anyhow!("job {} is no longer in flight", pending.job_id))?;
-        let _ = self.interaction_tx.send(None);
         pending
             .tx
             .send(reply)
             .map_err(|_| anyhow!("dialog worker is no longer waiting"))?;
-        let _ = self.events_tx.send(json!({"type": "interaction_cleared"}));
         Ok((pending.job_id, done_rx))
     }
 
@@ -393,12 +396,15 @@ impl InteractionHandler for InteractionBridge {
     }
 
     fn launch_url(&self, url: &str, new_frame: bool) -> Result<bool> {
-        let _ = self.events_tx.send(json!({
-            "type": "launch_url",
-            "url": url,
-            "new_frame": new_frame,
-        }));
-        Ok(true)
+        let dispatched = self
+            .events_tx
+            .send(json!({
+                "type": "launch_url",
+                "url": url,
+                "new_frame": new_frame,
+            }))
+            .is_ok();
+        Ok(dispatched)
     }
 }
 
@@ -407,6 +413,7 @@ enum WorkerCommand {
         job_id: u64,
         done: watch::Sender<Option<JobOutcome>>,
         rel_path: String,
+        force: bool,
     },
     GetState {
         reply: mpsc::SyncSender<Result<Value>>,
@@ -430,6 +437,7 @@ enum WorkerCommand {
         field: String,
         value: Value,
         mode: String,
+        expected_sheet: Option<String>,
     },
     Activate {
         job_id: u64,
@@ -438,26 +446,31 @@ enum WorkerCommand {
         index: i64,
         shift: bool,
         modifier: bool,
+        expected_sheet: Option<String>,
     },
     InvokeMenu {
         job_id: u64,
         done: watch::Sender<Option<JobOutcome>>,
         name: String,
+        expected_sheet: Option<String>,
     },
     RunCommand {
         job_id: u64,
         done: watch::Sender<Option<JobOutcome>>,
         action: String,
+        expected_sheet: Option<String>,
     },
     RunBookmark {
         job_id: u64,
         done: watch::Sender<Option<JobOutcome>>,
         path: String,
+        expected_sheet: Option<String>,
     },
     SaveNow {
         job_id: u64,
         done: watch::Sender<Option<JobOutcome>>,
         force: bool,
+        expected_sheet: Option<String>,
     },
     GitSync {
         job_id: u64,
@@ -467,8 +480,11 @@ enum WorkerCommand {
     GitPull {
         job_id: u64,
         done: watch::Sender<Option<JobOutcome>>,
+        force: bool,
     },
     CheckIdleAutoSync {
+        job_id: u64,
+        done: watch::Sender<Option<JobOutcome>>,
         idle_secs: u64,
     },
 }
@@ -512,38 +528,33 @@ impl SheetWorker {
                 WorkerCommand::RenderPagePng { page, width, reply } => {
                     let _ = reply.send(self.render_page_png(page, width));
                 }
-                WorkerCommand::CheckIdleAutoSync { idle_secs } => {
-                    if idle_secs > 0 && self.store.git_enabled() {
-                        let should_sync = self.active.as_ref().is_some_and(|sh| {
+                WorkerCommand::CheckIdleAutoSync {
+                    job_id,
+                    done,
+                    idle_secs,
+                } => {
+                    let should_sync = idle_secs > 0
+                        && self.store.git_enabled()
+                        && self.active.as_ref().is_some_and(|sh| {
                             sh.dirty_since_sync
                                 && sh
                                     .last_edit_at
                                     .is_some_and(|t| t.elapsed() >= Duration::from_secs(idle_secs))
                         });
-                        if should_sync {
-                            if let Ok(payload) = self.do_git_sync("Auto-sync MPMB session") {
-                                if let Some(git) = payload.get("git") {
-                                    let _ = self.bridge.events_tx.send(json!({
-                                        "type": "git_status",
-                                        "git": git,
-                                    }));
-                                }
-                                if let Some(state) = payload.get("state") {
-                                    let _ = self.bridge.events_tx.send(json!({
-                                        "type": "state_updated",
-                                        "state": state,
-                                    }));
-                                }
-                            }
-                        }
+                    if should_sync {
+                        self.run_job(job_id, done, |w| w.do_git_sync("Auto-sync MPMB session"));
+                    } else {
+                        let _ = done.send(Some(Ok(json!({"status": "skipped"}))));
+                        self.bridge.finish_job(job_id);
                     }
                 }
                 WorkerCommand::Open {
                     job_id,
                     done,
                     rel_path,
+                    force,
                 } => {
-                    self.run_job(job_id, done, |w| w.open_sheet(&rel_path));
+                    self.run_job(job_id, done, |w| w.open_sheet(&rel_path, force));
                 }
                 WorkerCommand::Edit {
                     job_id,
@@ -551,8 +562,12 @@ impl SheetWorker {
                     field,
                     value,
                     mode,
+                    expected_sheet,
                 } => {
-                    self.run_job(job_id, done, |w| w.edit_field(&field, &value, &mode));
+                    self.run_job(job_id, done, |w| {
+                        w.verify_expected_sheet(expected_sheet.as_deref())?;
+                        w.edit_field(&field, &value, &mode)
+                    });
                 }
                 WorkerCommand::Activate {
                     job_id,
@@ -561,30 +576,56 @@ impl SheetWorker {
                     index,
                     shift,
                     modifier,
+                    expected_sheet,
                 } => {
                     self.run_job(job_id, done, |w| {
+                        w.verify_expected_sheet(expected_sheet.as_deref())?;
                         w.activate_field(&field, index, shift, modifier)
                     });
                 }
-                WorkerCommand::InvokeMenu { job_id, done, name } => {
-                    self.run_job(job_id, done, |w| w.invoke_menu(&name));
+                WorkerCommand::InvokeMenu {
+                    job_id,
+                    done,
+                    name,
+                    expected_sheet,
+                } => {
+                    self.run_job(job_id, done, |w| {
+                        w.verify_expected_sheet(expected_sheet.as_deref())?;
+                        w.invoke_menu(&name)
+                    });
                 }
                 WorkerCommand::RunCommand {
                     job_id,
                     done,
                     action,
+                    expected_sheet,
                 } => {
-                    self.run_job(job_id, done, |w| w.run_command(&action));
+                    self.run_job(job_id, done, |w| {
+                        w.verify_expected_sheet(expected_sheet.as_deref())?;
+                        w.run_command(&action)
+                    });
                 }
-                WorkerCommand::RunBookmark { job_id, done, path } => {
-                    self.run_job(job_id, done, |w| w.run_bookmark(&path));
+                WorkerCommand::RunBookmark {
+                    job_id,
+                    done,
+                    path,
+                    expected_sheet,
+                } => {
+                    self.run_job(job_id, done, |w| {
+                        w.verify_expected_sheet(expected_sheet.as_deref())?;
+                        w.run_bookmark(&path)
+                    });
                 }
                 WorkerCommand::SaveNow {
                     job_id,
                     done,
                     force,
+                    expected_sheet,
                 } => {
-                    self.run_job(job_id, done, |w| w.save_active(force));
+                    self.run_job(job_id, done, |w| {
+                        w.verify_expected_sheet(expected_sheet.as_deref())?;
+                        w.save_active(force)
+                    });
                 }
                 WorkerCommand::GitSync {
                     job_id,
@@ -593,8 +634,12 @@ impl SheetWorker {
                 } => {
                     self.run_job(job_id, done, |w| w.do_git_sync(&message));
                 }
-                WorkerCommand::GitPull { job_id, done } => {
-                    self.run_job(job_id, done, |w| w.do_git_pull());
+                WorkerCommand::GitPull {
+                    job_id,
+                    done,
+                    force,
+                } => {
+                    self.run_job(job_id, done, |w| w.do_git_pull(force));
                 }
             }
         }
@@ -645,14 +690,42 @@ impl SheetWorker {
         self.bridge.finish_job(job_id);
     }
 
-    fn open_sheet(&mut self, rel_path: &str) -> Result<Value> {
+    fn verify_expected_sheet(&self, expected: Option<&str>) -> Result<()> {
+        let Some(exp) = expected.map(str::trim).filter(|s| !s.is_empty()) else {
+            return Ok(());
+        };
+        let active_path = self
+            .active
+            .as_ref()
+            .map(|s| s.rel_path.as_str())
+            .unwrap_or("<none>");
+        if active_path != exp {
+            bail!(
+                "conflict: active sheet changed (expected '{exp}', active is '{active_path}'); refresh before retrying"
+            );
+        }
+        Ok(())
+    }
+
+    fn open_sheet(&mut self, rel_path: &str, force: bool) -> Result<Value> {
+        if !force {
+            if let Some(cur) = &self.active {
+                if cur.dirty_since_save {
+                    bail!(
+                        "conflict: active sheet '{}' has unsaved edits; save first or pass force=true to discard",
+                        cur.rel_path
+                    );
+                }
+            }
+        }
         // Pull latest changes opportunistically if Git is enabled and clean.
         if self.store.git_enabled() {
             let _ = self.store.git_pull();
         }
-        let (norm, abs, _bytes, sha) = self.store.read_sheet_bytes(rel_path)?;
-        let pdf = Arc::new(Pdf::open(&abs)?);
-        let rt = Runtime::new_with_interaction(
+        let (norm, abs, bytes, sha) = self.store.read_sheet_bytes(rel_path)?;
+        // Parse the exact bytes hashed above so disk_sha256 always matches the loaded PDF.
+        let pdf = Arc::new(Pdf::open_bytes(abs, &bytes)?);
+        let rt = Runtime::new_with_capabilities(
             &pdf,
             vec![],
             vec![],
@@ -660,6 +733,7 @@ impl SheetWorker {
             None,
             None,
             Some(self.bridge.clone()),
+            HostCapabilities::server_restricted(),
         )?;
         let _ = rt.ready();
         let revision = rt
@@ -762,9 +836,10 @@ impl SheetWorker {
         let size = if let Some(&sz) = sh.page_sizes.get(&(page, rev)) {
             sz
         } else if let Some(renderer) = &self.renderer {
-            let _ = renderer.render(&projected, page, 320);
+            renderer.page_size.set((0.0, 0.0));
+            let rendered_ok = renderer.render(&projected, page, 320).is_ok();
             let sz = renderer.page_size.get();
-            if sz.0 > 0.0 && sz.1 > 0.0 {
+            if rendered_ok && sz.0 > 0.0 && sz.1 > 0.0 {
                 sh.page_sizes.insert((page, rev), sz);
                 sz
             } else {
@@ -1027,12 +1102,34 @@ impl SheetWorker {
         }))
     }
 
-    fn do_git_pull(&mut self) -> Result<Value> {
+    fn do_git_pull(&mut self, force: bool) -> Result<Value> {
+        if !force {
+            if let Some(cur) = &self.active {
+                if cur.dirty_since_save {
+                    bail!(
+                        "conflict: active sheet '{}' has unsaved edits; save before pulling or pass force=true to discard",
+                        cur.rel_path
+                    );
+                }
+            }
+        }
         let pull = self.store.git_pull()?;
         if pull.updated {
             if let Some(rel) = self.active.as_ref().map(|s| s.rel_path.clone()) {
                 if self.store.read_sheet_bytes(&rel).is_ok() {
-                    let _ = self.open_sheet(&rel)?;
+                    let _ = self.open_sheet(&rel, true)?;
+                } else {
+                    self.active = None;
+                    self.last_save_conflict = None;
+                    let git = self.store.git_status()?;
+                    let state = self.build_state_payload()?;
+                    return Ok(json!({
+                        "status": "conflict",
+                        "error": format!("Active sheet '{rel}' was removed by upstream Git pull"),
+                        "pull": pull,
+                        "git": git,
+                        "state": state,
+                    }));
                 }
             }
         }
@@ -1158,6 +1255,7 @@ impl AppState {
                 job_id,
                 done: done_tx,
                 rel_path: default_sheet.clone(),
+                force: true,
             });
         }
         Ok(state)
@@ -1243,6 +1341,16 @@ impl AppState {
                         })),
                     )
                         .into_response();
+                } else if jid != target_job_id {
+                    return (
+                        StatusCode::CONFLICT,
+                        Json(json!({
+                            "status": "interaction_required",
+                            "error": "Another operation opened a dialog or alert waiting for a response",
+                            "interaction": interaction,
+                        })),
+                    )
+                        .into_response();
                 }
             }
             tokio::select! {
@@ -1261,6 +1369,55 @@ impl AppState {
                             StatusCode::INTERNAL_SERVER_ERROR,
                             "sheet worker terminated",
                         );
+                    }
+                }
+            }
+        }
+    }
+
+    async fn await_sync_read<T: Send + 'static>(
+        &self,
+        rx: mpsc::Receiver<Result<T>>,
+        timeout_msg: &'static str,
+    ) -> std::result::Result<Result<T>, Response> {
+        let mut int_rx = self.interaction_rx.clone();
+        if let Some((_, interaction)) = int_rx.borrow().clone() {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "status": "interaction_required",
+                    "error": "A dialog or alert is currently waiting for a response",
+                    "interaction": interaction,
+                })),
+            )
+                .into_response());
+        }
+        let mut recv_fut = Box::pin(tokio::task::spawn_blocking(move || {
+            rx.recv_timeout(Duration::from_secs(60))
+        }));
+        loop {
+            tokio::select! {
+                biased;
+                res = &mut recv_fut => {
+                    return match res {
+                        Ok(Ok(inner)) => Ok(inner),
+                        _ => Err(err_response(StatusCode::GATEWAY_TIMEOUT, timeout_msg)),
+                    };
+                }
+                changed = int_rx.changed() => {
+                    if changed.is_err() {
+                        return Err(err_response(StatusCode::INTERNAL_SERVER_ERROR, "sheet worker terminated"));
+                    }
+                    if let Some((_, interaction)) = int_rx.borrow().clone() {
+                        return Err((
+                            StatusCode::CONFLICT,
+                            Json(json!({
+                                "status": "interaction_required",
+                                "error": "A dialog or alert is currently waiting for a response",
+                                "interaction": interaction,
+                            })),
+                        )
+                            .into_response());
                     }
                 }
             }
@@ -1299,6 +1456,8 @@ struct UploadQuery {
 #[derive(Deserialize)]
 struct OpenRequest {
     path: String,
+    #[serde(default)]
+    force: bool,
 }
 
 #[derive(Deserialize)]
@@ -1319,6 +1478,8 @@ struct EditRequest {
     value: Value,
     #[serde(default = "default_edit_mode")]
     mode: String,
+    #[serde(default)]
+    sheet: Option<String>,
 }
 
 fn default_edit_mode() -> String {
@@ -1334,25 +1495,41 @@ struct ActivateRequest {
     shift: bool,
     #[serde(default)]
     modifier: bool,
+    #[serde(default)]
+    sheet: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct MenuRequest {
     name: String,
+    #[serde(default)]
+    sheet: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct CommandRequest {
     action: String,
+    #[serde(default)]
+    sheet: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct BookmarkRequest {
     path: String,
+    #[serde(default)]
+    sheet: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
 struct SaveRequest {
+    #[serde(default)]
+    force: bool,
+    #[serde(default)]
+    sheet: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct PullRequest {
     #[serde(default)]
     force: bool,
 }
@@ -1409,7 +1586,11 @@ fn build_router(state: AppState) -> Router {
 }
 
 async fn handle_healthz(State(state): State<AppState>) -> impl IntoResponse {
-    let git: Option<GitStatus> = state.store.git_status().ok();
+    let store = Arc::clone(&state.store);
+    let git: Option<GitStatus> = tokio::task::spawn_blocking(move || store.git_status().ok())
+        .await
+        .ok()
+        .flatten();
     Json(json!({
         "ok": true,
         "version": env!("CARGO_PKG_VERSION"),
@@ -1489,23 +1670,46 @@ async fn ws_loop(socket: WebSocket, state: AppState) {
             ))
             .await;
     }
-    let send_task = tokio::spawn(async move {
-        while let Ok(ev) = rx.recv().await {
-            if sender
-                .send(Message::Text(ev.to_string().into()))
-                .await
-                .is_err()
-            {
+    let mut send_task = tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(ev) => {
+                    if sender
+                        .send(Message::Text(ev.to_string().into()))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                    if sender
+                        .send(Message::Text(
+                            json!({"type": "resync_required", "skipped": skipped})
+                                .to_string()
+                                .into(),
+                        ))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+    let mut recv_task = tokio::spawn(async move {
+        while let Some(Ok(msg)) = receiver.next().await {
+            if matches!(msg, Message::Close(_)) {
                 break;
             }
         }
     });
-    while let Some(Ok(msg)) = receiver.next().await {
-        if matches!(msg, Message::Close(_)) {
-            break;
-        }
+    tokio::select! {
+        _ = &mut send_task => { recv_task.abort(); }
+        _ = &mut recv_task => { send_task.abort(); }
     }
-    send_task.abort();
 }
 
 async fn handle_list_sheets(
@@ -1524,7 +1728,7 @@ async fn handle_list_sheets(
     })
     .await
     {
-        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Ok(v)) => ([(header::VARY, "Authorization")], Json(v)).into_response(),
         Ok(Err(e)) => err_response(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")),
         Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
@@ -1543,7 +1747,15 @@ async fn handle_upload_sheet(
     match tokio::task::spawn_blocking(move || store.upload_sheet(&q.name, &body, q.overwrite)).await
     {
         Ok(Ok(entry)) => (StatusCode::CREATED, Json(json!({"sheet": entry}))).into_response(),
-        Ok(Err(e)) => err_response(StatusCode::BAD_REQUEST, format!("{e:#}")),
+        Ok(Err(e)) => {
+            let msg = format!("{e:#}");
+            let status = if msg.contains("already exists") {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            err_response(status, msg)
+        }
         Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
@@ -1597,6 +1809,7 @@ async fn handle_open_session(
             job_id,
             done,
             rel_path: req.path,
+            force: req.force,
         })
         .await
 }
@@ -1610,14 +1823,21 @@ async fn handle_session_state(
         return err_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
     if let Some(inter) = state.bridge.active_public() {
-        let git = state.store.git_status().ok();
-        return Json(json!({
-            "open": true,
-            "busy": true,
-            "activeInteraction": inter,
-            "git": git,
-        }))
-        .into_response();
+        let store = Arc::clone(&state.store);
+        let git = tokio::task::spawn_blocking(move || store.git_status().ok())
+            .await
+            .ok()
+            .flatten();
+        return (
+            [(header::VARY, "Authorization")],
+            Json(json!({
+                "open": true,
+                "busy": true,
+                "activeInteraction": inter,
+                "git": git,
+            })),
+        )
+            .into_response();
     }
     let (tx, rx) = mpsc::sync_channel(1);
     if state
@@ -1627,10 +1847,29 @@ async fn handle_session_state(
     {
         return err_response(StatusCode::INTERNAL_SERVER_ERROR, "sheet worker stopped");
     }
-    match tokio::task::spawn_blocking(move || rx.recv_timeout(Duration::from_secs(60))).await {
-        Ok(Ok(Ok(v))) => Json(v).into_response(),
-        Ok(Ok(Err(e))) => err_response(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")),
-        _ => err_response(StatusCode::GATEWAY_TIMEOUT, "timed out reading session"),
+    match state.await_sync_read(rx, "timed out reading session").await {
+        Ok(Ok(v)) => ([(header::VARY, "Authorization")], Json(v)).into_response(),
+        Ok(Err(e)) => err_response(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")),
+        Err(resp) => {
+            if let Some(inter) = state.bridge.active_public() {
+                let store = Arc::clone(&state.store);
+                let git = tokio::task::spawn_blocking(move || store.git_status().ok())
+                    .await
+                    .ok()
+                    .flatten();
+                return (
+                    [(header::VARY, "Authorization")],
+                    Json(json!({
+                        "open": true,
+                        "busy": true,
+                        "activeInteraction": inter,
+                        "git": git,
+                    })),
+                )
+                    .into_response();
+            }
+            resp
+        }
     }
 }
 
@@ -1656,10 +1895,13 @@ async fn handle_get_field(
     {
         return err_response(StatusCode::INTERNAL_SERVER_ERROR, "sheet worker stopped");
     }
-    match tokio::task::spawn_blocking(move || rx.recv_timeout(Duration::from_secs(60))).await {
-        Ok(Ok(Ok(v))) => Json(v).into_response(),
-        Ok(Ok(Err(e))) => err_response(StatusCode::NOT_FOUND, format!("{e:#}")),
-        _ => err_response(StatusCode::GATEWAY_TIMEOUT, "timed out inspecting field"),
+    match state
+        .await_sync_read(rx, "timed out inspecting field")
+        .await
+    {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err_response(StatusCode::NOT_FOUND, format!("{e:#}")),
+        Err(resp) => resp,
     }
 }
 
@@ -1678,6 +1920,7 @@ async fn handle_edit_field(
             field: req.field,
             value: req.value,
             mode: req.mode,
+            expected_sheet: req.sheet,
         })
         .await
 }
@@ -1698,6 +1941,7 @@ async fn handle_activate_field(
             index: req.index,
             shift: req.shift,
             modifier: req.modifier,
+            expected_sheet: req.sheet,
         })
         .await
 }
@@ -1715,6 +1959,7 @@ async fn handle_invoke_menu(
             job_id,
             done,
             name: req.name,
+            expected_sheet: req.sheet,
         })
         .await
 }
@@ -1732,6 +1977,7 @@ async fn handle_run_command(
             job_id,
             done,
             action: req.action,
+            expected_sheet: req.sheet,
         })
         .await
 }
@@ -1749,6 +1995,7 @@ async fn handle_run_bookmark(
             job_id,
             done,
             path: req.path,
+            expected_sheet: req.sheet,
         })
         .await
 }
@@ -1766,6 +2013,7 @@ async fn handle_save_session(
             job_id,
             done,
             force: req.force,
+            expected_sheet: req.sheet,
         })
         .await
 }
@@ -1795,16 +2043,17 @@ async fn handle_page_image(
     {
         return err_response(StatusCode::INTERNAL_SERVER_ERROR, "sheet worker stopped");
     }
-    match tokio::task::spawn_blocking(move || rx.recv_timeout(Duration::from_secs(60))).await {
-        Ok(Ok(Ok(png))) => (
+    match state.await_sync_read(rx, "timed out rendering page").await {
+        Ok(Ok(png)) => (
             [
                 (header::CONTENT_TYPE, "image/png"),
                 (header::CACHE_CONTROL, "private, max-age=30"),
+                (header::VARY, "Authorization"),
             ],
             png,
         )
             .into_response(),
-        Ok(Ok(Err(e))) => {
+        Ok(Err(e)) => {
             let msg = format!("{e:#}");
             let status = if msg.contains("PDFium") {
                 StatusCode::SERVICE_UNAVAILABLE
@@ -1813,7 +2062,7 @@ async fn handle_page_image(
             };
             err_response(status, msg)
         }
-        _ => err_response(StatusCode::GATEWAY_TIMEOUT, "timed out rendering page"),
+        Err(resp) => resp,
     }
 }
 
@@ -1837,10 +2086,10 @@ async fn handle_page_widgets(
     {
         return err_response(StatusCode::INTERNAL_SERVER_ERROR, "sheet worker stopped");
     }
-    match tokio::task::spawn_blocking(move || rx.recv_timeout(Duration::from_secs(60))).await {
-        Ok(Ok(Ok(v))) => Json(v).into_response(),
-        Ok(Ok(Err(e))) => err_response(StatusCode::BAD_REQUEST, format!("{e:#}")),
-        _ => err_response(StatusCode::GATEWAY_TIMEOUT, "timed out reading widgets"),
+    match state.await_sync_read(rx, "timed out reading widgets").await {
+        Ok(Ok(v)) => ([(header::VARY, "Authorization")], Json(v)).into_response(),
+        Ok(Err(e)) => err_response(StatusCode::BAD_REQUEST, format!("{e:#}")),
+        Err(resp) => resp,
     }
 }
 
@@ -1871,9 +2120,11 @@ async fn handle_git_status(
     if !state.check_auth(&headers, q.token.as_deref()) {
         return err_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
-    match state.store.git_status() {
-        Ok(git) => Json(git).into_response(),
-        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")),
+    let store = Arc::clone(&state.store);
+    match tokio::task::spawn_blocking(move || store.git_status()).await {
+        Ok(Ok(git)) => Json(git).into_response(),
+        Ok(Err(e)) => err_response(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")),
+        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
 
@@ -1894,12 +2145,21 @@ async fn handle_git_sync(
         .await
 }
 
-async fn handle_git_pull(State(state): State<AppState>, headers: HeaderMap) -> Response {
+async fn handle_git_pull(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    req: Option<Json<PullRequest>>,
+) -> Response {
     if !state.check_auth(&headers, None) {
         return err_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
+    let force = req.map(|Json(r)| r.force).unwrap_or(false);
     state
-        .dispatch_job(|job_id, done| WorkerCommand::GitPull { job_id, done })
+        .dispatch_job(|job_id, done| WorkerCommand::GitPull {
+            job_id,
+            done,
+            force,
+        })
         .await
 }
 
@@ -2050,15 +2310,28 @@ async fn run_server(config: ServeConfig) -> Result<()> {
     let state = AppState::start(&config)?;
     if config.git_auto_sync_secs > 0 && state.store.git_enabled() {
         let tx = state.cmd_tx.clone();
+        let bridge = Arc::clone(&state.bridge);
+        let job_seq = Arc::clone(&state.job_seq);
         let idle = config.git_auto_sync_secs;
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(Duration::from_secs(15));
             loop {
                 ticker.tick().await;
+                if bridge.active_public().is_some() {
+                    continue;
+                }
+                let job_id = job_seq.fetch_add(1, Ordering::SeqCst);
+                let (done_tx, done_rx) = watch::channel(None);
+                bridge.register_job(job_id, done_rx);
                 if tx
-                    .send(WorkerCommand::CheckIdleAutoSync { idle_secs: idle })
+                    .send(WorkerCommand::CheckIdleAutoSync {
+                        job_id,
+                        done: done_tx,
+                        idle_secs: idle,
+                    })
                     .is_err()
                 {
+                    bridge.finish_job(job_id);
                     break;
                 }
             }
@@ -2386,9 +2659,20 @@ mod tests {
         assert_eq!(sync_json["sync"]["pushed"], true);
 
         // Verify sidecar JSON persisted in Git remote contains the updated hero name & +4 Str mod!
-        let show_out = Command::new("git")
+        let mut git_show = Command::new("git");
+        for key in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_COMMON_DIR",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        ] {
+            git_show.env_remove(key);
+        }
+        let show_out = git_show
             .current_dir(&bare)
-            .args(["show", "main:aelar.state.json"])
+            .args(["show", "main:aelar.pdf.state.json"])
             .output()
             .unwrap();
         assert!(show_out.status.success());
@@ -3128,6 +3412,125 @@ mod tests {
         assert_eq!(ev3["state"]["character"]["name"], "WS Hero");
 
         server_task.abort();
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn server_blocks_host_file_reads_and_guards_dirty_switch_and_sheet_mismatch() {
+        let base = std::env::temp_dir().join(format!(
+            "mpmb-serve-security-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let store_dir = base.join("store");
+        std::fs::create_dir_all(&store_dir).unwrap();
+        let host_secret = base.join("host-secret.txt");
+        std::fs::write(&host_secret, "HOST_SECRET_SHOULD_NEVER_LEAK").unwrap();
+
+        // Build a PDF whose startup script tries to read a host file into PC Name.
+        let secret_js = serde_json::to_string(host_secret.to_string_lossy().as_ref()).unwrap();
+        let mut malicious_doc = lopdf::Document::with_version("1.7");
+        let pages_id = malicious_doc.new_object_id();
+        let pc_field = malicious_doc.add_object(lopdf::dictionary! {
+            "Type" => "Annot",
+            "Subtype" => "Widget",
+            "FT" => "Tx",
+            "T" => lopdf::Object::string_literal("PC Name"),
+            "V" => lopdf::Object::string_literal("SafeDefault"),
+            "Rect" => vec![10.into(), 700.into(), 200.into(), 724.into()],
+            "F" => 4,
+            "DA" => lopdf::Object::string_literal("/Helv 10 Tf 0 g"),
+        });
+        let page_id = malicious_doc.add_object(lopdf::dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+            "Annots" => vec![pc_field.into()],
+        });
+        malicious_doc.objects.insert(
+            pages_id,
+            lopdf::Object::Dictionary(lopdf::dictionary! {
+                "Type" => "Pages",
+                "Kids" => vec![page_id.into()],
+                "Count" => 1,
+            }),
+        );
+        let script_code = format!(
+            "try {{ var s = util.readFileIntoStream({secret_js}); getField('PC Name').value = util.stringFromStream(s); }} catch (e) {{ getField('PC Name').value = 'BLOCKED'; }}"
+        );
+        let js_obj = malicious_doc.add_object(lopdf::dictionary! {
+            "S" => "JavaScript",
+            "JS" => lopdf::Object::string_literal(script_code),
+        });
+        let js_names = malicious_doc.add_object(lopdf::dictionary! {
+            "Names" => vec![lopdf::Object::string_literal("Probe"), js_obj.into()],
+        });
+        let form_id = malicious_doc.add_object(lopdf::dictionary! {
+            "Fields" => vec![pc_field.into()],
+        });
+        let cat_id = malicious_doc.add_object(lopdf::dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+            "AcroForm" => form_id,
+            "Names" => lopdf::dictionary! { "JavaScript" => js_names },
+        });
+        malicious_doc.trailer.set("Root", cat_id);
+        let mut malicious_bytes = Vec::new();
+        malicious_doc.save_to(&mut malicious_bytes).unwrap();
+        std::fs::write(store_dir.join("probe.pdf"), &malicious_bytes).unwrap();
+        make_interactive_test_pdf(&store_dir.join("other.pdf"));
+
+        let state = AppState::start(&ServeConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            store: StoreConfig {
+                root: store_dir,
+                git: None,
+            },
+            default_sheet: None,
+            auth_token: None,
+            autosave: false,
+            git_auto_sync_secs: 0,
+        })
+        .unwrap();
+        let app = build_router(state);
+
+        // 1. Opening malicious PDF denies host file read; secret never leaks into form state.
+        let (st, opened) = post_json(&app, "/api/session/open", json!({"path": "probe.pdf"})).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(opened["state"]["character"]["name"], "BLOCKED");
+
+        // 2. Edit with mismatched expected sheet returns 409 Conflict without modifying active sheet.
+        let (st, _) = post_json(
+            &app,
+            "/api/session/edit",
+            json!({"field": "PC Name", "value": "Wrong", "sheet": "other.pdf"}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::CONFLICT);
+
+        // 3. Valid edit with --no-autosave marks sheet dirty; switching without force returns 409.
+        let (st, _) = post_json(
+            &app,
+            "/api/session/edit",
+            json!({"field": "PC Name", "value": "UnsavedHero", "sheet": "probe.pdf"}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        let (st, _) = post_json(&app, "/api/session/open", json!({"path": "other.pdf"})).await;
+        assert_eq!(st, StatusCode::CONFLICT);
+
+        // 4. Switching with force=true succeeds.
+        let (st, switched) = post_json(
+            &app,
+            "/api/session/open",
+            json!({"path": "other.pdf", "force": true}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(switched["state"]["path"], "other.pdf");
+
         let _ = std::fs::remove_dir_all(&base);
     }
 }
