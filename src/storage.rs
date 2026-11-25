@@ -122,6 +122,7 @@ pub struct GitStatus {
 struct ConflictBackupMarker {
     sha: String,
     branch: String,
+    destination_hash: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -552,10 +553,13 @@ impl SheetStore {
             .map(|l| l.trim().to_owned())
             .collect();
         let (ahead, behind) = self.ahead_behind(cfg);
+        let dest_hash = self.destination_hash(cfg);
         let backup_marker = self.read_conflict_backup(cfg);
-        let head_backed_up = head
-            .as_deref()
-            .is_some_and(|h| backup_marker.as_ref().is_some_and(|m| m.sha == h));
+        let head_backed_up = head.as_deref().is_some_and(|h| {
+            backup_marker
+                .as_ref()
+                .is_some_and(|m| m.sha == h && m.destination_hash == dest_hash)
+        });
         let last_conflict_branch = guard.last_conflict_branch.clone().or_else(|| {
             if head_backed_up {
                 backup_marker.as_ref().map(|m| m.branch.clone())
@@ -810,12 +814,16 @@ impl SheetStore {
                     || err_text.contains("fetch first")
                     || err_text.contains("Updates were rejected");
                 if is_divergence {
-                    // Deduplicate backups by immutable commit SHA: if this exact commit
-                    // is already preserved on a remote conflict branch, reuse it rather
-                    // than creating unbounded duplicate backup refs.
+                    // Deduplicate backups by immutable commit SHA AND destination
+                    // remote/branch identity: if this exact commit is already preserved
+                    // on this remote's conflict branch, reuse it rather than creating
+                    // unbounded duplicate backup refs.
+                    let dest_hash = self.destination_hash(cfg);
                     if let Some(existing) = self.read_conflict_backup(cfg) {
                         if existing.sha == sha
+                            && existing.destination_hash == dest_hash
                             && self.remote_branch_matches_sha(cfg, &existing.branch, &sha)
+                                == Some(true)
                         {
                             guard.last_conflict_branch = Some(existing.branch.clone());
                             guard.last_error = Some(format!(
@@ -969,9 +977,27 @@ impl SheetStore {
                 } else {
                     self.run_git(cfg, &["remote", "add", &cfg.remote, &cfg.repo_url])?;
                 }
+                // Remote destination changed: discard conflict backup markers and
+                // stale remote-tracking refs from the previous remote so startup
+                // sync and ahead/behind accurately target the new destination.
+                self.clear_conflict_backup(cfg);
+                guard.last_conflict_branch = None;
+                self.clear_remote_tracking_refs(cfg);
+                let _ = self.run_git_allow_fail(cfg, &["fetch", "--prune", &cfg.remote]);
             }
             // Fail closed if an explicit push URL still points to a different repository.
             self.validate_remote_urls(cfg)?;
+            // Revalidate any persisted backup marker against the configured
+            // destination remote so a wiped/replaced remote does not suppress sync.
+            if let Some(marker) = self.read_conflict_backup(cfg) {
+                if marker.destination_hash != self.destination_hash(cfg)
+                    || self.remote_branch_matches_sha(cfg, &marker.branch, &marker.sha)
+                        == Some(false)
+                {
+                    self.clear_conflict_backup(cfg);
+                    guard.last_conflict_branch = None;
+                }
+            }
         }
         self.run_git(cfg, &["config", "user.name", &cfg.author_name])?;
         self.run_git(cfg, &["config", "user.email", &cfg.author_email])?;
@@ -1080,6 +1106,26 @@ impl SheetStore {
             .collect())
     }
 
+    fn destination_hash(&self, cfg: &GitConfig) -> String {
+        // Hash remote name, target branch, and credential-stripped URL so no raw
+        // URL or token is ever written into the backup marker file.
+        let safe_url = redact_url(&cfg.repo_url);
+        let identity = format!("{}\0{}\0{safe_url}", cfg.remote, cfg.branch);
+        sha256_hex(identity.as_bytes())
+    }
+
+    fn clear_remote_tracking_refs(&self, cfg: &GitConfig) {
+        let prefix = format!("refs/remotes/{}", cfg.remote);
+        let Ok(refs) =
+            self.run_git_allow_fail(cfg, &["for-each-ref", "--format=%(refname)", &prefix])
+        else {
+            return;
+        };
+        for r in refs.lines().map(str::trim).filter(|l| !l.is_empty()) {
+            let _ = self.run_git_allow_fail(cfg, &["update-ref", "-d", r]);
+        }
+    }
+
     fn conflict_backup_marker_path(&self, cfg: &GitConfig) -> Option<PathBuf> {
         let git_dir = self
             .run_git_allow_fail(cfg, &["rev-parse", "--git-dir"])
@@ -1107,6 +1153,7 @@ impl SheetStore {
         let marker = ConflictBackupMarker {
             sha: sha.to_owned(),
             branch: branch.to_owned(),
+            destination_hash: self.destination_hash(cfg),
         };
         if let Ok(bytes) = serde_json::to_vec(&marker) {
             let _ = write_file_atomic_replace(&path, &bytes);
@@ -1119,17 +1166,18 @@ impl SheetStore {
         }
     }
 
-    fn remote_branch_matches_sha(&self, cfg: &GitConfig, branch: &str, sha: &str) -> bool {
+    /// Checks whether `refs/heads/<branch>` on `cfg.remote` points to `sha`.
+    /// Returns `Some(true)` if confirmed, `Some(false)` if remote responded and
+    /// does not contain the matching ref, or `None` if remote is unreachable.
+    fn remote_branch_matches_sha(&self, cfg: &GitConfig, branch: &str, sha: &str) -> Option<bool> {
         let ref_name = format!("refs/heads/{branch}");
-        let Ok(out) =
-            self.run_git_allow_fail(cfg, &["ls-remote", "--heads", &cfg.remote, &ref_name])
-        else {
-            return false;
-        };
-        out.lines().any(|line| {
+        let out = self
+            .run_git_allow_fail(cfg, &["ls-remote", "--heads", &cfg.remote, &ref_name])
+            .ok()?;
+        Some(out.lines().any(|line| {
             let mut parts = line.split_whitespace();
             parts.next() == Some(sha) && parts.next() == Some(ref_name.as_str())
-        })
+        }))
     }
 
     fn ahead_behind(&self, cfg: &GitConfig) -> (usize, usize) {
@@ -1916,7 +1964,8 @@ fn hostname_slug() -> String {
 fn redact_url(url: &str) -> String {
     if let Some(scheme_end) = url.find("://") {
         let rest = &url[scheme_end + 3..];
-        if let Some(at) = rest.find('@') {
+        let authority_end = rest.find('/').unwrap_or(rest.len());
+        if let Some(at) = rest[..authority_end].find('@') {
             return format!("{}***@{}", &url[..scheme_end + 3], &rest[at + 1..]);
         }
     }
