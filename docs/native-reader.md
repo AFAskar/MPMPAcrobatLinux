@@ -1,10 +1,10 @@
-# Native reader development
+# Native Reader Architecture & Development
 
-This is an experimental native Rust application, not a claim of full Acrobat or MPMB compatibility. The Windows reference remains the oracle. Original paid PDFs and extracted scripts remain local and ignored.
+MPMB Reader is a native Rust desktop application built to execute original MorePurpleMoreBetter (MPMB) interactive PDF character sheets without Adobe Acrobat Reader. Original paid PDFs and extracted scripts remain strictly local and gitignored.
 
-## Build and run
+## Build and Run
 
-Fedora prerequisites are Rust/Cargo, a C toolchain, X11 or Wayland, OpenGL/Mesa, zenity (file picker), Poppler, and DejaVu Sans. Use the pinned submodule; never update its revision implicitly.
+Linux prerequisites: Rust/Cargo, a C toolchain, X11 or Wayland dev headers, OpenGL/Mesa, `zenity` (file picker), Poppler, and DejaVu Sans fonts.
 
 ```bash
 tools/native/setup-pdfium
@@ -17,229 +17,54 @@ tools/native/generated
 tools/native/lifecycle
 ```
 
-The setup script downloads the pinned Linux x64 PDFium V8 distribution at chromium/8111 and checks its SHA-256. It retains the supplied third-party license bundle under ignored `output/deps`. PDFium's V8 runtime is deliberately unused. `MPMB_PDFIUM` overrides the shared-library location; `MPMB_FONT` overrides the Unicode appearance font. Default DejaVu Sans discovery checks Fedora, Debian/Ubuntu and Arch locations, then Fontconfig; it validates the actual TrueType PostScript identity instead of accepting a substitute. Fedora and Ubuntu save/edit/reopen are qualified; other discovery installations remain unqualified. `.cargo/config.toml` sets one build job and development debug symbols are disabled. Do not run large builds concurrently with suites.
+- `tools/native/setup-pdfium` downloads the pinned Linux x64 PDFium distribution (`chromium/8111`), checks its SHA-256, and retains third-party licenses under ignored `output/deps`. PDFium's V8 runtime is unused.
+- `MPMB_PDFIUM` overrides the shared-library path; `MPMB_FONT` overrides the Unicode appearance font.
+- Default DejaVu Sans discovery checks standard Linux locations and Fontconfig, verifying the actual TrueType PostScript identity instead of accepting unrelated substitutes.
+- `.cargo/config.toml` sets one build job and disables debug symbols in dev builds.
 
-Rich appearances prefer the original embedded faces. A missing rich face can use an installed TrueType font through Fontconfig (`fc-match`), after verifying its actual PostScript name and glyph coverage. No proprietary fonts are shipped. Exact Ashnar italic/bold-italic rendering requires the corresponding Segoe UI faces installed locally; an unrelated Fontconfig substitute is rejected. CFF installed faces and nonzero collection members remain unsupported by this lookup. Saved Type0 appearance font programs are reused for later edits, including when system-font lookup is unavailable. A new face not yet embedded still requires an available font; without one, the existing base/default appearance fallback remains a fidelity limitation.
+### Desktop UI
 
-The application takes a PDF pathname and renders a refreshed desktop UI (`src/ui.rs`, `src/ui/theme.rs`, `src/ui/state.rs`) with Dark (Obsidian Slate & Gold, default) and Light (Ivory & Ink) tabletop themes (`MPMB_THEME=dark|light` or live toolbar toggle, propagated to modal dialogs). A revision-keyed `ProjectionCache` avoids redundant per-frame PDF projections and page-widget JSON recomputation, while `ZoomState` provides Fit-Width and quantized manual zoom (`Ctrl+Scroll`, `Ctrl+-`/`=`/`0`). The top command bar offers sidebar toggle (`Ctrl+B`), document clean/unsaved status pill, page jump (`PageUp`/`PageDown`), zoom controls, `Classes…`, `Tools`, `Sheets`, `Save…` (`Ctrl+S` with zenity Browse), and theme toggle. The collapsible left sidebar displays a live Character Quick-Card (name, level, class, AC/HP/Proficiency, and 6-column ability strip) above `Fields` (searchable with `All` / `This page` / `Writable` filter chips and a Field Inspector supporting `Ctrl+Enter` apply and `Esc` discard), `Bookmarks`, and `Diagnostics` tabs. Click a widget on the page canvas to select a field, toggle a checkbox, or run its original button action; hover and selected widgets render subtle canvas outlines. Read-only fields and pushbuttons disable the sidebar text/choice editor, and any uncommitted draft can be discarded individually via "Discard" without affecting earlier committed edits. Applying an edit, saving, changing the selected field, or running a document action commits pending text through the original field actions. Pending text also triggers the close confirmation; Save and close commits it before writing the new copy atomically. Existing paths, including originals, cannot be overwritten. The Diagnostics tab exposes incomplete behavior; source dialog layouts and rich text remain partial.
+The desktop UI (`src/ui.rs`, `src/ui/theme.rs`, `src/ui/state.rs`) provides:
 
-`tools/native/acceptance` runs both authorized fixtures, original startup, user field edits, dependent calculations, selection of first-level Fighter through the original class dialog handlers, rendering, save, native reopen, and independent pypdf/Poppler checks. Every run gets a unique ignored directory and per-operation JSON evidence. It checks fixture hashes and decoded original script hashes. A failure stops the run and remains a failure. Do not infer compatibility from a process exit alone.
+- **Dark (Obsidian Slate & Gold, default)** and **Light (Ivory & Ink)** themes (`MPMB_THEME=dark|light` or toolbar toggle, propagated to modal dialogs).
+- Revision-keyed `ProjectionCache` to avoid redundant per-frame PDF projection and widget JSON recomputation.
+- `ZoomState` with Fit-Width and quantized manual zoom (`Ctrl+Scroll`, `Ctrl+-`/`=`/`0`), plus keyboard shortcuts (`Ctrl+S`, `Ctrl+B`, `PageUp`/`PageDown`).
+- Top command bar (`Classes…`, `Tools`, `Sheets`, `Save…`, theme toggle, clean/unsaved status pill) and collapsible left sidebar with **Character Quick-Card**, searchable/filterable **Fields** + Field Inspector (`Ctrl+Enter` apply, `Esc` discard), **Bookmarks**, and **Diagnostics** tabs.
+- Interactive canvas widget overlays for field selection, checkbox toggling, and original button actions. Read-only fields and pushbuttons disable text/choice editing; uncommitted drafts can be discarded without affecting prior committed edits.
+- Atomic non-destructive saves: existing paths (including originals) are never overwritten silently.
 
-Before native-to-Acrobat checks, qualify the reference as directed in AGENTS.md. Then use the Python interpreter selected by `tools/acrobat/run` to run `tools/native/verify-acrobat.py <native-2014.pdf> <native-2024.pdf>`. `--expected` accepts a JSON object of additional canonical fields to compare. The script uploads unique disposable copies, uses the serialized application-menu bridge, reads fields, saves through real Reader, and independently checks the downloaded file. It never writes oracle values with a PDF library.
+## Architecture
 
-The diagnostic CLI is:
+PDFium's built-in `CJS_App::execDialog` is a no-op and does not expose replacing the Acrobat JS object model. MPMB Reader separates responsibilities cleanly:
+
+- **`src/pdf.rs` (+ `src/pdf/*`):** `lopdf` reads canonical `/T` hierarchies, widget geometry, inherited attributes, additional actions (`/AA`, `/A`), `/CO`, metadata, bookmarks, and embedded document scripts. Saves project live QuickJS form state into a cloned PDF graph with updated values and appearance streams while preserving untouched scripts and object graphs.
+- **`src/acrobat.js`:** Single authoritative live form state, document globals, events (`Keystroke`/`Validate`/`Calculate`/`Format`/`Focus`/`Blur`), timers, menu registry, dialog lifecycle, and serialization. Original embedded scripts execute verbatim in PDF name-tree order.
+- **`src/runtime.rs`:** Bounded-memory QuickJS-NG (`rquickjs`), synchronous native callbacks, and explicit error reporting. No original MPMB source is vendored into the executable.
+- **`src/render.rs`:** PDFium renders disposable flattened projections so widget appearances render accurately without instantiating a second interactive form runtime.
+- **`src/ui.rs`:** `eframe`/`egui` desktop UI and separate native modal dialog process preserving synchronous `execDialog` call stacks.
+
+## Diagnostic CLI & Test Suites
 
 ```text
 mpmb-reader sheet.pdf --probe scenario.json report.json
 mpmb-reader sheet.pdf --desktop-smoke output/testing/unique-desktop-directory
 ```
 
-Scenarios specify explicit `dialogs` responses, numeric `alerts`, and `steps` (`advance`, `edit`, `eval`, `assert`, `render`, `save`). Unanswered prompts and unsupported APIs fail explicitly. `eval` is a development diagnostic operating on the same document global as original scripts; application controls use the registered original menu commands. Desktop smoke creates a real native reader window and a real class dialog window, captures each framebuffer, and cancels the dialog. Scripted dialog tests exercise original handlers; they alone do not establish native visual correctness. Generated artifacts and screenshots must stay under `output/testing`.
-
-## Architecture decisions
-
-PDFium was evaluated first against its actual source and public C interface. Its `CJS_App::execDialog` returns success without implementing a dialog. Public PDFium embedding APIs do not expose replacement of the Acrobat JavaScript object model. Using that runtime plus a second form-state mirror would make missing behavior difficult to control. Reference: https://pdfium.googlesource.com/pdfium/+/refs/heads/main/fxjs/cjs_app.cpp
-
-The current division is:
-
-- `pdf.rs`: lopdf reads canonical `/T` hierarchies, widget geometry, inherited field attributes, additional actions, `/CO`, metadata, bookmarks, and embedded document scripts. It preserves the source object graph and decoded original scripts. A save projects the live state into a cloned graph and writes new values and real appearance streams. It persists changed additional actions without replacing unrelated shared action dictionaries. It does not write to the source document.
-- `acrobat.js`: the one live form state, document globals, events, calculations, timers, menu registry, dialog execution, and serialization. Original embedded scripts execute unmodified and in PDF name-tree order. Numeric field getters follow Acrobat coercion while `valueAsString` preserves the string. Validations can reject assignments; calculation events follow the original active `/CO` ordering, and assigning `event.target.value` retains the result. Template-only calculation entries are inactive until spawning. Generated field definitions and calculation entries enter this same state.
-- `runtime.rs`: bounded-memory QuickJS-NG via rquickjs, synchronous native callbacks, and explicit error reporting. The initial quick-js binding was replaced after a stack-limit failure; rquickjs exposes memory and stack limits. No original MPMB source is vendored into the executable.
-- `render.rs`: PDFium renders a disposable projection. It flattens and reloads only the temporary render page so widget appearances are included without instantiating a second interactive form/JavaScript runtime. Saved PDFs retain interactive widgets and scripts.
-- `ui.rs`: eframe/egui Linux windows. A separate native dialog process preserves synchronous `execDialog` call stacks; each control event returns to the original dialog handler. The application registry retains original toolbar commands. Pending timers execute chronologically in the document global context.
-
-The Rust PDF graph is an input/serialization structure, not an independently editable form model. UI edits, script assignments, assertions, and saved values all use the JavaScript field objects. Structural page operations replay an explicit journal from that same state. Named templates clone page/field/widget ownership and resources; shared templates retain one logical field value. The saved calculation order comes from the live state. Do not add a second form manager to PDFium.
-
-## Current boundaries
-
-`docs/native-compatibility.json` records source call-site counts and explicit support levels. A partial implementation is never a compatibility pass. The eight original inventory categories do not cover every Acrobat API; extend the inventory with observed calls and focused behavior tests.
-
-Focused Rust regression tests cover the implemented host paths; current counts and concrete runs are recorded in the compatibility matrix. Both editions have passed original companion (wolf), wild-shape (wolf), and Druid spell-generation workflows, native save/reopen, independent checks, and all six real Reader roundtrips. Named and shared template cloning, deletion, popup menus and native toolbar commands are implemented with limited coverage. Some MPMB import/export paths, bookmark destination details, complete field styling and dialog controls/layouts remain work. Template overlay is also unsupported, but the inspected MPMB calls request overlay=false; unrelated Acrobat APIs are not the acceptance target. Normal button icons use original PDF resources; matching normal/rollover/pressed captions persist. Distinct rollover/pressed captions and non-normal icon faces fail explicitly. New appearances reuse an original embedded TrueType face when it covers the text, with a Unicode BMP fallback. Full rich-text event/style/XML and mixed-span font fidelity remain incomplete. Non-BMP appearance text fails explicitly. Existing script streams and untouched appearances are retained. Adobe usage-rights signatures may be invalidated by full-file serialization; the tested Reader roundtrip, not a signature claim, is the acceptance evidence.
-
-Do not ship this as a general untrusted-PDF scripting sandbox: QuickJS memory/stack limits and bounded streaming host import caps (16 MiB JS, 64 MiB XFDF) are present, but document scripts can pass local filesystem paths to the file bridge without an interactive picker and JavaScript evaluation runs synchronously in the UI process without an execution-time interrupt. Development use here is strictly the user's explicitly authorized trusted local fixtures and add-ons.
-
-## Wider comparisons and diagnostics
-
-`tools/native/compare.py <native.pdf> <reader-saved.pdf> output/testing/<unique-report>.json` compares every canonical field value, page count, widget count/geometry/flags/state, appearance presence, and decoded original document-script hashes. Its output records differences rather than equating the focused milestone assertions with complete compatibility. Reader can regenerate appearance streams and rewrite serialized internal objects; inspect those differences explicitly.
-
-`MPMB_TRACE_FIELDS='Character Level' tools/native/run <sheet.pdf> --probe <scenario.json> <report.json>` records selected initial PDF values and script assignment stacks to stderr for debugging. Redirect private traces under `output/testing`; never commit them. Original caught exceptions and error dialogs are recorded in diagnostics and fail initialization. The runtime's revision counter refreshes rendered projections after timer-driven field changes.
-
-The local extended suite derives the supplied character's expected values from its original PDF at run time, preserving privacy in tracked test code. It checks complete imported payload and remembered spell-field retention, not just a few visible fields. Generated workflow tests live in `tools/native/generated`; page hide/reveal/removal tests live in `tools/native/lifecycle`. Runtime errors and unmet independent assertions fail these suites.
-
-## Strict original-script execution (no runtime overrides)
-
-The native runtime executes original embedded MPMB document scripts verbatim (`repairs: []` in diagnostics). The former `mpmb-2024-261023-wildshape-pop-typo` runtime override was removed on 2026-11-22 (`33f6cb4`/`0e19a42`) so upstream PDF script errors (such as the `v24.2.0+261023` `ApplyWildshape` `pop.wildshapeShow` `ReferenceError` and `format2()` plain-string `countDecimals()` `TypeError`) are reproduced faithfully rather than monkey-patched.
-
-`tools/native/verify-generated-acrobat.py <generated.json>` reopens each generated output, reads its expected canonical fields through the original application-menu bridge, saves with Reader, and independently checks the downloaded file. It serializes all operations. `tools/native/compare.py` reports wider differences, including internal representation and widget flags; focused passes do not imply byte-identical appearance streams.
-
-## Compatibility target and audit
-
-The target is all reachable MPMB behavior in the three authorized supplied PDFs, including every predefined class choice and real table usage. It is not full general Acrobat JavaScript. That MPMB target is not yet achieved. The original `PrintTheSheet` and `PrintButton` now produce controlled native print output for all three fixtures. The broader printing milestone still needs Reader and desktop qualification. Selected workflow passes must not be presented as full MPMB compatibility.
-
-`tools/native/class-audit` discovers classes from each original runtime, tests currently selectable base-class progression at levels 1, 3, 5, 11, 17 and 20, and records excluded/ambiguous classes. It checks original class parsing, class level and proficiency calculations. It does not establish complete subclass, source-selection, feature-choice, spell-selection, multiclass, rest/resource, combat, appearance or persistence coverage for every class.
-
-`tools/native/printing` replaces the historical negative printing probe with controlled output validation; it never sends physical jobs. Probe scenarios must set `print_output_dir` explicitly. The native destination dialog offers a new flattened PDF or an explicitly confirmed CUPS destination. Print copies contain only selected flattened pages; interactive saves preserve the document scripts and fields. Unsupported advanced print settings fail explicitly. See [implementation-milestones.md](implementation-milestones.md) for the staged acceptance work.
-
-Repository and reference access have been restored. The former read-only-session failure remains retained evidence, and subsequent runs use unique evidence directories. See [development-handoff.md](development-handoff.md) and [native-compatibility.json](native-compatibility.json) for current results.
-
-`tools/native/subclass-audit` exercises original source-selection buttons and class/subclass dropdown events, progresses selected subclasses through levels 3, 5, 11, 20 and back to 3, then independently checks saved outputs and native reopen. `--fixture`, `--class-key` and `--limit` constrain a diagnostic run and record unexercised cases. The current source profile includes all books/class elements; classes shadowed under that profile remain coverage gaps. Scripted `select` replies must name exactly one option offered by the original dialog; absent, ambiguous and disabled options fail. Feature dialogs currently use default replies and do not qualify all feature choices or table usage. Reader comparisons remain separate work.
-
-`tools/native/bookmarks` exercises original bookmark handlers, creation/removal and action context on all three fixtures, independently checks outline links/style/color/open counts, and saves/reopens and executes the retained actions natively. The sidebar displays the live bookmark tree and executes actions with the Bookmark/Mouse Up target. Native focus and page-number changes update the displayed page. `python3 tools/native/bookmarks-desktop.py` captures the actual panel and navigation rendering on both current sheets. Reader qualification remains pending. Direct page destinations flag incomplete zoom/position handling; unresolved/named and other unsupported native action types fail explicitly.
-
-`tools/native/table-workflows` tests original limited-feature use, short/long rest recovery and healing/hit-dice recovery for Fighter/Champion and Monk/Shadow at level 5 in all three fixtures, including native save/reopen. These six cases do not qualify other classes or all table workflows. Independent PDF checks include choice labels and inactive named-template widgets. `tools/native/verify-regressions.py` checks that missing widgets, missing choice appearances and damaged stored values still fail. Paired Reader verification must independently create inputs from the original fixtures; calculated native state must not be written into reference outputs.
-
-### Embedded files
-
-`tools/native/attachments` exercises the original FAQ menu/export and installation-helper dialog in all three fixtures, verifies exported bytes with independent pypdf extraction, renders the FAQ, and checks attachment/script/field-inventory retention plus native reopen. Probe scenarios require `attachment_output_dir`; requested launches are suppressed and recorded. Desktop exports use a native destination chooser; PDF launch mode uses a temporary file and the desktop PDF opener, removed when the runtime is destroyed. Existing destinations are never overwritten. Non-PDF launching and attachment import/modification remain unsupported.
-
-`tools/native/verify-attachments-acrobat.py NATIVE_REPORT --readiness READINESS_REPORT` measures metadata/menu/persistence in independently opened Reader fixtures through MPMB's original manual add-on workflow. It does not validate Reader attachment-file export or native desktop launching.
-
-`tools/native/fighting-styles` selects actual offered buttons in the original class-feature popup, asserts Archery/Dueling attack effects in all three fixtures, saves/reopens and changes styles again. Scripted `button_path` responses resolve unique visible/enabled controls under their displayed parent menu labels. Source citations and selection marks can be omitted; ambiguous/unavailable buttons fail. This is defined native menu/mechanical coverage, not universal feature-choice or Reader qualification.
-
-Appearance projection reuses an embedded TrueType face when the requested field font covers its text, with `MPMB_FONT` as the Unicode fallback. Blank rich lines retain their own font-size metrics. `tools/native/skill-layout` compares all 18 skill labels and baselines against original Reader appearances, checks font payload identity, renders the generated companion, and verifies numeric Format results without changing canonical formulas. Mixed font/style spans, rich-text event/default-style behavior and non-BMP output remain incomplete.
-
-`tools/native/sidekicks` exercises the special sidekick setup rather than bypassing its prerequisites: all-source selection, original class dropdowns, explicit conversion confirmation, base hit-dice input, manual race/background mode, level progression and native persistence. This is identity/HD/manual-mode coverage; base proficiencies/attacks, HP and all feature/spell choices remain unqualified. Probe `alerts` accept numeric button codes or `{"title":"Exact prompt","button":4,"checked":false}` objects. Invalid button codes fail; `MPMB_DIALOG_TRACE_DIR` also records alert requests. A dialog reply may guard its static `head` text with `header`.
-
-`tools/native/verify-table-acrobat.py NATIVE_REPORT --readiness READINESS_REPORT` independently creates the defined Fighter/Monk inputs in original Reader fixture copies and compares baseline/resource use/short rest/long rest/healing phases. It explicitly handles only the observed Monk Tools prompt with its unchanged original default, saves/closes each document, then checks fields/widgets/scripts and records complete canonical differences. Passing phase checks do not certify all saved values or tool choices.
-
-Scripted list selections accept an exact label or a full hierarchical label path, for example `"select":{"ExcL":["Revised Ranger","Hunter"]}`. Paths reject missing or ambiguous choices and preserve original list item identities. `tools/native/subclass-audit --fixture 2014 --isolate-shadowed` uses the original sourcebook and class-element dialogs to include only each targeted shadowed class/subclass; it checks the applied exclusion state and exact selected keys. This is bounded native progression evidence, not Reader or comprehensive feature qualification.
-
-`tools/native/compare-state <native.pdf> <reader.pdf> <report.json>` compares canonical values while interpreting changed MPMB `.Stringified` expressions in a bounded Node.js context. It uses the original CurrentSpells/CurrentCasters separator, preserves array order and primitive values, and requires exact function source. Parse errors, unsupported types and nonserialized field differences fail explicitly. This is stored-state evidence; function behavior and widget/appearance/render fidelity require separate checks. `verify-state-comparison.py` qualifies it with an independent Reader baseline and damaged disposable native copies; reference PDFs are never edited.
-
-Shadowed source profiles account for original `MergeElement` moving every duplicate leaf label under both Ranger parents. The audit excludes conflicting parent sourcebooks through the actual offered sourcebook paths before class-element selection, while retaining sources required by the target. Its saved/reopened checks require those exclusions and the intended class/subclass. `--resume-report <prior-shadowed-report>` skips only recorded passing pairs, retains report provenance, and leaves failed/unattempted pairs for execution. A resumed pass is not a claim that all cases used one binary.
-
-`tools/native/rune-scribe` qualifies the predefined prestige class in the 2014/Ashnar fixtures using Wizard (Abjuration) 5, explicit qualifying abilities and Arcana proficiency. It tests Rune Scribe levels 1–5, down-leveling, removal and re-addition; shared caster slots and separate d8/d6 pools; independent saved canonical values/scripts and native reopen. The narrative rune/NPC prerequisite is assumed. Rune choices, Mastery/ASI decisions and Reader parity remain unqualified. The 2024 fixture does not define this class. Qualified native evidence: `native-rune-scribe-1793161054749756266/rune-scribe.json`.
-
-
-Original PDF imports can now open live background source contexts with original scripts/functions, shared application/global state and explicit source discard. Separate source windows/activation, source saves/prompts and generic non-form PDFs are unsupported. Native file-picker interaction and broad lifecycle remain unqualified. Run tools/native/direct-import.py with --source and --profile legacy --target2014 (or2024) for raw diagnostic evidence; run verify-direct-import.py against a separately qualified Reader report for checked-state/error parity. Original field errors keep raw strict probes failed. Legacy2024 original conversion also hits a caught upstream import error and is not qualified. Use the Codex bundled Python with pypdf. Complete payload comparisons must parse stored source and preserve every string code unit; NBSP normalization is data loss, not allowed comparison normalization.
-
-
-The Console toolbar button opens a modeless read-only selectable JavaScript output view. Original console.show/println/clear calls update the same application-scoped log across participating documents; source output remains after discard. Clear empties the view without closing it or clearing compatibility errors. The console has no interactive JavaScript input yet. A displayed original import error still means the import workflow failed even if MPMB later shows a final summary. The native console desktop test explicitly distinguishes this expected-error UI case from a clean import pass.
-
-
-`Doc.exportAsXFDFStr` supports the original XML fallback export view for the qualified subset. `tools/native/verify-xfdf.py`, `reader-xfdf-import.py` and `verify-xfdf-persistence.py` separate semantic XML comparison, actual Reader consumption/control and fresh native persistence. `xfdf-desktop.py` renders the original native export window; scenarios may explicitly set `interactive: true` to permit real native dialogs, while the default stays headless. Use controlled disposable copies and destinations. Direct `exportAsXFDF`/native `importAnXFDF`, full-state export corpus and wider options remain incomplete; see the compatibility matrix.
-
-
-`Doc.importAnXFDF(cPath)` now reads a local UTF-8 XFDF file and commits supported plain/rich values through original field actions. Relative paths resolve against the source PDF directory; an omitted path opens zenity in interactive mode. Noninteractive probes require a path. The parser supports hierarchical names and rich XHTML but rejects annotations, remote paths and unsupported structures. Unknown names are ignored. Rich imports and two native reopens have bounded Reader event/getter evidence; complete character transfer and real native picker selection/cancel remain unqualified. See `xfdf_native_import` in the compatibility matrix.
-
-`python3 tools/native/xfdf-picker.py` qualifies actual GTK picker cancellation using system pyatspi and an explicit no-portal backend; its report records ownership, offered controls, exact raw-state preservation and independent saved-PDF checks. Default KDE portal and file selection are still unqualified. The test can use `--pdf-python` for the separate Python interpreter providing pypdf.
-
-Field Keystroke/Validate/Calculate/Format `event.value` writes now enforce Reader's primitive string/number contract, including numeric read-back as strings and `InvalidSetError` for rejected types. This differs from direct `Field.value` coercion. `tools/native/reader-event-value.py --readiness <report>` captures the isolated reference diagnostic; `verify-script-observation.py` compares its archived script exactly. The 68-case comparison still fails two post-event NBSP normalization/reentry cases; the type repair does not claim complete event compatibility.
-
-
-## Milestone 4: calculated mirror reentry — bounded repair
-
-The previous handoff's “calculated-plain-text normalization” candidate description is superseded. Tracing original MPMB showed AdvLog.Player Name Calculate converts text and ValidateAdvLogInfo writes back into the still-active primary setter. The native recursion guard skipped that nested K/V/F. The repair permits cross-field calculation reentry, preserves the outer guard, and formats nested commits. The generic normalization sweep was rejected after comparison1793482221717935687 failed; it is absent from production.
-
-Qualified Reader15/60 traces1793481788034461133/1793481967662227786 match native1793482569502940480/1793482845059873244. The historical68-case Reader now matches completely in comparison1793482984403559747, resolving its last two differences without normalizing captured data. Synthetic persistent primary K with unchanged original mirror C/V passes edited native → Reader → native persistence1793482955511756937. Original scripts/actions and active appearances are independently checked. Inactive mirror AP remains stale after the last native edit; this is an explicit appearance gap. 128 Rust tests and strict all-targets Clippy pass. Acceptance2/1793483011036367240 and extended2/1793483082825367794 pass; generated/lifecycle and other-fixture persistence are still running. Use readiness1793480531. No broad milestone or overall goal is complete.
-
-2014 edited native → Reader → native persistence1793483155097424444 now passes; Ashnar is running in continuation-mirror-reentry-persistence-ashnar.log. Generated6/1793483131966279084 and lifecycle2/1793483308656198828 pass. A separate actual generated-adventure-log failure is retained in mirror-template-spawn1793483263469455351/independent.json: canonical Phase4 B but visible AP Phase3 B. Poppler rendering confirms the stale text on page7. This must be repaired and qualified separately; it does not invalidate the exact captured event comparison, and full appearance/workflow compatibility is not claimed.
-
-
-## Milestone 4: generated template appearances — active repair (129 tests)
-
-Mirror reentry is committed652102e; Ashnar persistence1793483331817549916 now also passes, extending the bounded edited native → Reader → native proof to all three fixtures. Broad table/event coverage remains incomplete.
-
-Original DoTemplate ALlog Add can clone an AP older than its canonical field value. Counterexample mirror-template-spawn1793483263469455351 visibly shows Phase3 B while storing Phase4 B. The candidate marks new renamed/shared widgets for rebuild and preserves the renamed field's current formatted display. Fixed native1793483460302394723 passes; qualified real Reader original generation1793483491699423868 and exact native comparison1793483564713710389 agree on captured state and visible generated Player Name AP. Old128 comparison1793483587924473635 fails that AP check against the SAME Reader reference. Poppler page7 renders were reviewed; full typography/pixels are not equal or claimed.129 tests/build/strict all-targets Clippy pass; edited generated-page persistence1793483565872630337 and generated6/lifecycle2 regressions are running. Finish/close the same Reader suite before starting another. No broad milestone or goal complete.
-
-Generated-template refresh qualification is now terminal PASS: edited generated-page persistence1793483565872630337 checks the active generated mirror across native → Reader → native edits and a final fresh reopen, including canonical/visible AP text and unchanged original generated C/V/document scripts. All6 generation cases1793483492926450924 and2 lifecycle cases1793483670608819995 pass.129 tests/build/formatting/strict all-targets Clippy pass. The retained old128 comparison remains failed. This completes only the bounded generated-log refresh repair; full rich typography, other template/display controls and broad table milestones remain incomplete. All reference suites are closed. Continue implementing after the atomic commit; the Codex goal remains active.
-
-
-## Milestone 3a/4: native XFDF picker selection — bounded qualification
-
-The picker now starts beside the current PDF. Genuine2024 GTK selection1793484169796806681 and Cancel1793484243343725360 pass; actual imported file path/SHA-256 are checked, unrelated rich notes stay unchanged, and fresh native reopen/save plus independent canonical/widgets/AP/scripts checks pass. GTK tree-table roles lack Table/Selection interfaces. The test uses the actually offered list.select-all action only with exactly one disposable file, then the owned sensitive/showing OK button. It does not assume keyboard focus or inject an import path. GDK_DEBUG=no-portals/GTK_A11Y=atspi are explicit prerequisites.
-
-Real Reader1793484242186091772 reopens/saves the actual picker output. Fresh native comparison1793484326048599235 matches complete decoded getter data and the visible Unicode Player Name AP. Native page1 rendering was reviewed. JSON object-member order is explicitly ignored; all properties/values and field/span array positions remain strict. The earlier strict-string reopen1793484122325439281 stays FAILED despite semantic data agreement. Failed unsupported-interface/action/nesting pilots and their cleanup remain recorded in native-compatibility.json; no old suite is relabeled.129 tests/build/formatting/strict all-targets Clippy pass. Originals and pinned submodule unchanged. Default KDE portal, other fixture/multiple-file UI paths and complete Import wrapper/platform/character behavior remain unqualified. No broad milestone or overall goal complete. All Reader suites are closed. Continue after the atomic commit; remaining concrete metadata comparison still fails38/39 plus enumeration (document_info_getters), and full rich layout/class/table workflows remain incomplete.
-
-
-## Milestone 3a/4: typed document metadata and XMP — bounded repair qualified
-
-Doc.info now converts only Reader-qualified decimal/lowercase boolean custom strings, preserves exponent/hex/whitespace/text controls, exposes case-insensitive Authors/ContactEmail from namespaced XMP, and returns fresh author arrays.132 tests/build/formatting/strict all-targets Clippy pass. Controlled135 Reader getters1793484690177157405 match native1793484980195746794; old129/1793485024838074866 remains failed. Current2014 Reader1793484981562742957/native1793485175211139161 and Ashnar Reader1793485109087356953/native1793485248584544223 each match45 observations.
-
-Real Reader1793485243251427636 opens the actual native save and retains all135 observations; native1793485326559440494 agrees. Fresh Reader1793485325403113914 measures the actual Reader-saved file: only the three ModDate aliases change. Native1793485425034365361 matches the complete new capture. No changing epoch is ignored, overwritten or compared against the wrong input. Independent document-info-readonly-projection-control.json verifies raw Info scalar classes/text and decoded XMP bytes unchanged in all five native projections. Original acceptance2/1793485110070961329 and extended import/Ashnar2/1793485182535133951 pass. Originals/submodule unchanged. All Reader suites are closed.
-
-The older38/39 metadata failure is resolved for these measured getters. Sorted enumeration and date epochs are explicit comparison boundaries; raw property order, locale date strings, wider XMP schemas/numeric edge semantics and metadata mutation remain incomplete. Controlled library metadata edits were INPUTS only; no expected values were written into oracle outputs. This completes a bounded read repair, not the broad import/table or full compatibility milestone. Commit atomically, retain the active Codex goal, and continue implementation/validation.
-
-
-## Rich note decoration geometry — bounded qualification, broader milestone open
-
-The typographic line-box repair now passes133 tests/build/strict all-targets Clippy and the stricter original notes gate (APIs/four faces/first baseline/vertical offset AND stroke width) in2014/1793488545903865295,2024/1793488566264775200 andAshnar/1793488583805946358. Real edited native→Reader→native runs1793488383936199842/1793487767618778576/1793488457182988807 each pass all4 stages against actual Reader vertical geometry within0.002pt; native font lookup is disabled during edited reopens.2024 native/Reader crops reviewed. Generated6 regression is running in continuation-decoration-linebox-generated.log.
-
-This qualifies the correctly resolved default-note faces only. Full native font matrices remain FAILED: CSS-family requests can select the wrong fallback, and underline/false-flag API representations differ. Initial geometry failure decoration-linebox-initial-geometry.json is retained, not normalized into a pass. Glyph x advances, path topology and pixels remain incomplete. The Reader-only38-row hypothesis validation does NOT establish all-font native compatibility. Finish generated regression, commit this bounded metric repair atomically, then implement validated family resolution and the32-case decoration API/mode contract. Broad milestones and the Codex goal remain active.
-
-All6 original generation regressions1793488812930280822 now pass. All3 strict original notes gates and all12 edited native/Reader roundtrip stages have positive vertical stroke geometry, with original actions/scripts retained and system-font lookup disabled during native reopens. Metric repair is ready for its atomic commit; full rich/font matrices stay FAILED for the documented API/family gaps. A separate UNVALIDATED family lookup candidate is now in src/pdf.rs and src/pdf/installed_fonts.rs; exclude those two files from the metric commit. It adds family/style validation and embedded-first alias resolution; build/test and repeat actual face/metric matrices next. Goal remains ACTIVE.
-
-
-## Validated rich CSS-family resolution — bounded repair qualified (134 tests)
-
-Family names now resolve separately from PostScript identifiers, with actual preferred/legacy family and requested face-style checks. Existing embedded fonts take priority; installed substitutes and wrong bold/italic faces remain rejected. All38 native actual face/size/vertical geometry rows match Reader, including Arial, Times New Roman, Courier New, Trebuchet MS and heldout fractional-size families. Full API matrix equality is still false for the known decoration property contract.
-
-Mixed-font changed-save/fresh-reopen/restore, real Reader edits and fresh native restore/reopen pass twice: rich-family-persistence1793489746674794442 and1793490094672178998. Both native sequences disable system executable lookup. Exact nine-property font subsets are declared; all10 saved outputs independently pass actual AP face/size/text/vertical checks, with old133 wrong-face negatives rejected. Native/Reader mixed-font crops reviewed; Reader's final edit suffix is deliberately present only in its snapshot.134 tests/build/formatting/strict all-targets Clippy pass. Original note strict gates2014/1793489853128706098,2024/1793489872161416162,Ashnar/1793489888567257712 and original generated6/1793490095019837920 pass. Original fixtures/submodule unchanged. First pilot1793489649795196776 remains failed for an overly narrow test-only rebuild assertion; corrected tests record value/rich/appearance triggers and independently inspect saved APs.
-
-This completes a bounded family-selection repair, not full typography or class/table compatibility. Full rich API enum/false-flag equality, double/word rendering, x advances/path topology/pixels and broader styles/fonts remain incomplete. Next API reference is32-case Reader1793487188042068742; actual double/word/none mode reference is currently running in continuation-reader-decoration-modes.log from output/testing/decoration-mode-input1793490213150970727/observer.js. Finish/close it before another Reader suite. No broad milestone or goal complete; continue implementing after atomic family commit.
-
-Rich decorations have a bounded Reader-qualified typed contract: committed spans use underline enums, defaultStyle has its separately measured boolean conversion, and immediate event arrays retain assigned values. XML accepts underline/double/word/none; native appearances paint double strokes and split word underlines at ASCII spaces using normalized typographic line-box metrics.137 tests, exact32-case property checks,16 default/10 combination/32 immediate-event observations and40 mode/38 font geometry rows pass. Two edited mixed-engine runs now qualify complete tested spans and canonical/widget values after native/Reader changes and fresh reopens. The heldout24 run explicitly reports but does not gate extracted appearance text; the initial16 run retains that stricter gate. Glyph advances, strike segmentation, other whitespace and complete pixel fidelity remain incomplete.
-
-Calculate action changes now maintain the authoritative order: registration/replacement/removal/re-addition matches Reader, and original non-executable group references retain their physical CO slots.139 tests and all3 original resource lifecycle/persistence cases pass, including ability-dependent maxima and short/long rests. Executable non-leaf calculations explicitly fail; broader grouped/generated ordering and complete per-class resource qualification remain incomplete.
-
-Explicit calculateNow honors both application/document enable flags; display delay alone does not prevent calculations. Real class workflows wait for original calcCont after returning from the menu before reading completed user-action states.140 tests and all8 Reader flag combinations qualify this boundary; mid-pass and cross-document flags still require broader coverage.
-
-## Modified spell controls — bounded 2024 repair (2026-11-02)
-
-Native page clicks now pass the release-event Shift/Ctrl/Cmd state to the original MouseDown/MouseUp actions. Later pointer movement or key releases in the same frame cannot erase it. Cancelling a popup now returns `null`; the old `undefined` result threw in MPMB's original `getMenu` after the modifier branch became reachable. Original embedded scripts are unchanged.
-
-Reader `reader-spell-modifiers-1793627309768736001/modifiers.json` and native `spell-modifiers-comparison-1793627738615863525/comparison.json` pass ordinary preparation, Shift/Ctrl menus and cancellation, actual offered Move row down/up selections, six Reader snapshots, four native phase comparisons and both fresh native/Reader-saved reopens with another original activation. The reverse move targets the spell's new row. Exact selected check/remember and four visible name/description values agree; spell-name AP text agrees and description AP text is present. Both prepared spell-page renders show the mark and text. Native attack display5 versus Reader+5 remains cosmetic debt; description AP/pixels are not claimed equal. Direct Reader API control `reader-popup-cancel-1793627739780182451/cancellation.json` confirms `typeof === "object"` and value `null`, with ASCII carrier, Unicode sentinel and independent saved-field/checksum proof.
-
-The old engine and partial-candidate failures remain under `spell-modifier-regression-1793627178786882579`. The first Reader move probe1793626969706194308 remains failed: its reverse action incorrectly used the old row; it retained and closed that document. The corrected fresh run passes. Engine d560008d has143 passing Rust tests, locked build, fmt and strict all-targets Clippy. 2014 reference extension is running; Ashnar and other modified controls/options remain unqualified. Milestones3/4 and the overall goal stay in progress.
-
-## Dialog initialization and Resilient — bounded repair (2026-11-02)
-
-Original ability-score dialogs read every control during initialize. Native omitted unloaded values, so Number(undefined) poisoned totals and applying a feat's pending score changes could write zero ability scores. Controls now exist before initialize with measured Reader defaults: editable non-popup spin controls start at string0, ordinary/readonly text edits start empty, static labels are present and check/radio values are false. Descriptor name7 does not set a plain edit or spin value. Native drawing no longer invents button values, and readonly text edits reject typing.
-
-Reader defaults1793629554688451625/native1793630196297729529 match every captured property/type before load, after partial load and at OK. Object-member order is ignored; raw enumeration is not claimed. Negative old engine1793629694994421642 stays failed. Engine07afd890 has145 passing Rust tests, locked build, fmt and strict all-targets Clippy.
-
-Real Resilient/Wisdom Reader1793630172235228594 and native1793630645010997206 pass four states: selected pendingWis13/save5/Perception9; explicit Apply gives14/6/10; removing the feat leaves the score pending14/save2/Perception10; applying removal restores13/1/9. Full CurrentStats, known/choice arrays and selected fields agree with the same original RunUserScript entry and installed-addon side effects. Eight fresh native/Reader-saved reopens change the base through original dialog callbacks. Independent calculations1793646505148700969 match all72 canonical score/modifier/save values across all six abilities.
-
-Actual native applied output→Reader1793645791825540358 edits base13→15, giving16/7/11; a cold Reader reopen edits15→17, giving18/8/12. Final native1793646209286396833 first matches the complete loaded state, then edits17→19 to produce20/9/13. Original scripts, selected canonical fields, changed numeric appearances and final selected checkbox appearances pass. This is genuine edited persistence, not an unchanged resave. Other feats/ASIs, manual columns, honor/sanity, spinner arrows, all other classes and complete dialog/presentation behavior remain open. Broad milestones3/4 and the goal are not complete.
-
-Retained failed diagnostics: old zero-score1793629206032124808 and repaired extra-dialog-expectation1793630315831084214; invalid OK-only cancel1793628520969896236; Reader edit-class1793630870463829683 and paste-argument1793631059690725587 errors. The latter Reader documents were retained/closed without changing scores. Fresh corrected runs above pass; failed reports were not relabelled.
-
-Reproduce with `tools/native/reader-dialog-defaults.py`, `verify-dialog-defaults.py`, `reader-resilient-feat.py`, `verify-resilient-feat.py`, `verify-resilient-calculations.py`, `reader-ability-reopen.py` and `verify-ability-reopen.py`; each has explicit input/readiness/report arguments. Reference operations must run one suite at a time through cleanup.
-
-### Automatic HP and completed user edits
-
-The desktop **Commit field edit** now delivers original Focus/Blur callbacks as
-part of completing the edit. Programmatic probe `edit` remains a separate setter;
-probe `user-edit` exercises the completed desktop-edit path. Original Constitution
-Blur updates automatic HP; fresh calculation totals alone cannot verify that the
-visible HP field changed.
-
-Bounded 2024 Bard9/10 fixed-HP qualification, including Tough removal, level-up and
-changed native/Reader reopens:
-
-```bash
-python3 tools/native/reader-hp-workflow.py --input <bard9-con12.pdf> --readiness output/testing/readiness-1793598704.json
-python3 tools/native/verify-hp-workflow.py --reader <hp.json>
-python3 tools/native/verify-hp-workflow.py --reader <hp.json> --mode legacy-widget-switch
-python3 tools/native/reader-hp-reopen.py --native <comparison.json> --readiness output/testing/readiness-1793598704.json
-python3 tools/native/verify-hp-reopen.py --reader <reopen.json>
-```
-
-Use a currently qualified reference fingerprint. These cases require their stated
-Bard9 input and actual offered HP menu items. Other classes/modes/fixtures and the
-complete editor focus/validation/buffer lifecycle remain incompletely qualified.
-
-The HP profile runner also accepts the qualified2014 Fighter5 and Ashnar Monk12
-inputs. It observes fixed HP before choosing the actual menu item, selects an
-empty feat control, and raises Constitution by2 (overrides: `--constitution` and
-`--feat-field`). The mixed-reopen runner is deliberately limited to single-class
-Bard/Fighter/Monk profiles with Tough as the only extra HP contribution.
-
-```bash
-python3 tools/native/verify-hp-progression.py --reader <mixed-reopen.json>
-```
-
-This runs the complete original removal/cold-reopen/progression sequence in
-native runtimes and checks every actual limited-feature field against each saved
-Reader phase, including visible values. Do not equate `calcHPtotals.fixed` with
-effective HP: original callbacks add Tough afterward.
+- Probe scenarios specify explicit `dialogs` replies, numeric `alerts`, and `steps` (`advance`, `edit`, `user-edit`, `eval`, `assert`, `render`, `save`). Unanswered prompts and unsupported APIs fail explicitly.
+- `MPMB_TRACE_FIELDS='Character Level'` logs initial values and script assignment stacks to stderr for debugging (keep private traces under gitignored `output/testing`).
+- `tools/native/acceptance`, `extended`, `generated`, `lifecycle`, `table-workflows`, `bookmarks`, `attachments`, `printing`, `fighting-styles`, `class-audit`, `subclass-audit`, and `sidekicks` run reproducible native checks against unique disposable copies under `output/testing`.
+- `tools/native/compare.py` and `tools/native/compare-state` compare canonical field values, widgets, appearances, decoded original document scripts, and `.Stringified` expressions between native and Adobe Acrobat Reader outputs.
+- `tools/native/verify-acrobat.py` reopens native outputs in a qualified Windows Adobe Acrobat Reader VM and independently verifies the saved PDF on Linux.
+- `tools/native/compatibility.py` writes a static API inventory report to gitignored `output/testing/native-compatibility.json` (configurable via `--output`).
+
+## Strict Original-Script Execution
+
+Original embedded MPMB scripts execute verbatim with **zero runtime overrides** (`repairs: []`). Upstream script defects in specific sheet builds (such as the 2024 `v24.2.0+261023` `ApplyWildshape` `ReferenceError` and `format2()` plain-string `countDecimals()` `TypeError`) are reproduced faithfully rather than monkey-patched.
+
+## Explicit Boundaries & Security Model
+
+- **Trusted-input boundary:** Do not deploy the desktop reader as a sandbox for untrusted arbitrary PDFs. QuickJS memory/stack limits and bounded file-import caps (16 MiB JS, 64 MiB XFDF) are enforced, but document scripts can pass local filesystem paths to the file bridge and JavaScript runs synchronously in the UI process without an execution-time interrupt. Intended strictly for trusted local MPMB sheets and user-approved add-ons.
+- **Fonts & appearances:** Rich appearances prefer original embedded TrueType faces and reuse saved Type0 appearance font programs across saves, with `MPMB_FONT` / DejaVu Sans as Unicode fallback. Proprietary fonts are not shipped; CFF installed faces and nonzero font-collection members are not supported by installed-font lookup.
+- **Acrobat-Pro-only APIs:** Authoring/Pro-only APIs unreachable in Adobe Acrobat Reader (`MPMBImportPage`, `exportAsXFDF` file write, `importAnFDF`, authoring `Template.hidden`/`extractPages`/`createTemplate`, multi-document `app.openDoc`) remain outside Reader-parity scope.
+- **Printing & attachments:** Printing tests must use controlled file destinations (`print_output_dir`) or cancel the dialog. Attachment exports require `attachment_output_dir` in probes and never overwrite existing paths.
+- **Usage-rights signatures:** Full-file PDF serialization may invalidate Adobe usage-rights signatures; Reader reopen/save roundtrips are used to verify interoperability.

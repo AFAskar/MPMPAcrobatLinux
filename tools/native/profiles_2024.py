@@ -43,7 +43,7 @@ def _stats(str_, dex, con, int_, wis, cha):
 
 
 # Each profile defines:
-#   batch: 'A' (local Reader VM) or 'B' (cloud cloud-lab Reader VM)
+#   batch: 'A' (local Reader VM) or 'B' (remote Reader VM)
 #   description: concise scope
 #   phases: list of (label, ops, check_fn_name)
 #     where ops are tuples:

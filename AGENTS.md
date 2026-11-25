@@ -1,127 +1,39 @@
-# Constraints
+# Engineering & Agent Guidelines
 
-- Atomic Commits
-- Relevant Commit Messages Per atomic commit
-- Concrete Proofs by testing Per Feature
+## Core Constraints
 
-# MPMB development environment
+- **Atomic commits:** Keep each commit focused on one cohesive change with a clear commit message.
+- **Concrete verification:** Back every feature and fix with reproducible unit/integration tests.
+- **Keep agent artifacts out of Git:** Session handoffs, compatibility audits, adversarial reviews, test logs, and generated evidence belong in agent-side artifacts or gitignored `output/` — never tracked under `docs/`.
 
-Read `docs/testing-environment.md` before changing or testing PDF behavior.
+## Local-Only Content & Privacy
 
-- Preserve the supplied PDFs under `Testing/` and at the repository root. Work on unique copies in the Windows `MPMB-Testing/runs` directory and local `output/testing`. `docs/fixtures.json` records original hashes.
-- The Windows reference is real Adobe Acrobat Reader. Run `tools/acrobat/run preflight` and `tools/acrobat/run readiness` before treating it as an oracle. A failed suite is a failure; inspect its JSON evidence and screenshots.
-- Use `tools/acrobat/run control` for serialized desktop and original MPMB JavaScript operations. Its `ready` check waits for document initialization and active calculations. Do not replace this with fixed coordinates or unverified SendKeys macros.
-- MPMB commands must run through the adapter's application menu in the target document's context. Its timers and field events depend on that context. Do not call the document's functions directly from a controller PDF.
-- Independently validate saved PDFs on Linux, including canonical fields, widgets, appearance streams and rendering. Never use a PDF library to write expected reference values into an oracle output.
-- The reference MPMB PDFs are paid Patreon content. Never commit or redistribute the PDFs or extracted document scripts; do not force-add ignored fixtures.
-- Keep private character data, generated PDFs, logs and VM checkpoints out of Git. The 2024 source checkout is reference material; the 2014 embedded scripts can be extracted with `tools/acrobat/run inventory`.
-- If the VM is managed-saved, resume with `tools/acrobat/run up` and preserve the saved RAM/process state. Reconnect the harness and rerun preflight/readiness; do not discard managed-save state as routine startup.
-- Restore a VM checkpoint only while Windows is cleanly shut down. The checkpoint tool retains pre-restore state.
+- **Never commit paid MPMB PDFs or extracted scripts:** The reference MPMB PDFs are paid Patreon content. Keep them, personal character sheets, generated PDFs, logs, and VM checkpoints strictly local (`Testing/`, `output/`, `*.pdf` are ignored). `docs/fixtures.json` records filenames and integrity hashes only.
+- **Preserve original fixtures:** Always run tests against unique disposable copies under `output/testing` (Linux) or `MPMB-Testing/runs` (Windows VM).
+- **Local environment overrides:** Configure local Windows VM usernames, SSH keys, hosts, and Python paths via a gitignored `.env` file (copied from `.env.example`) or environment variables — never hardcode machine-specific details in tracked files.
+- **Pinned submodule:** `2024_MPMBs-Character-Record-Sheet` is a pinned read-only reference submodule. Initialize with `git submodule update --init --recursive`; do not edit it or advance it implicitly.
 
-- The 2024 source is a pinned reference submodule. Initialize with `git submodule update --init --recursive`; do not edit it or advance it with `git pull`/`--remote`. Deliberate reference upgrades require a separate parent-repository commit.
+## Native Reader Architecture Invariants
 
-# Native reader implementation
+- **Single authoritative form state:** Keep QuickJS-NG (`src/runtime.rs` + `src/acrobat.js`) as the sole live form state. PDFium renders disposable flattened projections only and must not be used as a second form/JavaScript runtime.
+- **Zero runtime script overrides:** Execute original embedded MPMB scripts verbatim to match Adobe Acrobat Reader behavior. Document upstream PDF script bugs rather than monkey-patching them at runtime.
+- **Preserve MPMB `Array.prototype.find`:** Original MPMB scripts redefine `Array.prototype.find` as a regex/index lookup. Host JS and diagnostic probes must not assume standard `Array.prototype.find(predicate)` semantics after document scripts load.
+- **Keep Acrobat API boundaries faithful:**
+  - Keep canonical `/V`, raw rich spans, and formatted `/AP` display separate.
+  - Keep `Field.value` and field-event `Event.value` conversions distinct.
+  - Respect widget-local `/DA` and `/Q` before parent attributes; preserve non-leaf `/CO` calculation-order slots and named-template `/TemplateInstantiated` origins on spawned pages.
+  - Preserve embedded-font priority and verify actual PostScript identity/glyph coverage before accepting any installed fallback face.
+- **Controlled printing:** Printing tests must target controlled file destinations or cancel the dialog — never send automated jobs to a physical printer.
+- **Resource bounds:** Keep Cargo builds single-job (`-j 1`, configured in `.cargo/config.toml`) on constrained hosts to avoid OOM alongside VMs.
 
-- Keep Cargo builds at one job. The local Windows VM has 4 GiB RAM. The user authorizes parallel cloud workers and Acrobat operations on independent Windows desktops when measured memory headroom permits; serialize all operations and suites within each Reader desktop. Use isolated workspaces, explicit worker memory/CPU limits and a host memory reserve. Never run competing suites on one desktop or parallel Cargo builds. The cloud Windows VM currently has 4 vCPUs/16 GiB RAM on a 4-CPU/33-GiB host; remeasure before increasing concurrency. Avoid host OOM above throughput.
-- Run long cloud tasks and qualification runs inside tmux or GNU screen on the cloud host. Keep reconnecting local forwards in a persistent session too. A tmux session survives SSH disconnection; it does not authorize replaying uncertain PDF mutations. Recover the original request/result after reconnecting.
-- Keep a verified sleep inhibitor around long native and Reader qualification on both local and cloud hosts. tmux does not prevent host suspend, and direct Python runners bypass the inhibition in tools/acrobat/run. Check the actual inhibitor/process, not a stale session name.
-- Assign one controller to each Windows desktop. The filesystem desktop lock belongs to its runner machine; a copied harness on another machine does not share that lock. While a cloud tmux runner owns its desktop, inspect logs/status over SSH instead of submitting competing GUI commands from the laptop.
-- Keep QuickJS as the single authoritative form state. PDFium renders disposable projections; its built-in execDialog is a successful no-op and is not an alternative MPMB runtime.
-- Compatibility means all reachable MPMB workflows in all three authorized fixtures. Base-class level/proficiency checks, default dialog replies and passing smoke tests do not establish full compatibility. Record unsupported behavior and coverage gaps explicitly.
-- Separate implementation into milestones with concrete native and real Acrobat evidence before marking each milestone complete. Maintain docs/native-compatibility.json, docs/mpmb-compatibility-audit.md and docs/development-handoff.md.
-- Do not patch or override upstream MPMB document scripts at runtime (the former `mpmb-2024-261023-wildshape-pop-typo` override was explicitly removed by the user on 2026-11-22). Execute the original embedded scripts faithfully to match Adobe Acrobat Reader behavior, and document upstream PDF bugs rather than monkey-patching them.
-- Printing tests must use controlled file destinations or cancel the printer dialog; never automatically send test jobs to a physical printer.
-- Original MPMB scripts redefine `Array.prototype.find` as a regex/index lookup. Preserve that behavior. Native host code and probes must avoid assuming standard `find(predicate)` semantics after document scripts load.
-- Freeze the fingerprinted reference-harness inputs while qualification runs; see `docs/testing-environment.md`. Editing `tools/acrobat` source during readiness invalidates the entire suite, even when workflow cases passed.
-- Fixture-scoped reference readiness qualifies only its recorded fixture scope. Require the exact completed case sequence, explicit success and matching harness fingerprint; a 12-case 2024 environment report is not a full 24-case reference pass or native table-readiness proof. Include new imported reference helpers in the frozen fingerprinted inputs.
-- Run reference suites one at a time per independent desktop through completion and cleanup; do not queue multiple suites on the same desktop. Each suite must reject a pre-existing document before opening its disposable copy. A failed suite must retain/close its own document before another suite starts.
-- Scripted test replies must be valid controls/buttons offered by the actual dialog. Alert code 1 is OK, not Yes; Yes/No uses 4/3. Sidekick conversion requires explicit confirmation and base-creature hit dice; generic defaults do not exercise that class.
-- A caught scripted-dialog control rejection is still a failed probe. Retain the Rust control-error diagnostics even if the original script catches the exception or later dialogs succeed; a successful eval stage does not qualify the rejected interaction.
-- Retain Reader's returned TimeOut object in a live document variable/property. Timer-driven diagnostics must acknowledge actual invocation counts and independently verify their saved payloads; an unretained native-only timer does not establish Reader behavior.
+## Windows Adobe Acrobat Reference Harness
 
-- Diagnostics transported through a PDF text field must use ASCII-escaped JSON (or independently prove equivalent encoding). Include a Unicode sentinel and verify the saved field against a Reader code-unit/checksum summary; unescaped Unicode can be altered by the transport field itself.
-- Diagnostic event observers must catch unavailable-property getter errors locally. Letting logging throw from an original field action changes the behavior being measured; record the getter error without interrupting the event.
+Read `docs/testing-environment.md` before modifying or running Acrobat reference tests.
 
-- Keep canonical /V, raw rich spans and formatted display separate. Record comparison normalization explicitly; a check that ignores properties is not exact API equality. Reassigning copied rich colors can requantize them in Reader.
-- Qualify emitted rich XML in real Reader, including version attributes. Native parsing/rendering of its own output alone does not establish interoperability.
-
-- Respect widget-local /DA and /Q before parent field attributes when loading styles. Reader can leave the parent's /DA unchanged while saving new styles on widget zero, even when that widget belongs to an inactive template. Keep /DS defaults, widget appearance defaults and existing rich spans separate; changing defaults does not restyle existing spans.
-
-- Rich layout metrics are not interchangeable: measured first baselines use the widget-default font's PDF bounds, while later leading uses run-font typographic metrics. Qualify changes against saved Reader appearances, including mixed sizes and default/explicit spacing; do not hardcode expected coordinates. Host-layout probes that clear field actions are isolated diagnostics, not original MPMB workflow passes.
-
-- Save/reopen qualification must include subsequent edits through original field actions that regenerate appearances. An unchanged resave can retain old appearances and hide missing renderer or font support. Test embedded-face portability with system-font command lookup disabled during fresh native probes.
-- Fontconfig can successfully return an unrelated substitute. Verify actual PostScript identity and glyph coverage before claiming a requested face, and retain embedded-font priority.
-
-- Read live cross-process Windows edit contents with bounded `WM_GETTEXT`, not cached `GetWindowText` captions. Empty UIA children or abbreviated owner-drawn combo strings do not prove empty/full option lists. Keep numeric combo state separate from exact offered labels. Select editable controls by observed type, ownership and role; the first class-dialog edit is the numeric level, not the class name.
-
-- Plain text edited and restored in one runtime can still reuse its original appearance. For a rebuild qualification, save the changed value, reopen that changed snapshot, then restore/resave; independently verify that the native appearance was rebuilt. Retaining a valid old AP is not a rendering failure, but it cannot prove the new renderer works after reopen.
-
-- Launch isolated UI Automation workers without creating a console (`UseShellExecute=false`, `CreateNoWindow=true`). Hiding PowerShell after launch can steal foreground and dismiss the popup being observed. For Reader owner-drawn menus, native strings may be empty; exact labels must come from the focused Menu provider. Activate only an observed owned menu item after checking its exact accessible name, native enabled state, matching bounds and Reader hit ownership.
-
-- Match diagnostic entry points in native and Reader. Original RunUserScript executes every installed CurrentScriptFiles add-on before the manual observer; calling only the observer body natively can miss duplicate subclass registrations and produce misleading parser/identity differences. Record this side effect and compare the same original invocation in both engines.
-
-- Serialized state stored in PDF text fields must protect Unicode string values and property names from field normalization. Independently compare complete decoded imported payloads; a matching length or normalized NBSP/space comparison cannot establish preserved scripts.
-
-- An original MPMB import can catch an internal error, return true and show its final summary. Inspect original console/error output before qualifying it as successful. Keep expected-error observation/cleanup qualification separate from a clean workflow pass; retain and close the same request/document without replay.
-
-- Reader's JavaScript runtime does not define `globalThis`. Shared native/Reader diagnostics must use the target document context (for example `tDoc` properties) and Reader-supported syntax; a QuickJS-only probe passing does not establish a valid reference diagnostic.
-
-- When preserving PDF field actions in diagnostics, use PDF names `/K`, `/V`, `/F` and `/C`, not unprefixed strings. Verify nonempty expected original action code before wrapping it. MPMB's `correctRichTextLineSpacing` validation can add leading during XFDF import; do not hardcode that as an XML parser default or attribute it to Reader without an original-action control.
-
-- Keep Field.value and field-event Event.value conversion distinct. K/V/C/F event.value accepts primitive strings/numbers, reads numeric writes as strings, and rejects null/undefined/booleans/arrays/boxed objects with InvalidSetError without changing the prior event value. Direct Field.value has different coercions. Event.value's immediate getter can retain NBSP even when the later field commit normalizes it; do not normalize inside the event setter to hide commit/reentry differences.
-
-- Counted diagnostic cases must execute their intended events; require nonempty target traces when claiming event execution. An intentionally suppressed/no-op event needs an enabled positive control. Preserve invalidated coverage reports instead of treating a matching case count as coverage.
-- For plain text commits, distinguish an absent Validate action from one that only observes event.value. Reader passes a Keystroke-written value into Validate, but a present Validate action must explicitly write event.value to commit that replacement. Qualify rich/choice behavior separately and control calculation flags and observer field reads.
-
-- When a calculated mirror validates back into its primary field, distinguish cross-field reentry from same-field recursion. Preserve the outer assignment guard and qualify the actual K/V/C/F sequence. A normalized final value alone does not establish a generic post-calculation normalization rule.
-
-- Generated widgets must not reuse template appearances that can predate current field values. Qualify original generation after edited save/reopen, checking canonical and visible AP text separately; preserve live formatted display when cloning without introducing extra field events.
-
-- Preserve the actual named-template `/TemplateInstantiated` origin on newly spawned pages in both shared and renamed field modes. Reader regeneration must start from an already native-generated saved page and prove deletion/replacement across cold reopen; generation from a seed without that page cannot qualify this boundary. Do not stamp arbitrary imported/original pages as spawned templates.
-
-- A GTK tree-table role does not establish Table/Selection interfaces. Inspect offered actions. A list.select-all picker test is qualified only with exactly one known disposable file and must verify actual imported path/hash; keep default-portal/multiple-file coverage separate. JSON object-member order normalization must be disclosed while retaining all span properties and array order.
-
-- Doc.info custom conversion differs from Number(): qualify decimal and lowercase boolean literals separately from exponents, whitespace and other text. Read Authors/ContactEmail from namespaced XMP; fresh Authors arrays do not mutate document metadata. Sorted key-set/epoch comparisons do not establish raw enumeration or locale-date equality. Measure a Reader-saved input afresh when qualifying ModDate; do not compare a pre-save timestamp to a different file or normalize the change away.
-
-- Rich decoration geometry uses normalized typographic ascent, not the PDF descriptor ascent or suggested post/OS2 stroke metrics. Keep actual rounded getter/AP sizes distinct from requested sizes. Qualify held-out faces/sizes and actual save/reopen; a correct metric rule does not excuse a wrong resolved font or canonical span API mismatch.
-
-- CSS font families and PostScript identifiers are different namespaces (for example Arial/ArialMT). Family lookup must validate actual family and face style, preserve embedded-font priority, and reject unrelated Fontconfig substitutes. Persistence tests must inspect actual AP faces/text after saved changes and fresh reopens; getter equality alone cannot detect retained or substituted appearances.
-
-- Rich decoration coercion differs between defaultStyle, committed field spans and immediate Event.richValue. Invalid span flags can inherit defaults; explicit underline "none" records an empty enum and an explicit strike flag, while copying those getter values back can elide them. Qualify each boundary and changed save/reopen rather than normalizing event observations or dropping flags from comparisons.
-
-- Calculation order includes non-leaf PDF references that can have no executable action. Preserve those physical slots and references: calcOrderIndex counts them. Registration/replacement/clearing must update the authoritative order and survive native/Reader save/reopen. Separate executable-action counts from raw CO-slot counts; level/proficiency checks do not prove calculated resource maxima.
-
-- User sequencing (2026-11-09): focus implementation and thorough qualification on the 2024 fixture first. Begin further 2014/Ashnar feature qualification only after 2024 meets its functional release gates in docs/2024-readiness.md. Existing evidence remains historical; safely finish/clean up already-active reference suites. The overall three-fixture goal stays active.
-- User priority: calculations, genuine class/subclass choices, resources, spells, imports and reliable save/reopen take priority over cosmetic font/pixel differences. Continue checking that visible values are present, but keep remaining appearance fidelity explicit instead of letting it displace functional workflow repairs.
-
-- Explicit calculateNow does not override disabled app/document calculation; display delay is independent. Class operations can retain calcStop until their menu callback returns and calcCont runs. Qualify separate user actions with readiness checks; synchronous intermediate snapshots are not completed table states. Enumerate actual resource field names rather than assuming a row count.
-- Pass accepted rest names or regexes to original `resetLimFeaUsed`; `true` returns without resetting anything. Prove selective rest behavior with spent short-rest and long-rest resources together, rather than an unchanged long-rest counter alone. Preserve invalidated no-op coverage reports.
-
-- Reader alert Static text doubles literal ampersands. Automation result JSON must escape ampersands before alert delivery, including keys, values and errors, and apply its size limit after escaping. Qualify with Reader numeric UTF-16 summaries plus saved PDF values and full preflight/readiness. Do not interpret old doubled text as field/save behavior or silently relabel failed reports.
-
-- The user authorizes cloud-lab (existing SSH alias) and its Windows lab for parallel compatibility work, including resetting/replacing the lab guest and using the host as needed. Keep native jobs and outputs isolated; serialize each Reader instance and independently qualify its environment. Do not share bridge state/queues/locks across references or infer cloud readiness from the local VM. No parallel agents are required. Preserve original fixtures and keep every private snapshot/result out of Git.
-
-- In the qualified Bard slot controls, Reader saves checked AP entries but can omit Off entirely. Verify actual widget AS and checked appearance, recording absent Off as no appearance; an explicit Off stream is not a universal requirement. Keep raw representations and real checked/unchecked render evidence separate from canonical values.
-
-- Page activation must use the pointer release's coordinates/modifiers, not the frame's final key/pointer state. MPMB uses Shift/Ctrl/Cmd for spell options; cancelled popups return `null`, which original `getMenu` explicitly requires.
-- In spell-row move tests, reverse from the spell's actual new row. Observe prepared-mark migration separately rather than assuming it follows the moved spell.
-
-- Dialog controls exist before initialize: qualified Reader defaults are empty plain/readonly edits, string zero for editable non-popup SpinEdit controls, static-text labels and false check/radio values. Descriptor name is not an edit initial value. Do not let rendering invent button entries in dialog.store().
-- In the ability-score dialog, distinguish a pending feat bonus from its explicit application. Use observed editable RICHEDIT controls and the paste command's value argument; do not assume the native class is Edit.
-
-- Distinguish programmatic field assignment from a completed desktop edit. Original Constitution Blur recalculates automatic HP; qualify focus transitions and completed edits with nonempty original-event traces, selected HP mode, feat removal/progression and changed mixed-engine reopens. Passing calculation totals alone does not prove the HP field was updated.
-- `calcHPtotals` can report base HP while original HP callbacks add feat contributions afterward (Tough is a qualified example). Compare automatic HP with its original effective mapping/menu state and independent feat/Constitution deltas; do not assume the raw totals object's fixed member includes every feature.
-
-- Subclass audit success requires inspecting original caught errors and console messages in both execution and reopen, not just level/assertion success. Do not resume unchecked historical cases or across changed runtime binaries. Generic sidekick default dialogs are invalid qualification; keep explicit conversion/base-HD profiles separate. Preserve raw invalidated reports and publish the correction alongside them.
-- Prove console observers with a known positive sentinel in Reader before using an empty capture as clean evidence; do not assume native console methods accept replacement. `tools/native/reader-console.py` reads the observed debugger's live RichEdit text. Close that exact debugger before further document-menu commands, which reject blocking dialogs.
-- Native keyboard qualification requires an owned, viewable window and verified input focus. On KDE/Wayland, `_NET_ACTIVE_WINDOW` alone did not establish X11 keyboard delivery. Use an authenticated isolated Xvfb display when synthesized input cannot be verified; retain failed desktop probes without counting their keys as completed user actions.
-- Use unique build-validation artifact paths across binaries. Preserve the original test counts and raw logs; do not let a later successful build overwrite the evidence linked from an earlier milestone. Record any artifact loss or correction explicitly.
-
-- For keyboard activation, locate the active widget through the field's Kids and actual page annotations. The base Portrait field can focus widget zero on an inactive template; the observed active widget-qualified field (`Portrait.1` in the qualified input) focuses the visible page. Derive the index rather than hardcoding it, and retain failed focus probes. This does not change widget-zero precedence for global style getters.
-- Native-Elements strips mnemonic ampersands from button names, while click_dialog_control checks raw WM_GETTEXT captions. Do not guess a raw mnemonic caption after a guard rejection. Use the observed named-control adapter and verify its actual dialog transition, or add a properly qualified raw-caption observation in the interactive worker. An SSH Session0 process cannot validate interactive Session1 HWND ownership/text.
-- Compare complete large stored payloads raw first, then parse only unequal/unique values within explicit memory bounds. Do not batch repeated imported scripts unnecessarily or raise a failed process's memory cap as a substitute for bounded comparison. Keep raw mismatch/process-failure evidence separate from any normalized data or syntax comparison.
-- Memory cgroups charge file-cache pages as well as process RSS. Before cloning a large VM disk under a worker limit, prove bounded I/O on disposable data and inspect memory.events/peak; buffered cp exceeded a1GiB scope despite ample host RAM. Prefer verified direct-I/O conversion/comparison for this environment. Keep the original-guest restart supervisor outside the limited child scope: an OOM SIGKILL bypasses Python finally blocks. A per-vCPU quota is not a total-domain quota; verify global_quota/cgroup cpu.max when claiming a total worker CPU limit.
-
-- A diagnostic carrier can feed calculated mirrors on generated pages. Exclude explicitly named self-dependent carrier aliases from that same observer snapshot, disclose the exclusion, and independently qualify those aliases on clean saved character values. Do not classify observer-induced mismatches as product failures.
-- Clear a diagnostic character-name carrier to a known clean name before opening original class dialogs. The dialog uses that value in its header; JSON payloads can stretch the dialog beyond the desktop and invalidate keyboard/visibility probes. Preserve the earlier diagnostic evidence and qualify the resulting character state separately.
-- CurrentStats.applied is historical state, not a generic pending-bonus predicate. The qualified2024 Body and Mind workflow retains true after class removal/readdition while the newly added bonus still awaits explicit Apply. Compare full original Reader transition state; do not drop or normalize this flag.
+- Run `tools/acrobat/run preflight` and `tools/acrobat/run readiness` before treating a Windows Reader VM as an oracle.
+- Serialize all operations and suites per Windows desktop; never queue competing suites on the same desktop.
+- Execute MPMB commands through the adapter's application menu in the target document's context (`tools/acrobat/run control`), not from an external controller PDF or unverified fixed-coordinate macros.
+- Freeze fingerprinted `tools/acrobat` inputs while a qualification run is active.
+- Independently validate saved PDFs on Linux (`pypdf` canonical fields, widgets, appearance streams, decoded original scripts, and Poppler renders); never write expected oracle values with a PDF library.
+- Retain failed probe diagnostics and close/retain failed documents cleanly instead of silently replaying mutations or hiding caught errors.
+- If the local VM is managed-saved, resume with `tools/acrobat/run up`; restore checkpoints only while Windows is cleanly shut down.
