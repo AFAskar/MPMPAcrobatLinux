@@ -21,7 +21,7 @@
     selectedField: null,
     activeInteraction: null,
     retiredInteractionKeys: new Set(),
-    inFlightInteractionId: null,
+    inFlightInteractionKey: null,
     suppressNextBlurSubmit: false,
     stepChain: Promise.resolve(),
     ws: null,
@@ -1393,19 +1393,31 @@
 
   function closeAcrobatModal(clearedId = null, clearedServerInstanceId = null) {
     if (clearedId) {
+      const clearedKey = interactionKey({
+        id: clearedId,
+        serverInstanceId: clearedServerInstanceId,
+      });
       retireInteraction(clearedId, clearedServerInstanceId);
-      if (appState.activeInteraction && appState.activeInteraction.id !== clearedId) {
+      if (appState.activeInteraction && interactionKey(appState.activeInteraction) !== clearedKey) {
         return;
       }
+      if (appState.inFlightInteractionKey === clearedKey) {
+        appState.inFlightInteractionKey = null;
+      }
     } else if (appState.activeInteraction) {
+      const activeKey = interactionKey(appState.activeInteraction);
       retireInteraction(
         appState.activeInteraction.id,
         appState.activeInteraction.serverInstanceId
       );
+      if (appState.inFlightInteractionKey === activeKey) {
+        appState.inFlightInteractionKey = null;
+      }
+    } else {
+      appState.inFlightInteractionKey = null;
     }
     $('acrobat-modal').classList.add('hidden');
     appState.activeInteraction = null;
-    appState.inFlightInteractionId = null;
     appState.suppressNextBlurSubmit = false;
   }
 
@@ -1426,23 +1438,25 @@
     const inter = appState.activeInteraction;
     if (!inter) return;
     const interId = inter.id;
+    const interServerId = inter.serverInstanceId || appState.lastServerInstanceId || '';
+    const interKey = interactionKey({ id: interId, serverInstanceId: interServerId });
     appState.suppressNextBlurSubmit = false;
-    if (appState.inFlightInteractionId === interId) return;
-    appState.inFlightInteractionId = interId;
+    if (appState.inFlightInteractionKey === interKey) return;
+    appState.inFlightInteractionKey = interKey;
     const wasUnopened = !appState.sheet || !appState.sheet.open;
     try {
       const res = await api(`/api/session/interaction/${encodeURIComponent(interId)}`, {
         method: 'POST',
         json: reply,
       });
-      if (appState.inFlightInteractionId === interId) {
-        appState.inFlightInteractionId = null;
+      if (appState.inFlightInteractionKey === interKey) {
+        appState.inFlightInteractionKey = null;
       }
       if (res.status === 'interaction_required' && res.interaction) {
-        retireInteraction(interId, inter.serverInstanceId);
+        retireInteraction(interId, interServerId);
         openAcrobatInteraction(res.interaction);
       } else {
-        closeAcrobatModal(interId, inter.serverInstanceId);
+        closeAcrobatModal(interId, interServerId);
         if (res.state) {
           applySessionState(res.state);
           if (wasUnopened && res.state.open) {
@@ -1452,14 +1466,17 @@
         }
       }
     } catch (err) {
-      if (appState.inFlightInteractionId === interId) {
-        appState.inFlightInteractionId = null;
+      if (appState.inFlightInteractionKey === interKey) {
+        appState.inFlightInteractionKey = null;
       }
       if (err.status === 409) {
-        closeAcrobatModal(interId, inter.serverInstanceId);
+        closeAcrobatModal(interId, interServerId);
         showBanner(err.message, 'err');
-      } else if (appState.activeInteraction && appState.activeInteraction.id === interId) {
-        closeAcrobatModal(interId, inter.serverInstanceId);
+      } else if (
+        appState.activeInteraction &&
+        interactionKey(appState.activeInteraction) === interKey
+      ) {
+        closeAcrobatModal(interId, interServerId);
         showBanner(err.message, 'err');
       }
     }
@@ -1590,6 +1607,11 @@
         switchTab('play');
       }
     } catch (err) {
+      if (err.status === 409 && err.data && err.data.status === 'interaction_required' && err.data.interaction) {
+        openAcrobatInteraction(err.data.interaction);
+        showBanner('Finish or cancel the active dialog before switching sheets', 'warn', 5000);
+        return;
+      }
       const target = err.data && err.data.discardTarget;
       if (
         err.status === 409 &&

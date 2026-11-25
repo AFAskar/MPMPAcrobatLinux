@@ -16,7 +16,7 @@ PWA_HARNESS = textwrap.dedent(
 
     const source = fs.readFileSync(process.argv[process.argv.length - 1], 'utf8').replace(
       '  // Boot\n  updateConnDot();\n  connectWs();\n  refreshAll();',
-      '  globalThis.harness = { appState, applySessionState, openFieldEditorByName, enqueueStep, currentSessionRef, editField, activateField, openSheet, doGitPull, refreshSession, connectWs, openAcrobatInteraction, closeAcrobatModal };'
+      '  globalThis.harness = { appState, applySessionState, openFieldEditorByName, enqueueStep, currentSessionRef, editField, activateField, openSheet, doGitPull, refreshSession, connectWs, openAcrobatInteraction, closeAcrobatModal, submitInteraction };'
     );
 
     const elements = new Map();
@@ -106,6 +106,7 @@ PWA_HARNESS = textwrap.dedent(
       connectWs,
       openAcrobatInteraction,
       closeAcrobatModal,
+      submitInteraction,
     } = context.harness;
 
     function jsonResp(payload, status = 200) {
@@ -374,11 +375,48 @@ PWA_HARNESS = textwrap.dedent(
       closeAcrobatModal('int-79', 'srv-3');
       assert.equal(appState.activeInteraction, null);
 
-      // New server generation (srv-4) can cleanly reuse id 'int-77' without false collision!
+      // New server generation (srv-4) can cleanly reuse id 'int-77' without false collision,
+      // AND a delayed 409 error from srv-3:int-77 must NOT close srv-4:int-77!
       assert.equal(openAcrobatInteraction({ ...alert77, serverInstanceId: 'srv-4' }), true);
       assert.equal(appState.activeInteraction.id, 'int-77');
       assert.equal(appState.activeInteraction.serverInstanceId, 'srv-4');
-      closeAcrobatModal('int-77', 'srv-4');
+      closeAcrobatModal('int-77', 'srv-3');
+      assert.equal(
+        appState.activeInteraction.serverInstanceId,
+        'srv-4',
+        'closeAcrobatModal must compare full (serverInstanceId, id) identity'
+      );
+
+      // In-flight error from srv-4:int-77 after srv-5:int-77 opened must not close srv-5:int-77.
+      let rejectSrv4Reply;
+      fetchHandler = (path) => {
+        if (path.startsWith('/api/session/interaction/')) {
+          return new Promise((_, rej) => { rejectSrv4Reply = rej; });
+        }
+        throw new Error('Unexpected submit test fetch ' + path);
+      };
+      const pendingReply = submitInteraction({ button: 1, checked: false });
+      assert.equal(appState.inFlightInteractionKey, 'srv-4:int-77');
+      assert.equal(openAcrobatInteraction({ ...alert77, serverInstanceId: 'srv-5' }), true);
+      rejectSrv4Reply(Object.assign(new Error('stale'), { status: 409 }));
+      await pendingReply;
+      assert.equal(appState.activeInteraction.serverInstanceId, 'srv-5');
+      closeAcrobatModal('int-77', 'srv-5');
+
+      // 9. openSheet receiving 409 interaction_required surfaces the active dialog without discard confirm.
+      let openInteractionConfirms = 0;
+      confirmHandler = () => { openInteractionConfirms += 1; return true; };
+      const blockingModal = { ...alert77, id: 'srv-5-int-2', serverInstanceId: 'srv-5' };
+      fetchHandler = async (path) => {
+        if (path === '/api/session/open') {
+          return jsonResp({ status: 'interaction_required', error: 'active dialog', interaction: blockingModal }, 409);
+        }
+        throw new Error('Unexpected open interaction fetch ' + path);
+      };
+      await openSheet('Beta.pdf');
+      assert.equal(openInteractionConfirms, 0);
+      assert.equal(appState.activeInteraction.id, 'srv-5-int-2');
+      closeAcrobatModal('srv-5-int-2', 'srv-5');
 
       console.log('PWA_CLIENT_REGRESSIONS_OK');
     })().catch((err) => {
