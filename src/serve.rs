@@ -4043,13 +4043,20 @@ mod tests {
             )
             .await
         });
-        // Wait until Job B is actually registered in flight while alert is still not open.
+        // Wait until Job B is actually registered in flight while alert is still not open,
+        // failing explicitly if the observation loop times out.
+        let mut observed_queued = false;
         for _ in 0..500 {
             if state_handle.bridge.in_flight_jobs.lock().unwrap().len() >= 2 {
+                observed_queued = true;
                 break;
             }
             tokio::time::sleep(Duration::from_millis(2)).await;
         }
+        assert!(
+            observed_queued,
+            "timed out waiting to observe Job B queued in flight"
+        );
         assert!(
             state_handle.bridge.active_public().is_none(),
             "Job B must have queued while Job A's alert was still unopened"
