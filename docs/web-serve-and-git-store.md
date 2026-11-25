@@ -15,7 +15,7 @@
 - **Git/GitHub concrete store (`src/storage.rs`)**:
   - Shells out to system `git` (zero `libgit2` build overhead) using an SSH deploy key (`MPMB_GIT_SSH_KEY`) or transient `GIT_ASKPASS` HTTPS token (`MPMB_GIT_TOKEN`).
   - Atomic local saves with an external-modification SHA-256 conflict guard.
-  - Writes a human-readable `<sheet>.state.json` sidecar beside `<sheet>.pdf` so `git log -p` on GitHub shows readable stat/HP/level diffs while the `.pdf` remains authoritative.
+  - Writes a human-readable `<sheet>.pdf.state.json` sidecar beside `<sheet>.pdf` so `git log -p` on GitHub shows readable stat/HP/level diffs while the `.pdf` remains authoritative.
   - **Zero-data-loss divergence protection**: If `git push` is rejected (`non-fast-forward`), local commits are automatically pushed to `conflict/<host>-<timestamp>` instead of overwriting or failing silently.
   - Configurable idle auto-sync (`--git-auto-sync-secs`, default `300`, `0` disables) avoids bloating binary Git history on every HP tap.
 
@@ -46,7 +46,11 @@ podman build -t localhost/mpmb-reader:latest -f Containerfile .
 # Import directly into a k3s node's containerd (or push to your private registry / GHCR)
 podman save localhost/mpmb-reader:latest | ssh <k3s-node> 'sudo /usr/local/bin/k3s ctr images import -'
 
-# Deploy manifests (customize packaging/k8s/ingress.yaml and git-secret.example.yaml first)
+# 1. Create namespace and apply your customized (or SOPS-decrypted) Git/auth Secrets BEFORE deploying:
+kubectl apply -f packaging/k8s/namespace.yaml
+kubectl apply -f /path/to/your-mpmb-secrets.yaml   # adapted from packaging/k8s/git-secret.example.yaml
+
+# 2. Customize packaging/k8s/ingress.yaml (host + TLS Secret/ClusterIssuer), then deploy:
 kubectl apply -k packaging/k8s/
 ```
 

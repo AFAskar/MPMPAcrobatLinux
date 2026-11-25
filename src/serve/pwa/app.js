@@ -10,10 +10,15 @@
     zoom: 1.0,
     pageWidgets: [],
     pageSize: [612, 792],
+    pageLoadSeq: 0,
     selectedField: null,
     activeInteraction: null,
+    inFlightInteractionId: null,
+    suppressNextBlurSubmit: false,
+    stepChain: Promise.resolve(),
     ws: null,
     wsConnected: false,
+    wsHasConnectedOnce: false,
     offline: !navigator.onLine,
     busy: false,
     modalValues: {},
@@ -115,15 +120,29 @@
     const data = ct.includes('application/json') ? await res.json() : await res.text();
     if (!res.ok) {
       const msg = typeof data === 'object' && data && data.error ? data.error : String(data || res.statusText);
-      throw new Error(msg);
+      const err = new Error(msg);
+      err.status = res.status;
+      err.data = data;
+      throw err;
     }
     return data;
+  }
+
+  function clearSwApiCache() {
+    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({ type: 'CLEAR_API_CACHE' });
+    }
   }
 
   $('auth-token-save').addEventListener('click', async () => {
     appState.token = $('auth-token-input').value.trim();
     localStorage.setItem('mpmb_auth_token', appState.token);
+    clearSwApiCache();
     $('auth-modal').classList.add('hidden');
+    if (appState.ws) {
+      try { appState.ws.close(); } catch (_) {}
+      appState.ws = null;
+    }
     connectWs();
     await refreshAll();
   });
@@ -138,9 +157,14 @@
     const ws = new WebSocket(`${proto}//${location.host}/ws${qs}`);
     appState.ws = ws;
     ws.onopen = () => {
+      const isReconnect = appState.wsHasConnectedOnce;
+      appState.wsHasConnectedOnce = true;
       appState.wsConnected = true;
       appState.offline = false;
       updateConnDot();
+      if (isReconnect) {
+        refreshSession();
+      }
     };
     ws.onclose = () => {
       appState.wsConnected = false;
@@ -156,6 +180,8 @@
         const msg = JSON.parse(ev.data);
         if (msg.type === 'state_updated' && msg.state) {
           applySessionState(msg.state);
+        } else if (msg.type === 'resync_required') {
+          refreshSession();
         } else if (msg.type === 'interaction_requested' && msg.interaction) {
           openAcrobatInteraction(msg.interaction);
         } else if (msg.type === 'interaction_cleared') {
@@ -233,8 +259,12 @@
     renderPlay();
     renderTools();
     renderGit();
+    const forceBtn = $('btn-force-save');
+    if (forceBtn) {
+      forceBtn.classList.toggle('hidden', !state.saveConflict);
+    }
     if (state.saveConflict) {
-      showBanner('File changed externally on disk — pull latest or Force Save from the Git tab', 'warn', 0);
+      showBanner('File changed externally on disk — pull latest or tap Force Save in the Git tab', 'warn', 0);
     }
     if (state.activeInteraction) {
       openAcrobatInteraction(state.activeInteraction);
@@ -395,12 +425,20 @@
       minus.type = 'button';
       minus.className = 'btn small';
       minus.textContent = '−';
-      minus.addEventListener('click', () => editField(r.usedField, String(Math.max(0, usedNum - 1)), 'user'));
+      minus.addEventListener('click', () => enqueueStep(() => {
+        const latest = (appState.sheet?.resources || []).find((x) => x.usedField === r.usedField);
+        const curUsed = parseInt((latest ? latest.used : r.used) || '0', 10) || 0;
+        return editField(r.usedField, String(Math.max(0, curUsed - 1)), 'user');
+      }));
       const plus = document.createElement('button');
       plus.type = 'button';
       plus.className = 'btn small accent';
       plus.textContent = '+';
-      plus.addEventListener('click', () => editField(r.usedField, String(usedNum + 1), 'user'));
+      plus.addEventListener('click', () => enqueueStep(() => {
+        const latest = (appState.sheet?.resources || []).find((x) => x.usedField === r.usedField);
+        const curUsed = parseInt((latest ? latest.used : r.used) || '0', 10) || 0;
+        return editField(r.usedField, String(curUsed + 1), 'user');
+      }));
       ctrls.appendChild(minus);
       ctrls.appendChild(plus);
       row.appendChild(ctrls);
@@ -430,22 +468,31 @@
     });
   }
 
+  function enqueueStep(fn) {
+    appState.stepChain = appState.stepChain.then(() => fn()).catch(() => {});
+    return appState.stepChain;
+  }
+
   // HP Quick Steppers & Quick Actions
   document.querySelectorAll('[data-hp-delta]').forEach((btn) => {
     btn.addEventListener('click', () => {
-      if (!appState.sheet || !appState.sheet.open) return;
-      const v = appState.sheet.vitals || {};
-      const cur = parseInt(v.hpCurrent, 10);
-      const max = parseInt(v.hpMax, 10);
-      const base = isNaN(cur) ? (isNaN(max) ? 0 : max) : cur;
       const delta = parseInt(btn.dataset.hpDelta, 10);
-      const next = Math.max(0, base + delta);
-      editField('HP Current', String(next), 'user');
+      enqueueStep(() => {
+        if (!appState.sheet || !appState.sheet.open) return;
+        const v = appState.sheet.vitals || {};
+        const cur = parseInt(v.hpCurrent, 10);
+        const max = parseInt(v.hpMax, 10);
+        const base = isNaN(cur) ? (isNaN(max) ? 0 : max) : cur;
+        const next = Math.max(0, base + delta);
+        return editField('HP Current', String(next), 'user');
+      });
     });
   });
   $('btn-hp-full').addEventListener('click', () => {
-    const max = appState.sheet?.vitals?.hpMax;
-    if (max) editField('HP Current', String(max), 'user');
+    enqueueStep(() => {
+      const max = appState.sheet?.vitals?.hpMax;
+      if (max) return editField('HP Current', String(max), 'user');
+    });
   });
   $('btn-hp-edit').addEventListener('click', () => openFieldEditorByName('HP Current'));
   $('btn-hp-temp').addEventListener('click', () => openFieldEditorByName('HP Temp'));
@@ -491,8 +538,10 @@
 
   async function loadPdfPage() {
     if (!appState.sheet || !appState.sheet.open) return;
+    const seq = ++appState.pageLoadSeq;
     const page = appState.page;
     const rev = appState.sheet.revision;
+    const sheetPath = appState.sheet.path || '';
     const maxPages = appState.sheet.pageCount || 1;
     $('page-label').textContent = `${page + 1} / ${maxPages}`;
     $('btn-prev-page').disabled = page <= 0;
@@ -501,11 +550,13 @@
 
     const width = Math.min(1800, Math.max(900, Math.round(window.innerWidth * (window.devicePixelRatio || 2))));
     const tokenQs = appState.token ? `&token=${encodeURIComponent(appState.token)}` : '';
-    const imgUrl = `/api/session/page/${page}/image?w=${width}&rev=${rev}${tokenQs}`;
+    const sheetQs = `&sheet=${encodeURIComponent(sheetPath)}&rev=${encodeURIComponent(String(rev))}`;
+    const imgUrl = `/api/session/page/${page}/image?w=${width}${sheetQs}${tokenQs}`;
     $('pdf-img').src = imgUrl;
 
     try {
-      const wdata = await api(`/api/session/page/${page}/widgets`);
+      const wdata = await api(`/api/session/page/${page}/widgets?sheet=${encodeURIComponent(sheetPath)}&rev=${encodeURIComponent(String(rev))}`);
+      if (seq !== appState.pageLoadSeq) return;
       appState.pageWidgets = wdata.widgets || [];
       appState.pageSize = wdata.pageSize || [612, 792];
       renderPdfOverlay();
@@ -715,9 +766,16 @@
     if (res.message) showBanner(res.message, 'ok', 3000);
   }
 
+  function currentSheetPath() {
+    return appState.sheet && appState.sheet.open ? appState.sheet.path : undefined;
+  }
+
   async function editField(field, value, mode = 'user') {
     try {
-      const res = await api('/api/session/edit', { method: 'POST', json: { field, value, mode } });
+      const res = await api('/api/session/edit', {
+        method: 'POST',
+        json: { field, value, mode, sheet: currentSheetPath() },
+      });
       await handleActionResponse(res);
     } catch (err) {
       showBanner(err.message, 'err');
@@ -728,7 +786,7 @@
     try {
       const res = await api('/api/session/activate', {
         method: 'POST',
-        json: { field, index, shift, modifier },
+        json: { field, index, shift, modifier, sheet: currentSheetPath() },
       });
       await handleActionResponse(res);
     } catch (err) {
@@ -738,7 +796,10 @@
 
   async function invokeMenu(name) {
     try {
-      const res = await api('/api/session/menu', { method: 'POST', json: { name } });
+      const res = await api('/api/session/menu', {
+        method: 'POST',
+        json: { name, sheet: currentSheetPath() },
+      });
       await handleActionResponse(res);
     } catch (err) {
       showBanner(err.message, 'err');
@@ -747,7 +808,10 @@
 
   async function runCommand(action) {
     try {
-      const res = await api('/api/session/command', { method: 'POST', json: { action } });
+      const res = await api('/api/session/command', {
+        method: 'POST',
+        json: { action, sheet: currentSheetPath() },
+      });
       await handleActionResponse(res);
     } catch (err) {
       showBanner(err.message, 'err');
@@ -756,7 +820,10 @@
 
   async function runBookmark(path) {
     try {
-      const res = await api('/api/session/bookmark', { method: 'POST', json: { path } });
+      const res = await api('/api/session/bookmark', {
+        method: 'POST',
+        json: { path, sheet: currentSheetPath() },
+      });
       await handleActionResponse(res);
     } catch (err) {
       showBanner(err.message, 'err');
@@ -864,12 +931,12 @@
     const visible = req.visible || {};
     const red = req.red || {};
 
-    function renderNode(el) {
+    function renderNode(el, parentDisabled = false) {
       if (!el) return null;
       const id = el.item_id || '';
       const kind = el.type || 'view';
       if (visible[id] === false || (typeof el.height === 'number' && el.height < 0)) return null;
-      const disabled = enabled[id] === false;
+      const disabled = parentDisabled || enabled[id] === false;
 
       if (Array.isArray(el.elements)) {
         if (kind === 'cluster') {
@@ -882,7 +949,7 @@
           const inner = document.createElement('div');
           inner.className = el.align_children === 'align_row' ? 'ac-row' : 'ac-col';
           el.elements.forEach((c) => {
-            const child = renderNode(c);
+            const child = renderNode(c, disabled);
             if (child) inner.appendChild(child);
           });
           det.appendChild(inner);
@@ -891,7 +958,7 @@
         const wrap = document.createElement('div');
         wrap.className = (el.align_children === 'align_row' || el.align_children === 'align_distribute') ? 'ac-row' : 'ac-col';
         el.elements.forEach((c) => {
-          const child = renderNode(c);
+          const child = renderNode(c, disabled);
           if (child) wrap.appendChild(child);
         });
         return wrap;
@@ -932,6 +999,7 @@
         okBtn.className = 'btn primary';
         okBtn.disabled = disabled;
         okBtn.textContent = el.ok_name || 'OK';
+        okBtn.addEventListener('pointerdown', () => { appState.suppressNextBlurSubmit = true; });
         okBtn.addEventListener('click', () => submitInteraction({ result: 'ok', values: appState.modalValues }));
         row.appendChild(okBtn);
         if (kind === 'ok_cancel_other') {
@@ -940,6 +1008,7 @@
           otherBtn.className = 'btn';
           otherBtn.disabled = disabled;
           otherBtn.textContent = el.other_name || 'Other';
+          otherBtn.addEventListener('pointerdown', () => { appState.suppressNextBlurSubmit = true; });
           otherBtn.addEventListener('click', () => submitInteraction({ result: 'other', values: appState.modalValues }));
           row.appendChild(otherBtn);
         }
@@ -948,6 +1017,7 @@
           cancelBtn.type = 'button';
           cancelBtn.className = 'btn';
           cancelBtn.textContent = el.cancel_name || 'Cancel';
+          cancelBtn.addEventListener('pointerdown', () => { appState.suppressNextBlurSubmit = true; });
           cancelBtn.addEventListener('click', () => submitInteraction({ result: 'cancel', values: appState.modalValues }));
           row.appendChild(cancelBtn);
         }
@@ -1084,6 +1154,10 @@
         });
         inp.addEventListener('change', () => {
           appState.modalValues[id] = inp.value;
+          if (appState.suppressNextBlurSubmit) {
+            appState.suppressNextBlurSubmit = false;
+            return;
+          }
           submitInteraction({ event: id, values: appState.modalValues });
         });
         wrap.appendChild(inp);
@@ -1146,6 +1220,7 @@
     cancelBtn.type = 'button';
     cancelBtn.className = 'btn';
     cancelBtn.textContent = 'Close / Cancel';
+    cancelBtn.addEventListener('pointerdown', () => { appState.suppressNextBlurSubmit = true; });
     cancelBtn.addEventListener('click', () => submitInteraction({ result: 'cancel', values: appState.modalValues }));
     footer.appendChild(cancelBtn);
 
@@ -1155,8 +1230,11 @@
   function closeAcrobatModal() {
     $('acrobat-modal').classList.add('hidden');
     appState.activeInteraction = null;
+    appState.inFlightInteractionId = null;
+    appState.suppressNextBlurSubmit = false;
   }
 
+  $('am-close').addEventListener('pointerdown', () => { appState.suppressNextBlurSubmit = true; });
   $('am-close').addEventListener('click', () => {
     const inter = appState.activeInteraction;
     if (!inter) return closeAcrobatModal();
@@ -1172,16 +1250,25 @@
   async function submitInteraction(reply) {
     const inter = appState.activeInteraction;
     if (!inter) return;
+    const interId = inter.id;
+    appState.suppressNextBlurSubmit = false;
+    if (appState.inFlightInteractionId === interId) return;
+    appState.inFlightInteractionId = interId;
     const wasUnopened = !appState.sheet || !appState.sheet.open;
     try {
-      const res = await api(`/api/session/interaction/${encodeURIComponent(inter.id)}`, {
+      const res = await api(`/api/session/interaction/${encodeURIComponent(interId)}`, {
         method: 'POST',
         json: reply,
       });
+      if (appState.inFlightInteractionId === interId) {
+        appState.inFlightInteractionId = null;
+      }
       if (res.status === 'interaction_required' && res.interaction) {
         openAcrobatInteraction(res.interaction);
       } else {
-        closeAcrobatModal();
+        if (appState.activeInteraction && appState.activeInteraction.id === interId) {
+          closeAcrobatModal();
+        }
         if (res.state) {
           applySessionState(res.state);
           if (wasUnopened && res.state.open) {
@@ -1191,8 +1278,13 @@
         }
       }
     } catch (err) {
-      closeAcrobatModal();
-      showBanner(err.message, 'err');
+      if (appState.inFlightInteractionId === interId) {
+        appState.inFlightInteractionId = null;
+      }
+      if (appState.activeInteraction && appState.activeInteraction.id === interId) {
+        closeAcrobatModal();
+        showBanner(err.message, 'err');
+      }
     }
   }
 
@@ -1308,10 +1400,10 @@
     });
   }
 
-  async function openSheet(path) {
+  async function openSheet(path, force = false) {
     try {
       showBanner(`Loading ${path}…`, 'warn', 0);
-      const res = await api('/api/session/open', { method: 'POST', json: { path } });
+      const res = await api('/api/session/open', { method: 'POST', json: { path, force } });
       appState.page = 0;
       await handleActionResponse(res);
       if (res.status !== 'interaction_required') {
@@ -1319,17 +1411,27 @@
         switchTab('play');
       }
     } catch (err) {
+      if (err.status === 409 && !force && confirm(`${err.message}\n\nDiscard unsaved edits and open ${path}?`)) {
+        return openSheet(path, true);
+      }
       showBanner(err.message, 'err');
     }
   }
 
-  async function doSaveNow() {
+  async function doSaveNow(force = false) {
+    if (force && !confirm('Overwrite the externally modified PDF on disk with your current in-memory session?')) {
+      return;
+    }
     try {
-      const res = await api('/api/session/save', { method: 'POST', json: {} });
+      const res = await api('/api/session/save', {
+        method: 'POST',
+        json: { force, sheet: currentSheetPath() },
+      });
       if (res.state) applySessionState(res.state);
       showBanner(res.message || 'Saved PDF to disk', 'ok', 3000);
       await refreshLibrary();
     } catch (err) {
+      if (err.data && err.data.state) applySessionState(err.data.state);
       showBanner(err.message, 'err');
     }
   }
@@ -1349,21 +1451,26 @@
     }
   }
 
-  async function doGitPull() {
+  async function doGitPull(force = false) {
     try {
       showBanner('Pulling latest from GitHub…', 'warn', 0);
-      const res = await api('/api/git/pull', { method: 'POST', json: {} });
+      const res = await api('/api/git/pull', { method: 'POST', json: { force } });
       if (res.state) applySessionState(res.state);
       showBanner(res.pull?.message || 'Pull complete', res.pull?.dirty ? 'warn' : 'ok', 5000);
       await refreshLibrary();
     } catch (err) {
+      if (err.data && err.data.state) applySessionState(err.data.state);
+      if (err.status === 409 && !force && String(err.message).includes('unsaved edits') && confirm(`${err.message}\n\nDiscard unsaved edits and pull latest?`)) {
+        return doGitPull(true);
+      }
       showBanner(err.message, 'err', 7000);
     }
   }
 
   $('btn-git-sync').addEventListener('click', () => doGitSync($('git-commit-msg').value.trim()));
-  $('btn-git-pull').addEventListener('click', doGitPull);
-  $('btn-save-now').addEventListener('click', doSaveNow);
+  $('btn-git-pull').addEventListener('click', () => doGitPull(false));
+  $('btn-save-now').addEventListener('click', () => doSaveNow(false));
+  $('btn-force-save').addEventListener('click', () => doSaveNow(true));
 
   $('file-upload').addEventListener('change', async (ev) => {
     const file = ev.target.files?.[0];
@@ -1372,11 +1479,23 @@
     try {
       showBanner(`Uploading ${file.name}…`, 'warn', 0);
       const buf = await file.arrayBuffer();
-      await api(`/api/sheets/upload?name=${encodeURIComponent(file.name)}&overwrite=true`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/pdf' },
-        body: buf,
-      });
+      try {
+        await api(`/api/sheets/upload?name=${encodeURIComponent(file.name)}&overwrite=false`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/pdf' },
+          body: buf,
+        });
+      } catch (err) {
+        if (err.status === 409 && confirm(`A sheet named "${file.name}" already exists. Overwrite it?`)) {
+          await api(`/api/sheets/upload?name=${encodeURIComponent(file.name)}&overwrite=true`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/pdf' },
+            body: buf,
+          });
+        } else {
+          throw err;
+        }
+      }
       showBanner(`Uploaded ${file.name}`, 'ok', 3000);
       await refreshLibrary();
     } catch (err) {

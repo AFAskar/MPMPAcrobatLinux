@@ -33,8 +33,6 @@ spec:
               value: "0.0.0.0:8080"
             - name: MPMB_DATA_DIR
               value: "/data/sheets"
-            - name: MPMB_GIT_BRANCH
-              value: "main"
             - name: MPMB_GIT_AUTO_SYNC_SECS
               value: "300"
           envFrom:
