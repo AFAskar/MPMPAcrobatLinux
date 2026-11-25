@@ -1017,8 +1017,8 @@ mod tests {
             );
         }
 
-        let (norm, abs) = store.resolve_safe_pdf_path("campaign/Ashnar.pdf").unwrap();
-        assert_eq!(norm, "campaign/Ashnar.pdf");
+        let (norm, abs) = store.resolve_safe_pdf_path("campaign/hero.pdf").unwrap();
+        assert_eq!(norm, "campaign/hero.pdf");
         assert!(abs.starts_with(store.root()));
         let _ = fs::remove_dir_all(&root);
     }

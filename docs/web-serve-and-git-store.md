@@ -46,12 +46,12 @@ podman build -t localhost/mpmb-reader:latest -f Containerfile .
 # Import directly into a k3s node's containerd (or push to your private registry / GHCR)
 podman save localhost/mpmb-reader:latest | ssh <k3s-node> 'sudo /usr/local/bin/k3s ctr images import -'
 
-# Deploy manifests (customize packaging/k8s/git-secret.example.yaml with SOPS first)
+# Deploy manifests (customize packaging/k8s/ingress.yaml and git-secret.example.yaml first)
 kubectl apply -k packaging/k8s/
 ```
 
 ## iOS Setup
 
-1. Connect your iPhone to your private VPN or LAN (with split DNS resolving `*.example.internal`).
-2. Install and trust your internal TLS Root CA certificate (`Settings → General → VPN & Device Management`, then `Settings → General → About → Certificate Trust Settings`).
+1. Ensure your iPhone can reach your cluster over your private VPN or LAN (with DNS resolving your chosen Ingress host, e.g., `mpmb.example.internal`).
+2. If using a private/internal TLS CA, install and trust its root certificate (`Settings → General → VPN & Device Management`, then `Settings → General → About → Certificate Trust Settings`).
 3. Open `https://mpmb.example.internal` in Safari, tap **Share → Add to Home Screen** for full-screen standalone PWA mode with safe-area support and offline caching.
