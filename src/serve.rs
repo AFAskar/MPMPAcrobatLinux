@@ -1379,18 +1379,20 @@ impl AppState {
         &self,
         rx: mpsc::Receiver<Result<T>>,
         timeout_msg: &'static str,
-    ) -> std::result::Result<Result<T>, Response> {
+    ) -> std::result::Result<Result<T>, Box<Response>> {
         let mut int_rx = self.interaction_rx.clone();
         if let Some((_, interaction)) = int_rx.borrow().clone() {
-            return Err((
-                StatusCode::CONFLICT,
-                Json(json!({
-                    "status": "interaction_required",
-                    "error": "A dialog or alert is currently waiting for a response",
-                    "interaction": interaction,
-                })),
-            )
-                .into_response());
+            return Err(Box::new(
+                (
+                    StatusCode::CONFLICT,
+                    Json(json!({
+                        "status": "interaction_required",
+                        "error": "A dialog or alert is currently waiting for a response",
+                        "interaction": interaction,
+                    })),
+                )
+                    .into_response(),
+            ));
         }
         let mut recv_fut = Box::pin(tokio::task::spawn_blocking(move || {
             rx.recv_timeout(Duration::from_secs(60))
@@ -1401,15 +1403,15 @@ impl AppState {
                 res = &mut recv_fut => {
                     return match res {
                         Ok(Ok(inner)) => Ok(inner),
-                        _ => Err(err_response(StatusCode::GATEWAY_TIMEOUT, timeout_msg)),
+                        _ => Err(Box::new(err_response(StatusCode::GATEWAY_TIMEOUT, timeout_msg))),
                     };
                 }
                 changed = int_rx.changed() => {
                     if changed.is_err() {
-                        return Err(err_response(StatusCode::INTERNAL_SERVER_ERROR, "sheet worker terminated"));
+                        return Err(Box::new(err_response(StatusCode::INTERNAL_SERVER_ERROR, "sheet worker terminated")));
                     }
                     if let Some((_, interaction)) = int_rx.borrow().clone() {
-                        return Err((
+                        return Err(Box::new((
                             StatusCode::CONFLICT,
                             Json(json!({
                                 "status": "interaction_required",
@@ -1417,7 +1419,7 @@ impl AppState {
                                 "interaction": interaction,
                             })),
                         )
-                            .into_response());
+                            .into_response()));
                     }
                 }
             }
@@ -1868,7 +1870,7 @@ async fn handle_session_state(
                 )
                     .into_response();
             }
-            resp
+            *resp
         }
     }
 }
@@ -1901,7 +1903,7 @@ async fn handle_get_field(
     {
         Ok(Ok(v)) => Json(v).into_response(),
         Ok(Err(e)) => err_response(StatusCode::NOT_FOUND, format!("{e:#}")),
-        Err(resp) => resp,
+        Err(resp) => *resp,
     }
 }
 
@@ -2062,7 +2064,7 @@ async fn handle_page_image(
             };
             err_response(status, msg)
         }
-        Err(resp) => resp,
+        Err(resp) => *resp,
     }
 }
 
@@ -2089,7 +2091,7 @@ async fn handle_page_widgets(
     match state.await_sync_read(rx, "timed out reading widgets").await {
         Ok(Ok(v)) => ([(header::VARY, "Authorization")], Json(v)).into_response(),
         Ok(Err(e)) => err_response(StatusCode::BAD_REQUEST, format!("{e:#}")),
-        Err(resp) => resp,
+        Err(resp) => *resp,
     }
 }
 
