@@ -225,8 +225,39 @@ pub struct ServeConfig {
     pub store: StoreConfig,
     pub default_sheet: Option<String>,
     pub auth_token: Option<String>,
+    pub allow_unauthenticated: bool,
     pub autosave: bool,
     pub git_auto_sync_secs: u64,
+}
+
+static SERVER_INSTANCE_SEQ: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Default)]
+struct StoreSyncTracker {
+    last_write_at: Mutex<Option<Instant>>,
+}
+
+impl StoreSyncTracker {
+    fn mark_dirty(&self) {
+        *self.last_write_at.lock().unwrap() = Some(Instant::now());
+    }
+
+    fn clear(&self) {
+        *self.last_write_at.lock().unwrap() = None;
+    }
+
+    fn is_dirty(&self) -> bool {
+        self.last_write_at.lock().unwrap().is_some()
+    }
+
+    fn is_idle_due(&self, idle_secs: u64) -> bool {
+        idle_secs > 0
+            && self
+                .last_write_at
+                .lock()
+                .unwrap()
+                .is_some_and(|t| t.elapsed() >= Duration::from_secs(idle_secs))
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -461,15 +492,23 @@ enum WorkerCommand {
     },
     GetField {
         name: String,
+        expected_sheet: Option<String>,
+        expected_session: Option<String>,
         reply: mpsc::SyncSender<Result<Value>>,
     },
     GetPageWidgets {
         page: i32,
+        expected_sheet: Option<String>,
+        expected_session: Option<String>,
+        expected_rev: Option<u64>,
         reply: mpsc::SyncSender<Result<Value>>,
     },
     RenderPagePng {
         page: i32,
         width: usize,
+        expected_sheet: Option<String>,
+        expected_session: Option<String>,
+        expected_rev: Option<u64>,
         reply: mpsc::SyncSender<Result<Vec<u8>>>,
     },
     Edit {
@@ -480,6 +519,7 @@ enum WorkerCommand {
         value: Value,
         mode: String,
         expected_sheet: Option<String>,
+        expected_session: Option<String>,
     },
     Activate {
         job_id: u64,
@@ -490,6 +530,7 @@ enum WorkerCommand {
         shift: bool,
         modifier: bool,
         expected_sheet: Option<String>,
+        expected_session: Option<String>,
     },
     InvokeMenu {
         job_id: u64,
@@ -497,6 +538,7 @@ enum WorkerCommand {
         done: watch::Sender<Option<JobOutcome>>,
         name: String,
         expected_sheet: Option<String>,
+        expected_session: Option<String>,
     },
     RunCommand {
         job_id: u64,
@@ -504,6 +546,7 @@ enum WorkerCommand {
         done: watch::Sender<Option<JobOutcome>>,
         action: String,
         expected_sheet: Option<String>,
+        expected_session: Option<String>,
     },
     RunBookmark {
         job_id: u64,
@@ -511,6 +554,7 @@ enum WorkerCommand {
         done: watch::Sender<Option<JobOutcome>>,
         path: String,
         expected_sheet: Option<String>,
+        expected_session: Option<String>,
     },
     SaveNow {
         job_id: u64,
@@ -518,6 +562,7 @@ enum WorkerCommand {
         done: watch::Sender<Option<JobOutcome>>,
         force: bool,
         expected_sheet: Option<String>,
+        expected_session: Option<String>,
     },
     GitSync {
         job_id: u64,
@@ -541,14 +586,14 @@ enum WorkerCommand {
 
 struct ActiveSheet {
     rel_path: String,
+    session_id: String,
     pdf: Arc<Pdf>,
     rt: Runtime,
     disk_sha256: String,
     revision: u64,
     dirty_since_save: bool,
     sidecar_dirty: bool,
-    dirty_since_sync: bool,
-    last_edit_at: Option<Instant>,
+    last_tick: Instant,
     projected: Option<(u64, Vec<u8>)>,
     page_pngs: BTreeMap<(i32, u64, usize), Vec<u8>>,
     page_sizes: BTreeMap<(i32, u64), (f32, f32)>,
@@ -557,6 +602,10 @@ struct ActiveSheet {
 struct SheetWorker {
     store: Arc<SheetStore>,
     bridge: Arc<InteractionBridge>,
+    sync_tracker: Arc<StoreSyncTracker>,
+    job_seq: Arc<AtomicU64>,
+    server_instance_id: String,
+    session_seq: u64,
     renderer: Option<Renderer>,
     autosave: bool,
     capabilities: HostCapabilities,
@@ -566,145 +615,319 @@ struct SheetWorker {
 
 impl SheetWorker {
     fn run(mut self, rx: mpsc::Receiver<WorkerCommand>) {
-        while let Ok(cmd) = rx.recv() {
-            match cmd {
-                WorkerCommand::GetState { reply } => {
-                    let _ = reply.send(self.build_state_payload());
-                }
-                WorkerCommand::GetField { name, reply } => {
-                    let _ = reply.send(self.inspect_field(&name));
-                }
-                WorkerCommand::GetPageWidgets { page, reply } => {
-                    let _ = reply.send(self.page_widgets(page));
-                }
-                WorkerCommand::RenderPagePng { page, width, reply } => {
-                    let _ = reply.send(self.render_page_png(page, width));
-                }
-                WorkerCommand::CheckIdleAutoSync {
-                    job_id,
-                    gate,
-                    done,
-                    idle_secs,
-                } => {
-                    let should_sync = idle_secs > 0
-                        && self.store.git_enabled()
-                        && self.active.as_ref().is_some_and(|sh| {
-                            sh.dirty_since_sync
-                                && sh
-                                    .last_edit_at
-                                    .is_some_and(|t| t.elapsed() >= Duration::from_secs(idle_secs))
-                        });
-                    if should_sync {
-                        self.run_job(job_id, gate, done, |w| {
-                            w.do_git_sync("Auto-sync MPMB session")
-                        });
-                    } else {
-                        let _ = done.send(Some(Ok(json!({"status": "skipped"}))));
-                        self.bridge.finish_job(job_id);
+        loop {
+            let wait = self
+                .active
+                .as_ref()
+                .map(|sh| Duration::from_millis(100).saturating_sub(sh.last_tick.elapsed()))
+                .unwrap_or_else(|| Duration::from_millis(100));
+            match rx.recv_timeout(wait) {
+                Ok(cmd) => {
+                    self.handle_command(cmd);
+                    if self
+                        .active
+                        .as_ref()
+                        .is_some_and(|sh| sh.last_tick.elapsed() >= Duration::from_millis(100))
+                    {
+                        self.tick_timers();
                     }
                 }
-                WorkerCommand::Open {
-                    job_id,
-                    gate,
-                    done,
-                    rel_path,
-                    force,
-                } => {
-                    self.run_job(job_id, gate, done, |w| w.open_sheet(&rel_path, force));
+                Err(mpsc::RecvTimeoutError::Timeout) => self.tick_timers(),
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+    }
+
+    fn tick_timers(&mut self) {
+        let elapsed = {
+            let Some(sh) = self.active.as_mut() else {
+                return;
+            };
+            let elapsed = sh.last_tick.elapsed().as_millis() as u64;
+            if elapsed < 50 {
+                return;
+            }
+            let has_timers = sh
+                .rt
+                .diagnostics()
+                .ok()
+                .and_then(|d| d.get("timers").and_then(Value::as_u64))
+                .unwrap_or(0)
+                > 0;
+            if !has_timers {
+                sh.last_tick = Instant::now();
+                return;
+            }
+            elapsed
+        };
+        let job_id = self.job_seq.fetch_add(1, Ordering::SeqCst);
+        let (done_tx, done_rx) = watch::channel(None);
+        self.bridge.register_job(job_id, done_rx);
+        self.bridge.set_current_job(job_id);
+
+        let (prev_rev, adv_res, next_rev) = {
+            let sh = self.active.as_mut().unwrap();
+            sh.last_tick = Instant::now();
+            let prev = sh.revision;
+            let res = sh.rt.advance(elapsed);
+            let next = sh
+                .rt
+                .eval("__host.revision")
+                .ok()
+                .and_then(|v| v.as_u64())
+                .unwrap_or(prev);
+            (prev, res, next)
+        };
+
+        let outcome: JobOutcome = if next_rev != prev_rev {
+            let mut_res = self.after_mutation();
+            if let Err(err) = adv_res {
+                let msg = format!("Timer callback failed: {err:#}");
+                let _ = self.bridge.events_tx.send(json!({
+                    "type": "error",
+                    "message": msg,
+                }));
+                if let Ok(val) = &mut_res {
+                    if let Some(state) = val.get("state") {
+                        let _ = self.bridge.events_tx.send(json!({
+                            "type": "state_updated",
+                            "state": state,
+                        }));
+                    }
                 }
-                WorkerCommand::Edit {
-                    job_id,
-                    gate,
-                    done,
-                    field,
-                    value,
-                    mode,
-                    expected_sheet,
-                } => {
+                Err((StatusCode::BAD_REQUEST, json!({"error": msg})))
+            } else {
+                match mut_res {
+                    Ok(val) => {
+                        if let Some(state) = val.get("state") {
+                            let _ = self.bridge.events_tx.send(json!({
+                                "type": "state_updated",
+                                "state": state,
+                            }));
+                        }
+                        if val.get("status").and_then(Value::as_str) == Some("conflict") {
+                            Err((StatusCode::CONFLICT, val))
+                        } else {
+                            Ok(val)
+                        }
+                    }
+                    Err(err) => {
+                        let msg = format!("{err:#}");
+                        let _ = self.bridge.events_tx.send(json!({
+                            "type": "error",
+                            "message": msg,
+                        }));
+                        Err((StatusCode::BAD_REQUEST, json!({"error": msg})))
+                    }
+                }
+            }
+        } else if let Err(err) = adv_res {
+            let msg = format!("Timer callback failed: {err:#}");
+            let _ = self.bridge.events_tx.send(json!({
+                "type": "error",
+                "message": msg,
+            }));
+            Err((StatusCode::BAD_REQUEST, json!({"error": msg})))
+        } else {
+            Ok(json!({"status": "idle"}))
+        };
+
+        let _ = self.bridge.interaction_tx.send(None);
+        let _ = done_tx.send(Some(outcome));
+        self.bridge.finish_job(job_id);
+    }
+
+    fn handle_command(&mut self, cmd: WorkerCommand) {
+        match cmd {
+            WorkerCommand::GetState { reply } => {
+                let _ = reply.send(self.build_state_payload());
+            }
+            WorkerCommand::GetField {
+                name,
+                expected_sheet,
+                expected_session,
+                reply,
+            } => {
+                let res = self
+                    .verify_expected_target(expected_sheet.as_deref(), expected_session.as_deref())
+                    .and_then(|()| self.inspect_field(&name));
+                let _ = reply.send(res);
+            }
+            WorkerCommand::GetPageWidgets {
+                page,
+                expected_sheet,
+                expected_session,
+                expected_rev,
+                reply,
+            } => {
+                let res = self.page_widgets(
+                    page,
+                    expected_sheet.as_deref(),
+                    expected_session.as_deref(),
+                    expected_rev,
+                );
+                let _ = reply.send(res);
+            }
+            WorkerCommand::RenderPagePng {
+                page,
+                width,
+                expected_sheet,
+                expected_session,
+                expected_rev,
+                reply,
+            } => {
+                let res = self.render_page_png(
+                    page,
+                    width,
+                    expected_sheet.as_deref(),
+                    expected_session.as_deref(),
+                    expected_rev,
+                );
+                let _ = reply.send(res);
+            }
+            WorkerCommand::CheckIdleAutoSync {
+                job_id,
+                gate,
+                done,
+                idle_secs,
+            } => {
+                let should_sync = idle_secs > 0
+                    && self.store.git_enabled()
+                    && self.sync_tracker.is_idle_due(idle_secs);
+                if should_sync {
                     self.run_job(job_id, gate, done, |w| {
-                        w.verify_expected_sheet(expected_sheet.as_deref())?;
-                        w.edit_field(&field, &value, &mode)
+                        w.do_git_sync("Auto-sync MPMB session")
                     });
+                } else {
+                    let _ = done.send(Some(Ok(json!({"status": "skipped"}))));
+                    self.bridge.finish_job(job_id);
                 }
-                WorkerCommand::Activate {
-                    job_id,
-                    gate,
-                    done,
-                    field,
-                    index,
-                    shift,
-                    modifier,
-                    expected_sheet,
-                } => {
-                    self.run_job(job_id, gate, done, |w| {
-                        w.verify_expected_sheet(expected_sheet.as_deref())?;
-                        w.activate_field(&field, index, shift, modifier)
-                    });
-                }
-                WorkerCommand::InvokeMenu {
-                    job_id,
-                    gate,
-                    done,
-                    name,
-                    expected_sheet,
-                } => {
-                    self.run_job(job_id, gate, done, |w| {
-                        w.verify_expected_sheet(expected_sheet.as_deref())?;
-                        w.invoke_menu(&name)
-                    });
-                }
-                WorkerCommand::RunCommand {
-                    job_id,
-                    gate,
-                    done,
-                    action,
-                    expected_sheet,
-                } => {
-                    self.run_job(job_id, gate, done, |w| {
-                        w.verify_expected_sheet(expected_sheet.as_deref())?;
-                        w.run_command(&action)
-                    });
-                }
-                WorkerCommand::RunBookmark {
-                    job_id,
-                    gate,
-                    done,
-                    path,
-                    expected_sheet,
-                } => {
-                    self.run_job(job_id, gate, done, |w| {
-                        w.verify_expected_sheet(expected_sheet.as_deref())?;
-                        w.run_bookmark(&path)
-                    });
-                }
-                WorkerCommand::SaveNow {
-                    job_id,
-                    gate,
-                    done,
-                    force,
-                    expected_sheet,
-                } => {
-                    self.run_job(job_id, gate, done, |w| {
-                        w.verify_expected_sheet(expected_sheet.as_deref())?;
-                        w.save_active(force)
-                    });
-                }
-                WorkerCommand::GitSync {
-                    job_id,
-                    gate,
-                    done,
-                    message,
-                } => {
-                    self.run_job(job_id, gate, done, |w| w.do_git_sync(&message));
-                }
-                WorkerCommand::GitPull {
-                    job_id,
-                    gate,
-                    done,
-                    force,
-                } => {
-                    self.run_job(job_id, gate, done, |w| w.do_git_pull(force));
-                }
+            }
+            WorkerCommand::Open {
+                job_id,
+                gate,
+                done,
+                rel_path,
+                force,
+            } => {
+                self.run_job(job_id, gate, done, |w| w.open_sheet(&rel_path, force));
+            }
+            WorkerCommand::Edit {
+                job_id,
+                gate,
+                done,
+                field,
+                value,
+                mode,
+                expected_sheet,
+                expected_session,
+            } => {
+                self.run_job(job_id, gate, done, |w| {
+                    w.verify_expected_target(
+                        expected_sheet.as_deref(),
+                        expected_session.as_deref(),
+                    )?;
+                    w.edit_field(&field, &value, &mode)
+                });
+            }
+            WorkerCommand::Activate {
+                job_id,
+                gate,
+                done,
+                field,
+                index,
+                shift,
+                modifier,
+                expected_sheet,
+                expected_session,
+            } => {
+                self.run_job(job_id, gate, done, |w| {
+                    w.verify_expected_target(
+                        expected_sheet.as_deref(),
+                        expected_session.as_deref(),
+                    )?;
+                    w.activate_field(&field, index, shift, modifier)
+                });
+            }
+            WorkerCommand::InvokeMenu {
+                job_id,
+                gate,
+                done,
+                name,
+                expected_sheet,
+                expected_session,
+            } => {
+                self.run_job(job_id, gate, done, |w| {
+                    w.verify_expected_target(
+                        expected_sheet.as_deref(),
+                        expected_session.as_deref(),
+                    )?;
+                    w.invoke_menu(&name)
+                });
+            }
+            WorkerCommand::RunCommand {
+                job_id,
+                gate,
+                done,
+                action,
+                expected_sheet,
+                expected_session,
+            } => {
+                self.run_job(job_id, gate, done, |w| {
+                    w.verify_expected_target(
+                        expected_sheet.as_deref(),
+                        expected_session.as_deref(),
+                    )?;
+                    w.run_command(&action)
+                });
+            }
+            WorkerCommand::RunBookmark {
+                job_id,
+                gate,
+                done,
+                path,
+                expected_sheet,
+                expected_session,
+            } => {
+                self.run_job(job_id, gate, done, |w| {
+                    w.verify_expected_target(
+                        expected_sheet.as_deref(),
+                        expected_session.as_deref(),
+                    )?;
+                    w.run_bookmark(&path)
+                });
+            }
+            WorkerCommand::SaveNow {
+                job_id,
+                gate,
+                done,
+                force,
+                expected_sheet,
+                expected_session,
+            } => {
+                self.run_job(job_id, gate, done, |w| {
+                    w.verify_expected_target(
+                        expected_sheet.as_deref(),
+                        expected_session.as_deref(),
+                    )?;
+                    w.save_active(force)
+                });
+            }
+            WorkerCommand::GitSync {
+                job_id,
+                gate,
+                done,
+                message,
+            } => {
+                self.run_job(job_id, gate, done, |w| w.do_git_sync(&message));
+            }
+            WorkerCommand::GitPull {
+                job_id,
+                gate,
+                done,
+                force,
+            } => {
+                self.run_job(job_id, gate, done, |w| w.do_git_pull(force));
             }
         }
     }
@@ -765,19 +988,52 @@ impl SheetWorker {
         self.bridge.finish_job(job_id);
     }
 
-    fn verify_expected_sheet(&self, expected: Option<&str>) -> Result<()> {
-        let Some(exp) = expected.map(str::trim).filter(|s| !s.is_empty()) else {
-            return Ok(());
-        };
-        let active_path = self
-            .active
-            .as_ref()
-            .map(|s| s.rel_path.as_str())
-            .unwrap_or("<none>");
-        if active_path != exp {
-            bail!(
-                "conflict: active sheet changed (expected '{exp}', active is '{active_path}'); refresh before retrying"
-            );
+    fn verify_expected_target(
+        &self,
+        expected_sheet: Option<&str>,
+        expected_session: Option<&str>,
+    ) -> Result<()> {
+        if let Some(exp) = expected_sheet.map(str::trim).filter(|s| !s.is_empty()) {
+            let active_path = self
+                .active
+                .as_ref()
+                .map(|s| s.rel_path.as_str())
+                .unwrap_or("<none>");
+            if active_path != exp {
+                bail!(
+                    "conflict: active sheet changed (expected '{exp}', active is '{active_path}'); refresh before retrying"
+                );
+            }
+        }
+        if let Some(exp_sess) = expected_session.map(str::trim).filter(|s| !s.is_empty()) {
+            let active_sess = self
+                .active
+                .as_ref()
+                .map(|s| s.session_id.as_str())
+                .unwrap_or("<none>");
+            if active_sess != exp_sess {
+                bail!(
+                    "conflict: active sheet session changed (expected '{exp_sess}', active is '{active_sess}'); refresh before retrying"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn verify_page_target(
+        &self,
+        expected_sheet: Option<&str>,
+        expected_session: Option<&str>,
+        expected_rev: Option<u64>,
+        current_rev: u64,
+    ) -> Result<()> {
+        self.verify_expected_target(expected_sheet, expected_session)?;
+        if let Some(exp_rev) = expected_rev {
+            if exp_rev != current_rev {
+                bail!(
+                    "conflict: active sheet revision changed (expected rev {exp_rev}, active is rev {current_rev}); refresh before retrying"
+                );
+            }
         }
         Ok(())
     }
@@ -818,16 +1074,18 @@ impl SheetWorker {
             .ok()
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
+        self.session_seq += 1;
+        let session_id = format!("{}-s{}", self.server_instance_id, self.session_seq);
         self.active = Some(ActiveSheet {
             rel_path: norm,
+            session_id,
             pdf,
             rt,
             disk_sha256: sha,
             revision,
             dirty_since_save: false,
             sidecar_dirty: false,
-            dirty_since_sync: false,
-            last_edit_at: None,
+            last_tick: Instant::now(),
             projected: None,
             page_pngs: BTreeMap::new(),
             page_sizes: BTreeMap::new(),
@@ -841,10 +1099,13 @@ impl SheetWorker {
         let git = self.store.git_status()?;
         let active_interaction = self.bridge.active_public();
         let state_seq = self.bridge.next_state_seq();
+        let dirty_since_sync = self.sync_tracker.is_dirty();
         let Some(sh) = &self.active else {
             return Ok(json!({
                 "open": false,
+                "serverInstanceId": self.server_instance_id,
                 "stateSeq": state_seq,
+                "dirtySinceSync": dirty_since_sync,
                 "git": git,
                 "pdfium": self.renderer.is_some(),
                 "activeInteraction": active_interaction,
@@ -856,11 +1117,13 @@ impl SheetWorker {
             .as_object_mut()
             .ok_or_else(|| anyhow!("state extraction did not return an object"))?;
         obj.insert("open".into(), json!(true));
+        obj.insert("serverInstanceId".into(), json!(self.server_instance_id));
+        obj.insert("sessionId".into(), json!(sh.session_id));
         obj.insert("stateSeq".into(), json!(state_seq));
         obj.insert("path".into(), json!(sh.rel_path));
         obj.insert("diskSha256".into(), json!(sh.disk_sha256));
         obj.insert("dirtySinceSave".into(), json!(sh.dirty_since_save));
-        obj.insert("dirtySinceSync".into(), json!(sh.dirty_since_sync));
+        obj.insert("dirtySinceSync".into(), json!(dirty_since_sync));
         obj.insert("diagnostics".into(), diagnostics);
         obj.insert("git".into(), serde_json::to_value(&git)?);
         obj.insert("pdfium".into(), json!(self.renderer.is_some()));
@@ -911,8 +1174,16 @@ impl SheetWorker {
         Ok((rev, bytes))
     }
 
-    fn page_widgets(&mut self, page: i32) -> Result<Value> {
+    fn page_widgets(
+        &mut self,
+        page: i32,
+        expected_sheet: Option<&str>,
+        expected_session: Option<&str>,
+        expected_rev: Option<u64>,
+    ) -> Result<Value> {
+        self.verify_expected_target(expected_sheet, expected_session)?;
         let (rev, projected) = self.ensure_projected()?;
+        self.verify_page_target(expected_sheet, expected_session, expected_rev, rev)?;
         let sh = self.active.as_mut().context("no sheet is open")?;
         let widgets = sh
             .rt
@@ -934,6 +1205,8 @@ impl SheetWorker {
             (612.0, 792.0)
         };
         Ok(json!({
+            "sheet": sh.rel_path,
+            "sessionId": sh.session_id,
             "page": page,
             "revision": rev,
             "pageSize": [size.0, size.1],
@@ -941,10 +1214,19 @@ impl SheetWorker {
         }))
     }
 
-    fn render_page_png(&mut self, page: i32, width: usize) -> Result<Vec<u8>> {
+    fn render_page_png(
+        &mut self,
+        page: i32,
+        width: usize,
+        expected_sheet: Option<&str>,
+        expected_session: Option<&str>,
+        expected_rev: Option<u64>,
+    ) -> Result<Vec<u8>> {
+        self.verify_expected_target(expected_sheet, expected_session)?;
         let width = width.clamp(320, 2200);
         let quantized_w = ((width as f32 / 64.0).round() as usize * 64).clamp(320, 2200);
         let (rev, projected) = self.ensure_projected()?;
+        self.verify_page_target(expected_sheet, expected_session, expected_rev, rev)?;
         let sh = self.active.as_mut().context("no sheet is open")?;
         if let Some(png) = sh.page_pngs.get(&(page, rev, quantized_w)) {
             return Ok(png.clone());
@@ -970,6 +1252,7 @@ impl SheetWorker {
     }
 
     fn after_mutation(&mut self) -> Result<Value> {
+        let mut mutated = false;
         {
             let sh = self.active.as_mut().context("no sheet is open")?;
             let _ = sh.rt.ready();
@@ -985,9 +1268,11 @@ impl SheetWorker {
                 sh.page_pngs.clear();
                 sh.page_sizes.clear();
                 sh.dirty_since_save = true;
-                sh.dirty_since_sync = true;
-                sh.last_edit_at = Some(Instant::now());
+                mutated = true;
             }
+        }
+        if mutated {
+            self.sync_tracker.mark_dirty();
         }
         let mut save_conflict: Option<SaveResult> = None;
         if self.autosave && self.active.as_ref().is_some_and(|s| s.dirty_since_save) {
@@ -1008,16 +1293,38 @@ impl SheetWorker {
         Ok(json!({"status": "ok", "state": state}))
     }
 
+    fn finish_mutation(&mut self, eval_result: Result<()>) -> Result<Value> {
+        let rev_before = self.active.as_ref().map(|s| s.revision);
+        // Reconcile sheet revision, dirty tracking, autosave, and projected
+        // cache even if the script threw after partially mutating fields.
+        let mutation = self.after_mutation();
+        let rev_after = self.active.as_ref().map(|s| s.revision);
+        if let Err(err) = eval_result {
+            if rev_after != rev_before {
+                if let Ok(val) = &mutation {
+                    if let Some(state) = val.get("state") {
+                        let _ = self.bridge.events_tx.send(json!({
+                            "type": "state_updated",
+                            "state": state,
+                        }));
+                    }
+                }
+            }
+            return Err(err);
+        }
+        mutation
+    }
+
     fn edit_field(&mut self, field: &str, value: &Value, mode: &str) -> Result<Value> {
-        {
+        let eval_result = {
             let sh = self.active.as_ref().context("no sheet is open")?;
             match mode {
-                "choice" => sh.rt.select_choice(field, value)?,
-                "direct" => sh.rt.edit(field, value)?,
-                _ => sh.rt.user_edit(field, value)?,
+                "choice" => sh.rt.select_choice(field, value),
+                "direct" => sh.rt.edit(field, value),
+                _ => sh.rt.user_edit(field, value),
             }
-        }
-        self.after_mutation()
+        };
+        self.finish_mutation(eval_result)
     }
 
     fn activate_field(
@@ -1027,70 +1334,65 @@ impl SheetWorker {
         shift: bool,
         modifier: bool,
     ) -> Result<Value> {
-        {
+        let eval_result = {
             let sh = self.active.as_ref().context("no sheet is open")?;
             let qname = serde_json::to_string(field)?;
             let mods = json!({"shift": shift, "modifier": modifier});
             sh.rt
-                .eval(&format!("__host.activate({qname},{index},{mods})"))?;
-        }
-        self.after_mutation()
+                .eval(&format!("__host.activate({qname},{index},{mods})"))
+                .map(|_| ())
+        };
+        self.finish_mutation(eval_result)
     }
 
     fn invoke_menu(&mut self, name: &str) -> Result<Value> {
         let eval_result = {
             let sh = self.active.as_ref().context("no sheet is open")?;
             let qname = serde_json::to_string(name)?;
-            sh.rt.eval(&format!("__host.invokeMenu({qname})"))
+            sh.rt
+                .eval(&format!("__host.invokeMenu({qname})"))
+                .map(|_| ())
         };
-        // Reconcile sheet revision/dirty state even if the menu script threw
-        // after mutating fields, then propagate the original evaluation error.
-        let mutation = self.after_mutation();
-        eval_result?;
-        mutation
+        self.finish_mutation(eval_result)
     }
 
     fn run_command(&mut self, action: &str) -> Result<Value> {
-        {
+        let script = match action {
+            "short_rest" => Some((
+                true,
+                "if(typeof resetLimFeaUsed==='function')resetLimFeaUsed('short rest');calculateNow();",
+            )),
+            "long_rest" => Some((
+                true,
+                "if(typeof resetLimFeaUsed==='function')resetLimFeaUsed('long rest');var hm=getField('HP Max'),hc=getField('HP Current');if(hm&&hc&&hm.valueAsString)hc.value=hm.valueAsString;calculateNow();",
+            )),
+            "spell_sheet" => Some((true, "GenerateSpellSheet()")),
+            "add_companion" => Some((true, "DoTemplate('AScomp','Add',null,true)")),
+            "add_wildshape" => Some((true, "DoTemplate('WSfront','Add',null,true)")),
+            "recalculate" => Some((false, "calculateNow()")),
+            other => bail!("unsupported command action: {other}"),
+        };
+        let eval_result = {
             let sh = self.active.as_ref().context("no sheet is open")?;
-            match action {
-                "short_rest" => {
-                    sh.rt.command(
-                        "if(typeof resetLimFeaUsed==='function')resetLimFeaUsed('short rest');calculateNow();",
-                    )?;
-                }
-                "long_rest" => {
-                    sh.rt.command(
-                        "if(typeof resetLimFeaUsed==='function')resetLimFeaUsed('long rest');var hm=getField('HP Max'),hc=getField('HP Current');if(hm&&hc&&hm.valueAsString)hc.value=hm.valueAsString;calculateNow();",
-                    )?;
-                }
-                "spell_sheet" => {
-                    sh.rt.command("GenerateSpellSheet()")?;
-                }
-                "add_companion" => {
-                    sh.rt.command("DoTemplate('AScomp','Add',null,true)")?;
-                }
-                "add_wildshape" => {
-                    sh.rt.command("DoTemplate('WSfront','Add',null,true)")?;
-                }
-                "recalculate" => {
-                    sh.rt.eval("calculateNow()")?;
-                }
-                other => bail!("unsupported command action: {other}"),
+            let (is_command, code) = script.unwrap();
+            if is_command {
+                sh.rt.command(code)
+            } else {
+                sh.rt.eval(code).map(|_| ())
             }
-        }
-        self.after_mutation()
+        };
+        self.finish_mutation(eval_result)
     }
 
     fn run_bookmark(&mut self, path: &str) -> Result<Value> {
         if !is_safe_bookmark_path(path) {
             bail!("invalid bookmark path");
         }
-        {
+        let eval_result = {
             let sh = self.active.as_ref().context("no sheet is open")?;
-            sh.rt.eval(&format!("{path}.execute()"))?;
-        }
-        self.after_mutation()
+            sh.rt.eval(&format!("{path}.execute()")).map(|_| ())
+        };
+        self.finish_mutation(eval_result)
     }
 
     fn persist_active(&mut self, force: bool) -> Result<SaveResult> {
@@ -1119,7 +1421,7 @@ impl SheetWorker {
             self.store
                 .write_sidecar_atomic(&sh.rel_path, &sh.disk_sha256, &sidecar)?;
             sh.sidecar_dirty = false;
-            sh.dirty_since_sync = true;
+            self.sync_tracker.mark_dirty();
             self.last_save_conflict = None;
             let size_bytes = sh
                 .projected
@@ -1166,7 +1468,7 @@ impl SheetWorker {
                 sh.disk_sha256 = sha256.clone();
                 sh.dirty_since_save = false;
                 sh.sidecar_dirty = false;
-                sh.dirty_since_sync = true;
+                self.sync_tracker.mark_dirty();
                 self.last_save_conflict = None;
             }
             SaveResult::PartialSidecarFailed {
@@ -1179,7 +1481,7 @@ impl SheetWorker {
                 sh.disk_sha256 = sha256.clone();
                 sh.dirty_since_save = false;
                 sh.sidecar_dirty = true;
-                sh.dirty_since_sync = true;
+                self.sync_tracker.mark_dirty();
                 self.last_save_conflict = None;
                 bail!("PDF saved, but sidecar publication failed: {sidecar_error}");
             }
@@ -1237,10 +1539,8 @@ impl SheetWorker {
             message.trim().to_owned()
         };
         let sync = self.store.git_sync(&commit_msg)?;
-        if let Some(sh) = &mut self.active {
-            if sync.pushed {
-                sh.dirty_since_sync = false;
-            }
+        if sync.pushed || sync.status == "clean" {
+            self.sync_tracker.clear();
         }
         let git = self.store.git_status()?;
         let state = self.build_state_payload()?;
@@ -1349,10 +1649,28 @@ fn is_safe_bookmark_path(path: &str) -> bool {
     true
 }
 
+fn validate_bind_auth(
+    bind: SocketAddr,
+    auth_token: Option<&str>,
+    allow_unauthenticated: bool,
+) -> Result<()> {
+    let has_token = auth_token.is_some_and(|t| !t.trim().is_empty());
+    if !bind.ip().is_loopback() && !has_token && !allow_unauthenticated {
+        bail!(
+            "refusing to bind non-loopback address {bind} without authentication; \
+             set --auth-token / MPMB_AUTH_TOKEN, bind loopback (127.0.0.1), \
+             or explicitly opt in with --allow-unauthenticated / MPMB_ALLOW_UNAUTHENTICATED=1"
+        );
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
 struct AppState {
     store: Arc<SheetStore>,
     bridge: Arc<InteractionBridge>,
+    sync_tracker: Arc<StoreSyncTracker>,
+    server_instance_id: String,
     cmd_tx: mpsc::Sender<WorkerCommand>,
     job_seq: Arc<AtomicU64>,
     interaction_rx: watch::Receiver<Option<(u64, PublicInteraction)>>,
@@ -1369,15 +1687,30 @@ impl AppState {
         config: &ServeConfig,
         capabilities: HostCapabilities,
     ) -> Result<Self> {
+        validate_bind_auth(
+            config.bind,
+            config.auth_token.as_deref(),
+            config.allow_unauthenticated,
+        )?;
         let store = Arc::new(SheetStore::open(config.store.clone())?);
         let (interaction_tx, interaction_rx) = watch::channel(None);
         let (events_tx, _) = broadcast::channel(64);
         let bridge = InteractionBridge::new(interaction_tx, events_tx);
+        let sync_tracker = Arc::new(StoreSyncTracker::default());
+        let job_seq = Arc::new(AtomicU64::new(1));
+        let server_instance_id = format!(
+            "srv-{}-{}",
+            std::process::id(),
+            SERVER_INSTANCE_SEQ.fetch_add(1, Ordering::SeqCst)
+        );
         let (cmd_tx, cmd_rx) = mpsc::channel();
 
         let (ready_tx, ready_rx) = mpsc::sync_channel::<bool>(1);
         let worker_store = Arc::clone(&store);
         let worker_bridge = Arc::clone(&bridge);
+        let worker_sync_tracker = Arc::clone(&sync_tracker);
+        let worker_job_seq = Arc::clone(&job_seq);
+        let worker_instance_id = server_instance_id.clone();
         let autosave = config.autosave;
         std::thread::Builder::new()
             .name("mpmb-sheet-worker".into())
@@ -1395,6 +1728,10 @@ impl AppState {
                 let worker = SheetWorker {
                     store: worker_store,
                     bridge: worker_bridge,
+                    sync_tracker: worker_sync_tracker,
+                    job_seq: worker_job_seq,
+                    server_instance_id: worker_instance_id,
+                    session_seq: 0,
                     renderer,
                     autosave,
                     capabilities,
@@ -1409,10 +1746,12 @@ impl AppState {
         let state = Self {
             store,
             bridge,
+            sync_tracker,
+            server_instance_id,
             cmd_tx,
-            job_seq: Arc::new(AtomicU64::new(1)),
+            job_seq,
             interaction_rx,
-            auth_token: config.auth_token.clone().filter(|t| !t.is_empty()),
+            auth_token: config.auth_token.clone().filter(|t| !t.trim().is_empty()),
             pdfium_available,
         };
 
@@ -1648,12 +1987,25 @@ struct OpenRequest {
 #[derive(Deserialize)]
 struct FieldQuery {
     name: String,
+    sheet: Option<String>,
+    session: Option<String>,
     token: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct PageImageQuery {
     w: Option<usize>,
+    sheet: Option<String>,
+    rev: Option<u64>,
+    session: Option<String>,
+    token: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct PageWidgetsQuery {
+    sheet: Option<String>,
+    rev: Option<u64>,
+    session: Option<String>,
     token: Option<String>,
 }
 
@@ -1665,6 +2017,8 @@ struct EditRequest {
     mode: String,
     #[serde(default)]
     sheet: Option<String>,
+    #[serde(default)]
+    session: Option<String>,
 }
 
 fn default_edit_mode() -> String {
@@ -1682,6 +2036,8 @@ struct ActivateRequest {
     modifier: bool,
     #[serde(default)]
     sheet: Option<String>,
+    #[serde(default)]
+    session: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1689,6 +2045,8 @@ struct MenuRequest {
     name: String,
     #[serde(default)]
     sheet: Option<String>,
+    #[serde(default)]
+    session: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1696,6 +2054,8 @@ struct CommandRequest {
     action: String,
     #[serde(default)]
     sheet: Option<String>,
+    #[serde(default)]
+    session: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1703,6 +2063,8 @@ struct BookmarkRequest {
     path: String,
     #[serde(default)]
     sheet: Option<String>,
+    #[serde(default)]
+    session: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -1711,6 +2073,8 @@ struct SaveRequest {
     force: bool,
     #[serde(default)]
     sheet: Option<String>,
+    #[serde(default)]
+    session: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -1985,7 +2349,10 @@ async fn handle_upload_sheet(
     match tokio::task::spawn_blocking(move || store.commit_staged_upload(&norm, staged, overwrite))
         .await
     {
-        Ok(Ok(entry)) => (StatusCode::CREATED, Json(json!({"sheet": entry}))).into_response(),
+        Ok(Ok(entry)) => {
+            state.sync_tracker.mark_dirty();
+            (StatusCode::CREATED, Json(json!({"sheet": entry}))).into_response()
+        }
         Ok(Err(e)) => {
             let msg = format!("{e:#}");
             let status = if msg.contains("already exists") {
@@ -2075,6 +2442,7 @@ async fn handle_session_state(
             Json(json!({
                 "open": true,
                 "busy": true,
+                "serverInstanceId": state.server_instance_id,
                 "activeInteraction": inter,
                 "git": git,
             })),
@@ -2104,6 +2472,7 @@ async fn handle_session_state(
                     Json(json!({
                         "open": true,
                         "busy": true,
+                        "serverInstanceId": state.server_instance_id,
                         "activeInteraction": inter,
                         "git": git,
                     })),
@@ -2131,6 +2500,8 @@ async fn handle_get_field(
         .cmd_tx
         .send(WorkerCommand::GetField {
             name: q.name,
+            expected_sheet: q.sheet,
+            expected_session: q.session,
             reply: tx,
         })
         .is_err()
@@ -2142,7 +2513,15 @@ async fn handle_get_field(
         .await
     {
         Ok(Ok(v)) => Json(v).into_response(),
-        Ok(Err(e)) => err_response(StatusCode::NOT_FOUND, format!("{e:#}")),
+        Ok(Err(e)) => {
+            let msg = format!("{e:#}");
+            let status = if msg.contains("conflict") {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::NOT_FOUND
+            };
+            err_response(status, msg)
+        }
         Err(resp) => *resp,
     }
 }
@@ -2164,6 +2543,7 @@ async fn handle_edit_field(
             value: req.value,
             mode: req.mode,
             expected_sheet: req.sheet,
+            expected_session: req.session,
         })
         .await
 }
@@ -2186,6 +2566,7 @@ async fn handle_activate_field(
             shift: req.shift,
             modifier: req.modifier,
             expected_sheet: req.sheet,
+            expected_session: req.session,
         })
         .await
 }
@@ -2205,6 +2586,7 @@ async fn handle_invoke_menu(
             done,
             name: req.name,
             expected_sheet: req.sheet,
+            expected_session: req.session,
         })
         .await
 }
@@ -2224,6 +2606,7 @@ async fn handle_run_command(
             done,
             action: req.action,
             expected_sheet: req.sheet,
+            expected_session: req.session,
         })
         .await
 }
@@ -2243,6 +2626,7 @@ async fn handle_run_bookmark(
             done,
             path: req.path,
             expected_sheet: req.sheet,
+            expected_session: req.session,
         })
         .await
 }
@@ -2262,6 +2646,7 @@ async fn handle_save_session(
             done,
             force: req.force,
             expected_sheet: req.sheet,
+            expected_session: req.session,
         })
         .await
 }
@@ -2285,6 +2670,9 @@ async fn handle_page_image(
         .send(WorkerCommand::RenderPagePng {
             page,
             width,
+            expected_sheet: q.sheet,
+            expected_session: q.session,
+            expected_rev: q.rev,
             reply: tx,
         })
         .is_err()
@@ -2303,7 +2691,9 @@ async fn handle_page_image(
             .into_response(),
         Ok(Err(e)) => {
             let msg = format!("{e:#}");
-            let status = if msg.contains("PDFium") {
+            let status = if msg.contains("conflict") {
+                StatusCode::CONFLICT
+            } else if msg.contains("PDFium") {
                 StatusCode::SERVICE_UNAVAILABLE
             } else {
                 StatusCode::BAD_REQUEST
@@ -2318,7 +2708,7 @@ async fn handle_page_widgets(
     State(state): State<AppState>,
     headers: HeaderMap,
     AxumPath(page): AxumPath<i32>,
-    Query(q): Query<TokenQuery>,
+    Query(q): Query<PageWidgetsQuery>,
 ) -> Response {
     if !state.check_auth(&headers, q.token.as_deref()) {
         return err_response(StatusCode::UNAUTHORIZED, "unauthorized");
@@ -2329,14 +2719,28 @@ async fn handle_page_widgets(
     let (tx, rx) = mpsc::sync_channel(1);
     if state
         .cmd_tx
-        .send(WorkerCommand::GetPageWidgets { page, reply: tx })
+        .send(WorkerCommand::GetPageWidgets {
+            page,
+            expected_sheet: q.sheet,
+            expected_session: q.session,
+            expected_rev: q.rev,
+            reply: tx,
+        })
         .is_err()
     {
         return err_response(StatusCode::INTERNAL_SERVER_ERROR, "sheet worker stopped");
     }
     match state.await_sync_read(rx, "timed out reading widgets").await {
         Ok(Ok(v)) => ([(header::VARY, "Authorization")], Json(v)).into_response(),
-        Ok(Err(e)) => err_response(StatusCode::BAD_REQUEST, format!("{e:#}")),
+        Ok(Err(e)) => {
+            let msg = format!("{e:#}");
+            let status = if msg.contains("conflict") {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            err_response(status, msg)
+        }
         Err(resp) => *resp,
     }
 }
@@ -2435,7 +2839,7 @@ async fn handle_git_history(
 
 pub fn parse_args(args: &[String]) -> Result<Option<ServeConfig>> {
     let mut bind_str =
-        std::env::var("MPMB_SERVE_BIND").unwrap_or_else(|_| "0.0.0.0:8080".to_owned());
+        std::env::var("MPMB_SERVE_BIND").unwrap_or_else(|_| "127.0.0.1:8080".to_owned());
     let mut dir =
         PathBuf::from(std::env::var("MPMB_DATA_DIR").unwrap_or_else(|_| "./sheets".to_owned()));
     let mut default_sheet = std::env::var("MPMB_DEFAULT_SHEET")
@@ -2463,6 +2867,9 @@ pub fn parse_args(args: &[String]) -> Result<Option<ServeConfig>> {
     let mut auth_token = std::env::var("MPMB_AUTH_TOKEN")
         .ok()
         .filter(|s| !s.trim().is_empty());
+    let mut allow_unauthenticated = std::env::var("MPMB_ALLOW_UNAUTHENTICATED")
+        .ok()
+        .is_some_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"));
     let mut autosave = std::env::var("MPMB_NO_AUTOSAVE").is_err();
     let mut git_auto_sync_secs: u64 = std::env::var("MPMB_GIT_AUTO_SYNC_SECS")
         .ok()
@@ -2483,7 +2890,7 @@ pub fn parse_args(args: &[String]) -> Result<Option<ServeConfig>> {
                 println!(
                     "mpmb-reader serve — self-hosted iOS/web PWA server for MPMB Character Sheets\n\
                      Options (env vars in parentheses):\n\
-                       --bind <addr:port>          Listen address (MPMB_SERVE_BIND, default 0.0.0.0:8080)\n\
+                       --bind <addr:port>          Listen address (MPMB_SERVE_BIND, default 127.0.0.1:8080)\n\
                        --dir <path>                Sheet storage directory (MPMB_DATA_DIR, default ./sheets)\n\
                        --sheet <rel.pdf>           Auto-open sheet on startup (MPMB_DEFAULT_SHEET)\n\
                        --git-repo <url>            Private Git/GitHub repo URL (MPMB_GIT_REPO)\n\
@@ -2494,7 +2901,8 @@ pub fn parse_args(args: &[String]) -> Result<Option<ServeConfig>> {
                        --git-author-name <name>    Commit author name (MPMB_GIT_AUTHOR_NAME)\n\
                        --git-author-email <email>  Commit author email (MPMB_GIT_AUTHOR_EMAIL)\n\
                        --git-auto-sync-secs <sec>  Idle Git auto-sync delay, 0 disables (MPMB_GIT_AUTO_SYNC_SECS, default 300)\n\
-                       --auth-token <token>        Optional bearer/query token (MPMB_AUTH_TOKEN)\n\
+                       --auth-token <token>        Bearer/query token; required on non-loopback binds (MPMB_AUTH_TOKEN)\n\
+                       --allow-unauthenticated     Explicitly allow non-loopback bind without auth token (MPMB_ALLOW_UNAUTHENTICATED=1)\n\
                        --no-autosave               Disable automatic local disk save after edits (MPMB_NO_AUTOSAVE)"
                 );
                 return Ok(None);
@@ -2517,6 +2925,7 @@ pub fn parse_args(args: &[String]) -> Result<Option<ServeConfig>> {
                     .context("--git-auto-sync-secs must be an integer")?;
             }
             "--auth-token" => auth_token = Some(next(&mut i, "--auth-token")?),
+            "--allow-unauthenticated" => allow_unauthenticated = true,
             "--no-autosave" => autosave = false,
             other => bail!("unknown serve option: {other}"),
         }
@@ -2526,6 +2935,8 @@ pub fn parse_args(args: &[String]) -> Result<Option<ServeConfig>> {
     let bind: SocketAddr = bind_str
         .parse()
         .with_context(|| format!("invalid --bind address: {bind_str}"))?;
+    let auth_token = auth_token.filter(|s| !s.trim().is_empty());
+    validate_bind_auth(bind, auth_token.as_deref(), allow_unauthenticated)?;
     let git = git_repo.map(|repo_url| {
         let mut cfg = GitConfig::new(repo_url);
         cfg.branch = git_branch;
@@ -2541,6 +2952,7 @@ pub fn parse_args(args: &[String]) -> Result<Option<ServeConfig>> {
         store: StoreConfig { root: dir, git },
         default_sheet,
         auth_token,
+        allow_unauthenticated,
         autosave,
         git_auto_sync_secs,
     }))
@@ -2563,8 +2975,9 @@ async fn run_server(config: ServeConfig) -> Result<()> {
         let bridge = Arc::clone(&state.bridge);
         let job_seq = Arc::clone(&state.job_seq);
         let idle = config.git_auto_sync_secs;
+        let poll_secs = idle.clamp(1, 15);
         tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(Duration::from_secs(15));
+            let mut ticker = tokio::time::interval(Duration::from_secs(poll_secs));
             loop {
                 ticker.tick().await;
                 if bridge.active_public().is_some() {
@@ -2759,6 +3172,7 @@ mod tests {
             },
             default_sheet: None,
             auth_token: Some("secret-token".into()),
+            allow_unauthenticated: false,
             autosave: true,
             git_auto_sync_secs: 0,
         };
@@ -3055,6 +3469,7 @@ mod tests {
             },
             default_sheet: None,
             auth_token: None,
+            allow_unauthenticated: false,
             autosave: true,
             git_auto_sync_secs: 0,
         };
@@ -3481,7 +3896,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let _ = app
+        let corrupt_upload = app
             .clone()
             .oneshot(
                 Request::builder()
@@ -3492,6 +3907,14 @@ mod tests {
             )
             .await
             .unwrap();
+        assert_eq!(corrupt_upload.status(), StatusCode::BAD_REQUEST);
+        assert!(!base.join("sheets/corrupt.pdf").exists());
+        // Simulate on-disk corruption written outside the upload endpoint.
+        std::fs::write(
+            base.join("sheets/corrupt.pdf"),
+            b"%PDF-1.7\nthis-is-corrupt-garbage",
+        )
+        .unwrap();
 
         assert_eq!(
             post_json(&app, "/api/session/open", json!({"path": "good.pdf"}))
@@ -3742,6 +4165,7 @@ mod tests {
             },
             default_sheet: None,
             auth_token: None,
+            allow_unauthenticated: false,
             autosave: false,
             git_auto_sync_secs: 0,
         })
@@ -3886,6 +4310,7 @@ mod tests {
                 },
                 default_sheet: None,
                 auth_token: Some("tok-r2".into()),
+                allow_unauthenticated: false,
                 autosave: false,
                 git_auto_sync_secs: 0,
             },
@@ -4142,6 +4567,539 @@ mod tests {
         .await;
         assert_eq!(st_ok, StatusCode::OK);
         assert_eq!(body_ok["state"]["path"], "second.pdf");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    fn make_scripted_hp_pdf(
+        path: &std::path::Path,
+        hp: &str,
+        init_js: &str,
+        button_js: Option<&str>,
+    ) {
+        let mut doc = lopdf::Document::with_version("1.7");
+        let pages_id = doc.new_object_id();
+        let page_id = doc.new_object_id();
+        let f_name = doc.add_object(dictionary! {
+            "Type" => "Annot",
+            "Subtype" => "Widget",
+            "FT" => "Tx",
+            "T" => Object::String(b"PC Name".to_vec(), StringFormat::Literal),
+            "V" => Object::String(b"Baseline Hero".to_vec(), StringFormat::Literal),
+            "Rect" => vec![40.into(), 740.into(), 240.into(), 764.into()],
+            "P" => page_id,
+        });
+        let f_hp = doc.add_object(dictionary! {
+            "Type" => "Annot",
+            "Subtype" => "Widget",
+            "FT" => "Tx",
+            "T" => Object::String(b"HP Current".to_vec(), StringFormat::Literal),
+            "V" => Object::String(hp.as_bytes().to_vec(), StringFormat::Literal),
+            "Rect" => vec![40.into(), 700.into(), 240.into(), 724.into()],
+            "P" => page_id,
+        });
+        let mut annots: Vec<Object> = vec![f_name.into(), f_hp.into()];
+        let mut fields: Vec<Object> = vec![f_name.into(), f_hp.into()];
+        if let Some(bjs) = button_js {
+            let btn_action = doc.add_object(dictionary! {
+                "S" => "JavaScript",
+                "JS" => Object::String(bjs.as_bytes().to_vec(), StringFormat::Literal),
+            });
+            let f_btn = doc.add_object(dictionary! {
+                "Type" => "Annot",
+                "Subtype" => "Widget",
+                "FT" => "Btn",
+                "Ff" => 65536,
+                "T" => Object::String(b"ActionButton".to_vec(), StringFormat::Literal),
+                "AA" => dictionary! { "U" => btn_action },
+                "Rect" => vec![260.into(), 700.into(), 360.into(), 724.into()],
+                "P" => page_id,
+            });
+            annots.push(f_btn.into());
+            fields.push(f_btn.into());
+        }
+        doc.objects.insert(
+            page_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Page",
+                "Parent" => pages_id,
+                "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+                "Annots" => annots,
+            }),
+        );
+        doc.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => vec![page_id.into()],
+                "Count" => 1,
+            }),
+        );
+        let form_id = doc.add_object(dictionary! { "Fields" => fields });
+        let mut catalog = dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+            "AcroForm" => form_id,
+        };
+        if !init_js.is_empty() {
+            let js_action = doc.add_object(dictionary! {
+                "S" => "JavaScript",
+                "JS" => Object::String(init_js.as_bytes().to_vec(), StringFormat::Literal),
+            });
+            let js_tree = doc.add_object(dictionary! {
+                "Names" => vec![
+                    Object::String(b"Init".to_vec(), StringFormat::Literal),
+                    js_action.into(),
+                ],
+            });
+            let names_id = doc.add_object(dictionary! { "JavaScript" => js_tree });
+            catalog.set("Names", names_id);
+        }
+        let catalog_id = doc.add_object(catalog);
+        doc.trailer.set("Root", catalog_id);
+        doc.save(path).unwrap();
+    }
+
+    #[test]
+    fn parse_args_and_startup_fail_closed_on_non_loopback_without_auth() {
+        // Explicit loopback default succeeds without auth token.
+        let loopback = parse_args(&["--bind".into(), "127.0.0.1:8080".into()])
+            .unwrap()
+            .unwrap();
+        assert!(loopback.bind.ip().is_loopback());
+        assert!(!loopback.allow_unauthenticated);
+
+        let ipv6_loopback = parse_args(&["--bind".into(), "[::1]:8080".into()])
+            .unwrap()
+            .unwrap();
+        assert!(ipv6_loopback.bind.ip().is_loopback());
+
+        // Non-loopback without auth token or opt-in fails closed.
+        assert!(validate_bind_auth("0.0.0.0:8080".parse().unwrap(), None, false).is_err());
+        assert!(validate_bind_auth("0.0.0.0:8080".parse().unwrap(), Some("   "), false).is_err());
+        assert!(validate_bind_auth("[::]:8080".parse().unwrap(), None, false).is_err());
+
+        // Non-loopback succeeds with auth token or explicit opt-in.
+        assert!(validate_bind_auth("0.0.0.0:8080".parse().unwrap(), Some("secret"), false).is_ok());
+        assert!(validate_bind_auth("0.0.0.0:8080".parse().unwrap(), None, true).is_ok());
+
+        let with_token = parse_args(&[
+            "--bind".into(),
+            "0.0.0.0:8080".into(),
+            "--auth-token".into(),
+            "tok-123".into(),
+        ])
+        .unwrap()
+        .unwrap();
+        assert_eq!(with_token.auth_token.as_deref(), Some("tok-123"));
+
+        let with_opt_in = parse_args(&[
+            "--bind".into(),
+            "0.0.0.0:8080".into(),
+            "--allow-unauthenticated".into(),
+        ])
+        .unwrap()
+        .unwrap();
+        assert!(with_opt_in.allow_unauthenticated);
+
+        // AppState::start enforces the same invariant directly.
+        let err = AppState::start(&ServeConfig {
+            bind: "0.0.0.0:8080".parse().unwrap(),
+            store: StoreConfig {
+                root: std::env::temp_dir().join("mpmb-serve-nonloopback-unused"),
+                git: None,
+            },
+            default_sheet: None,
+            auth_token: None,
+            allow_unauthenticated: false,
+            autosave: true,
+            git_auto_sync_secs: 0,
+        })
+        .err()
+        .expect("non-loopback AppState::start without auth must fail");
+        assert!(format!("{err:#}").contains("refusing to bind non-loopback"));
+    }
+
+    #[tokio::test]
+    async fn idle_timers_advance_and_deliver_mutations_and_modals() {
+        let (base, _, app) = setup_test_app("idle-timers", false);
+        let sheet_path = base.join("sheets/timer.pdf");
+        std::fs::create_dir_all(sheet_path.parent().unwrap()).unwrap();
+        make_scripted_hp_pdf(
+            &sheet_path,
+            "10",
+            r#"
+                app.addMenuItem({
+                    cName: "DeferredAlert",
+                    cUser: "Deferred Alert",
+                    cParent: "Edit",
+                    cExec: "app.setTimeOut(\"app.alert({cTitle:'TimerAlert',cMsg:'Fired',nType:0});getField('HP Current').value='19';\", 100);"
+                });
+            "#,
+            Some("app.setTimeOut(\"getField('HP Current').value='13';\", 100);"),
+        );
+
+        let (st, opened) = post_json(&app, "/api/session/open", json!({"path": "timer.pdf"})).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(opened["state"]["vitals"]["hpCurrent"], "10");
+
+        // 1. Activate button that schedules a 100ms timer mutating HP Current -> 13.
+        let (st, _) = post_json(
+            &app,
+            "/api/session/activate",
+            json!({"field": "ActionButton", "index": 0, "sheet": "timer.pdf"}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+
+        let mut observed_13 = false;
+        for _ in 0..30 {
+            tokio::time::sleep(Duration::from_millis(75)).await;
+            let (st, state) = get_json(&app, "/api/session/state").await;
+            assert_eq!(st, StatusCode::OK);
+            if state["vitals"]["hpCurrent"] == "13" {
+                observed_13 = true;
+                break;
+            }
+        }
+        assert!(
+            observed_13,
+            "100ms deferred Acrobat timer should have fired while worker was idle"
+        );
+
+        // Verify the timer-driven mutation was autosaved to disk by reopening.
+        let (st, reopened) =
+            post_json(&app, "/api/session/open", json!({"path": "timer.pdf"})).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(reopened["state"]["vitals"]["hpCurrent"], "13");
+
+        // 2. Schedule a deferred alert via menu, wait for it to pause on InteractionBridge,
+        //    answer it, and confirm the post-alert mutation completes.
+        let (st, _) = post_json(
+            &app,
+            "/api/session/menu",
+            json!({"name": "DeferredAlert", "sheet": "timer.pdf"}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+
+        let mut alert_id = None;
+        for _ in 0..30 {
+            tokio::time::sleep(Duration::from_millis(75)).await;
+            let (st, state) = get_json(&app, "/api/session/state").await;
+            assert_eq!(st, StatusCode::OK);
+            if state["busy"] == true {
+                if let Some(id) = state["activeInteraction"]["id"].as_str() {
+                    alert_id = Some(id.to_owned());
+                    break;
+                }
+            }
+        }
+        let alert_id = alert_id.expect("deferred timer alert should have surfaced via bridge");
+        let (st, reply) = post_json(
+            &app,
+            &format!("/api/session/interaction/{alert_id}"),
+            json!({"button": 1, "checked": false}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK, "reply failed: {reply}");
+        assert_eq!(reply["state"]["vitals"]["hpCurrent"], "19");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn failed_commands_and_actions_reconcile_partial_mutations_with_autosave_on_and_off() {
+        for autosave in [false, true] {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let base = std::env::temp_dir().join(format!(
+                "mpmb-serve-partial-{autosave}-{}-{nanos}",
+                std::process::id()
+            ));
+            let store_dir = base.join("sheets");
+            std::fs::create_dir_all(&store_dir).unwrap();
+            make_scripted_hp_pdf(
+                &store_dir.join("partial.pdf"),
+                "10",
+                r#"
+                    function GenerateSpellSheet() {
+                        getField('HP Current').value = '17';
+                        throw new Error('simulated spell sheet failure');
+                    }
+                "#,
+                Some("getField('HP Current').value = '15'; throw new Error('button boom');"),
+            );
+            make_scripted_hp_pdf(&store_dir.join("other.pdf"), "20", "", None);
+
+            let state = AppState::start(&ServeConfig {
+                bind: "127.0.0.1:0".parse().unwrap(),
+                store: StoreConfig {
+                    root: store_dir.clone(),
+                    git: None,
+                },
+                default_sheet: None,
+                auth_token: None,
+                allow_unauthenticated: false,
+                autosave,
+                git_auto_sync_secs: 0,
+            })
+            .unwrap();
+            let app = build_router(state);
+
+            let (st, opened) =
+                post_json(&app, "/api/session/open", json!({"path": "partial.pdf"})).await;
+            assert_eq!(st, StatusCode::OK);
+            let rev0 = opened["state"]["revision"].as_u64().unwrap();
+
+            // Failing button action mutates HP -> 15 before throwing.
+            let (st, _) = post_json(
+                &app,
+                "/api/session/activate",
+                json!({"field": "ActionButton", "index": 0, "sheet": "partial.pdf"}),
+            )
+            .await;
+            assert_eq!(st, StatusCode::BAD_REQUEST);
+            let (st, after_btn) = get_json(&app, "/api/session/state").await;
+            assert_eq!(st, StatusCode::OK);
+            assert_eq!(after_btn["vitals"]["hpCurrent"], "15");
+            assert!(after_btn["revision"].as_u64().unwrap() > rev0);
+
+            // Failing run_command(spell_sheet) mutates HP -> 17 before throwing.
+            let (st, _) = post_json(
+                &app,
+                "/api/session/command",
+                json!({"action": "spell_sheet", "sheet": "partial.pdf"}),
+            )
+            .await;
+            assert_eq!(st, StatusCode::BAD_REQUEST);
+            let (st, after_cmd) = get_json(&app, "/api/session/state").await;
+            assert_eq!(st, StatusCode::OK);
+            assert_eq!(after_cmd["vitals"]["hpCurrent"], "17");
+
+            if autosave {
+                assert_eq!(after_cmd["dirtySinceSave"], false);
+                // Reopen from disk proves autosave persisted the partial mutation!
+                let (st, reopened) =
+                    post_json(&app, "/api/session/open", json!({"path": "partial.pdf"})).await;
+                assert_eq!(st, StatusCode::OK);
+                assert_eq!(reopened["state"]["vitals"]["hpCurrent"], "17");
+            } else {
+                assert_eq!(after_cmd["dirtySinceSave"], true);
+                // Switching sheets without force MUST return 409 instead of silently dropping partial edits.
+                let (st, _) =
+                    post_json(&app, "/api/session/open", json!({"path": "other.pdf"})).await;
+                assert_eq!(st, StatusCode::CONFLICT);
+                // Explicit save persists the partial mutation cleanly.
+                let (st, _) =
+                    post_json(&app, "/api/session/save", json!({"sheet": "partial.pdf"})).await;
+                assert_eq!(st, StatusCode::OK);
+                let (st, reopened) =
+                    post_json(&app, "/api/session/open", json!({"path": "partial.pdf"})).await;
+                assert_eq!(st, StatusCode::OK);
+                assert_eq!(reopened["state"]["vitals"]["hpCurrent"], "17");
+            }
+
+            let _ = std::fs::remove_dir_all(&base);
+        }
+    }
+
+    #[tokio::test]
+    async fn session_id_and_page_target_guards_prevent_cross_sheet_and_stale_cache_mixups() {
+        let (base, _, app) = setup_test_app("session-page-guards", false);
+        let store_dir = base.join("sheets");
+        std::fs::create_dir_all(&store_dir).unwrap();
+        make_scripted_hp_pdf(&store_dir.join("alpha.pdf"), "10", "", Some(""));
+        make_scripted_hp_pdf(&store_dir.join("beta.pdf"), "20", "", None);
+
+        let (st, a1) = post_json(&app, "/api/session/open", json!({"path": "alpha.pdf"})).await;
+        assert_eq!(st, StatusCode::OK);
+        let srv1 = a1["state"]["serverInstanceId"].as_str().unwrap().to_owned();
+        let sess_a1 = a1["state"]["sessionId"].as_str().unwrap().to_owned();
+        let rev_a1 = a1["state"]["revision"].as_u64().unwrap();
+        assert!(!srv1.is_empty());
+        assert!(!sess_a1.is_empty());
+
+        // Reopening the SAME path mints a fresh sessionId so edits/field reads
+        // bound to the prior session are rejected with 409 Conflict.
+        let (st, a2) = post_json(&app, "/api/session/open", json!({"path": "alpha.pdf"})).await;
+        assert_eq!(st, StatusCode::OK);
+        let sess_a2 = a2["state"]["sessionId"].as_str().unwrap().to_owned();
+        assert_ne!(sess_a1, sess_a2);
+
+        let (st, _) = post_json(
+            &app,
+            "/api/session/edit",
+            json!({"field": "HP Current", "value": "99", "sheet": "alpha.pdf", "session": sess_a1}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::CONFLICT);
+        let (st, _) = get_json(
+            &app,
+            &format!("/api/session/field?name=HP%20Current&sheet=alpha.pdf&session={sess_a1}"),
+        )
+        .await;
+        assert_eq!(st, StatusCode::CONFLICT);
+
+        // Switch to beta.pdf.
+        let (st, b1) = post_json(&app, "/api/session/open", json!({"path": "beta.pdf"})).await;
+        assert_eq!(st, StatusCode::OK);
+        let sess_b1 = b1["state"]["sessionId"].as_str().unwrap().to_owned();
+        let rev_b1 = b1["state"]["revision"].as_u64().unwrap();
+
+        // Alpha-keyed page widget and page image requests MUST return 409 Conflict,
+        // never 200 with Beta's content!
+        let (st, _) = get_json(
+            &app,
+            &format!("/api/session/page/0/widgets?sheet=alpha.pdf&rev={rev_a1}&session={sess_a2}"),
+        )
+        .await;
+        assert_eq!(st, StatusCode::CONFLICT);
+        let (st, _) = get_json(
+            &app,
+            &format!("/api/session/page/0/image?w=640&sheet=alpha.pdf&rev={rev_a1}"),
+        )
+        .await;
+        assert_eq!(st, StatusCode::CONFLICT);
+        // Revision mismatch on beta.pdf also returns 409 Conflict.
+        let (st, _) = get_json(
+            &app,
+            &format!(
+                "/api/session/page/0/widgets?sheet=beta.pdf&rev={}&session={sess_b1}",
+                rev_b1 + 42
+            ),
+        )
+        .await;
+        assert_eq!(st, StatusCode::CONFLICT);
+
+        // Matching beta.pdf target returns 200 with sheet & sessionId metadata.
+        let (st, widgets) = get_json(
+            &app,
+            &format!("/api/session/page/0/widgets?sheet=beta.pdf&rev={rev_b1}&session={sess_b1}"),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(widgets["sheet"], "beta.pdf");
+        assert_eq!(widgets["sessionId"], sess_b1);
+
+        // A second server instance gets a distinct serverInstanceId.
+        let (_, _, app2) = setup_test_app("session-page-guards-2", false);
+        let (st, s2) = get_json(&app2, "/api/session/state").await;
+        assert_eq!(st, StatusCode::OK);
+        assert_ne!(s2["serverInstanceId"].as_str().unwrap(), srv1);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn idle_git_autosync_pushes_prior_sheet_edits_after_switching_to_clean_sheet() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!(
+            "mpmb-serve-autosync-switch-{}-{nanos}",
+            std::process::id()
+        ));
+        let bare = base.join("remote.git");
+        let data_dir = base.join("sheets");
+        std::fs::create_dir_all(&bare).unwrap();
+        assert!(Command::new("git")
+            .args(["init", "--bare", "-b", "main"])
+            .arg(&bare)
+            .status()
+            .unwrap()
+            .success());
+
+        let state = AppState::start(&ServeConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            store: StoreConfig {
+                root: data_dir.clone(),
+                git: Some(GitConfig::new(bare.to_string_lossy().into_owned())),
+            },
+            default_sheet: None,
+            auth_token: None,
+            allow_unauthenticated: false,
+            autosave: true,
+            git_auto_sync_secs: 1,
+        })
+        .unwrap();
+        make_scripted_hp_pdf(&data_dir.join("alpha.pdf"), "10", "", None);
+        make_scripted_hp_pdf(&data_dir.join("beta.pdf"), "20", "", None);
+        let app = build_router(state.clone());
+
+        // Baseline sync.
+        let (st, _) = post_json(&app, "/api/git/sync", json!({"message": "baseline"})).await;
+        assert_eq!(st, StatusCode::OK);
+        let git_rev = |dir: &std::path::Path| -> String {
+            let mut cmd = Command::new("git");
+            for key in [
+                "GIT_DIR",
+                "GIT_WORK_TREE",
+                "GIT_INDEX_FILE",
+                "GIT_COMMON_DIR",
+                "GIT_OBJECT_DIRECTORY",
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            ] {
+                cmd.env_remove(key);
+            }
+            let out = cmd
+                .current_dir(dir)
+                .args(["rev-parse", "refs/heads/main"])
+                .output()
+                .unwrap();
+            assert!(out.status.success());
+            String::from_utf8_lossy(&out.stdout).trim().to_owned()
+        };
+        let base_sha = git_rev(&bare);
+
+        // Edit alpha.pdf, then switch to clean beta.pdf.
+        assert_eq!(
+            post_json(&app, "/api/session/open", json!({"path": "alpha.pdf"}))
+                .await
+                .0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            post_json(
+                &app,
+                "/api/session/edit",
+                json!({"field": "HP Current", "value": "17", "sheet": "alpha.pdf"}),
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+        let (st, beta_opened) =
+            post_json(&app, "/api/session/open", json!({"path": "beta.pdf"})).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(
+            beta_opened["state"]["dirtySinceSync"], true,
+            "switching to a clean sheet must preserve store-level dirtySinceSync"
+        );
+
+        // Wait past the 1s idle threshold and trigger CheckIdleAutoSync.
+        tokio::time::sleep(Duration::from_millis(1150)).await;
+        let res = state
+            .dispatch_job(|job_id, gate, done| WorkerCommand::CheckIdleAutoSync {
+                job_id,
+                gate,
+                done,
+                idle_secs: 1,
+            })
+            .await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = json_body(res).await;
+        assert_eq!(body["sync"]["status"], "synced");
+        assert_eq!(body["sync"]["pushed"], true);
+        assert_ne!(
+            git_rev(&bare),
+            base_sha,
+            "idle autosync must advance remote main"
+        );
+        assert_eq!(body["state"]["dirtySinceSync"], false);
 
         let _ = std::fs::remove_dir_all(&base);
     }
