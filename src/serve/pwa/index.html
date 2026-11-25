@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="MPMB Sheet" />
+  <meta name="theme-color" content="#111318" />
+  <title>MPMB Character Sheet</title>
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="/icon.svg" />
+  <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-left">
+      <div class="brand-dot" id="conn-dot" title="Connection status"></div>
+      <div class="topbar-titles">
+        <div class="topbar-name" id="top-char-name">MPMB Sheet</div>
+        <div class="topbar-sub" id="top-char-sub">No sheet loaded</div>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <button class="pill-btn" id="btn-top-sync" type="button" title="Save &amp; Sync">Sync</button>
+      <button class="icon-btn" id="btn-theme" type="button" aria-label="Toggle theme">☀</button>
+    </div>
+  </header>
+
+  <div id="banner" class="banner hidden" role="status"></div>
+
+  <main class="main-scroll" id="main-scroll">
+    <!-- TAB 1: PLAY / TABLE VIEW -->
+    <section id="tab-play" class="tab-panel active">
+      <div id="play-empty" class="card empty-card">
+        <h2>No Character Open</h2>
+        <p class="muted">Open an existing MPMB sheet or upload a PDF from the Library &amp; Git tab.</p>
+        <button class="btn primary" id="btn-go-library" type="button">Open Library</button>
+      </div>
+
+      <div id="play-content" class="hidden">
+        <!-- Quick Actions -->
+        <div class="quick-actions">
+          <button class="btn accent" id="btn-classes" type="button">Classes…</button>
+          <button class="btn" id="btn-short-rest" type="button">Short Rest</button>
+          <button class="btn" id="btn-long-rest" type="button">Long Rest</button>
+          <button class="btn" id="btn-spell-sheet" type="button">Spells…</button>
+        </div>
+
+        <!-- Vitals & HP Card -->
+        <div class="card">
+          <div class="vitals-grid">
+            <div class="vital-box"><span class="vital-label">AC</span><span class="vital-val" id="v-ac">—</span></div>
+            <div class="vital-box"><span class="vital-label">Init</span><span class="vital-val" id="v-init">—</span></div>
+            <div class="vital-box"><span class="vital-label">Speed</span><span class="vital-val" id="v-speed">—</span></div>
+            <div class="vital-box"><span class="vital-label">Prof</span><span class="vital-val" id="v-prof">—</span></div>
+          </div>
+
+          <div class="hp-panel">
+            <div class="hp-header">
+              <div>
+                <span class="vital-label">Hit Points</span>
+                <div class="hp-readout">
+                  <button class="hp-num-btn" id="btn-hp-edit" type="button"><span id="v-hp-cur">—</span></button>
+                  <span class="muted">/</span>
+                  <span id="v-hp-max">—</span>
+                  <span class="hp-temp-badge hidden" id="v-hp-temp-wrap">+<span id="v-hp-temp">0</span> temp</span>
+                </div>
+              </div>
+              <button class="btn small" id="btn-hp-temp" type="button">Temp HP</button>
+            </div>
+            <div class="hp-bar-track"><div class="hp-bar-fill" id="hp-bar-fill"></div></div>
+            <div class="hp-steppers">
+              <button class="btn danger small" data-hp-delta="-5" type="button">−5</button>
+              <button class="btn danger small" data-hp-delta="-1" type="button">−1</button>
+              <button class="btn success small" data-hp-delta="1" type="button">+1</button>
+              <button class="btn success small" data-hp-delta="5" type="button">+5</button>
+              <button class="btn small" id="btn-hp-full" type="button">Full</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Abilities & Saves -->
+        <div class="card">
+          <div class="card-title">Abilities &amp; Saves</div>
+          <div class="abilities-grid" id="abilities-grid"></div>
+        </div>
+
+        <!-- Attacks -->
+        <div class="card" id="attacks-card">
+          <div class="card-title">Attacks &amp; Cantrips</div>
+          <div id="attacks-list" class="stack-list"></div>
+        </div>
+
+        <!-- Spell Slots -->
+        <div class="card hidden" id="slots-card">
+          <div class="card-title">Spell Slots</div>
+          <div id="slots-list" class="stack-list"></div>
+        </div>
+
+        <!-- Limited Features / Resources -->
+        <div class="card hidden" id="resources-card">
+          <div class="card-title">Limited Features &amp; Resources</div>
+          <div id="resources-list" class="stack-list"></div>
+        </div>
+
+        <!-- Skills -->
+        <details class="card accordion">
+          <summary class="card-title">Skills</summary>
+          <div id="skills-list" class="skills-grid"></div>
+        </details>
+
+        <!-- Features / Notes -->
+        <details class="card accordion">
+          <summary class="card-title">Class Features &amp; Notes</summary>
+          <div id="notes-list" class="notes-block"></div>
+        </details>
+      </div>
+    </section>
+
+    <!-- TAB 2: INTERACTIVE PDF SHEET VIEW -->
+    <section id="tab-sheet" class="tab-panel">
+      <div class="sheet-toolbar">
+        <div class="seg-group">
+          <button class="btn small" id="btn-prev-page" type="button">◀</button>
+          <span class="page-label" id="page-label">1 / 1</span>
+          <button class="btn small" id="btn-next-page" type="button">▶</button>
+        </div>
+        <div class="seg-group">
+          <button class="btn small" id="btn-zoom-out" type="button">−</button>
+          <span class="zoom-label" id="zoom-label">100%</span>
+          <button class="btn small" id="btn-zoom-in" type="button">+</button>
+        </div>
+        <label class="toggle-chip">
+          <input type="checkbox" id="chk-shift" />
+          <span>Shift</span>
+        </label>
+      </div>
+      <div class="pdf-viewport" id="pdf-viewport">
+        <div class="pdf-stage" id="pdf-stage">
+          <img id="pdf-img" alt="Rendered character sheet page" decoding="async" />
+          <div id="pdf-overlay" class="pdf-overlay"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: FIELDS, MPMB TOOLS & BOOKMARKS -->
+    <section id="tab-tools" class="tab-panel">
+      <div class="card">
+        <div class="card-title">MPMB Automation &amp; Menus</div>
+        <div class="chip-grid" id="mpmb-menus"></div>
+        <div class="divider"></div>
+        <div class="chip-grid">
+          <button class="btn small" data-cmd="spell_sheet" type="button">Generate Spell Sheet…</button>
+          <button class="btn small" data-cmd="add_companion" type="button">Add Companion Page</button>
+          <button class="btn small" data-cmd="add_wildshape" type="button">Add Wild-Shape Page</button>
+          <button class="btn small" data-cmd="recalculate" type="button">Recalculate Sheet</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Field Inspector</div>
+        <div class="field-search-row">
+          <input type="search" id="field-search" placeholder="Search any PDF field…" autocomplete="off" />
+          <select id="field-filter">
+            <option value="writable">Writable</option>
+            <option value="page">Current Page</option>
+            <option value="all">All Fields</option>
+          </select>
+        </div>
+        <div id="field-list" class="field-list"></div>
+      </div>
+
+      <details class="card accordion">
+        <summary class="card-title">Bookmarks</summary>
+        <div id="bookmarks-tree" class="bookmarks-tree"></div>
+      </details>
+
+      <details class="card accordion">
+        <summary class="card-title">Diagnostics &amp; Console</summary>
+        <pre id="diag-output" class="mono-box">No diagnostics yet.</pre>
+      </details>
+    </section>
+
+    <!-- TAB 4: LIBRARY & GIT STORAGE -->
+    <section id="tab-library" class="tab-panel">
+      <div class="card">
+        <div class="card-header-row">
+          <div class="card-title">Git / GitHub Store</div>
+          <span class="status-badge" id="git-badge">Local Only</span>
+        </div>
+        <div id="git-summary" class="muted small-text">Loading storage status…</div>
+        <div id="git-conflict-box" class="conflict-box hidden"></div>
+        <div class="git-controls" id="git-controls">
+          <input type="text" id="git-commit-msg" placeholder="Optional commit message…" />
+          <div class="btn-row">
+            <button class="btn primary" id="btn-git-sync" type="button">Commit &amp; Push</button>
+            <button class="btn" id="btn-git-pull" type="button">Pull Latest</button>
+            <button class="btn" id="btn-save-now" type="button">Save PDF</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header-row">
+          <div class="card-title">Character Sheets</div>
+          <label class="btn small primary upload-label">
+            Upload PDF
+            <input type="file" id="file-upload" accept=".pdf,application/pdf" hidden />
+          </label>
+        </div>
+        <div id="sheets-list" class="stack-list"></div>
+      </div>
+
+      <details class="card accordion" id="git-history-card">
+        <summary class="card-title">Git Commit History</summary>
+        <div id="git-history-list" class="stack-list"></div>
+      </details>
+    </section>
+  </main>
+
+  <!-- iOS Bottom Tab Bar -->
+  <nav class="tabbar" role="tablist">
+    <button class="tab-btn active" data-tab="play" type="button"><span class="tab-ico">⚔</span><span>Play</span></button>
+    <button class="tab-btn" data-tab="sheet" type="button"><span class="tab-ico">📄</span><span>Sheet</span></button>
+    <button class="tab-btn" data-tab="tools" type="button"><span class="tab-ico">⚙</span><span>Tools</span></button>
+    <button class="tab-btn" data-tab="library" type="button"><span class="tab-ico">☁</span><span>Git</span></button>
+  </nav>
+
+  <!-- Quick Field Editor Bottom Sheet -->
+  <div id="field-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal-sheet">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title" id="fm-title">Edit Field</div>
+          <div class="muted small-text" id="fm-meta"></div>
+        </div>
+        <button class="icon-btn" id="fm-close" type="button" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body" id="fm-body"></div>
+      <div class="modal-footer">
+        <button class="btn" id="fm-cancel" type="button">Cancel</button>
+        <button class="btn primary" id="fm-save" type="button">Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Live Acrobat execDialog / popUpMenuEx / app.alert Modal -->
+  <div id="acrobat-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal-sheet modal-large">
+      <div class="modal-header">
+        <div class="modal-title" id="am-title">MPMB Dialog</div>
+        <button class="icon-btn" id="am-close" type="button" aria-label="Cancel">✕</button>
+      </div>
+      <div class="modal-body" id="am-body"></div>
+      <div class="modal-footer" id="am-footer"></div>
+    </div>
+  </div>
+
+  <!-- Optional Auth Token Prompt -->
+  <div id="auth-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal-sheet">
+      <div class="modal-header"><div class="modal-title">Sign In</div></div>
+      <div class="modal-body">
+        <p class="muted">This MPMB server requires an access token.</p>
+        <input type="password" id="auth-token-input" placeholder="Access token" autocomplete="current-password" />
+      </div>
+      <div class="modal-footer">
+        <button class="btn primary" id="auth-token-save" type="button">Unlock</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,1389 @@
+(() => {
+  'use strict';
+
+  const appState = {
+    token: localStorage.getItem('mpmb_auth_token') || '',
+    sheet: null,
+    sheets: [],
+    git: null,
+    page: 0,
+    zoom: 1.0,
+    pageWidgets: [],
+    pageSize: [612, 792],
+    selectedField: null,
+    activeInteraction: null,
+    ws: null,
+    wsConnected: false,
+    offline: !navigator.onLine,
+    busy: false,
+    modalValues: {},
+    modalPopupOptions: {},
+  };
+
+  // Capture optional ?token= query parameter once and strip from URL bar.
+  const params = new URLSearchParams(location.search);
+  if (params.has('token')) {
+    appState.token = params.get('token') || '';
+    localStorage.setItem('mpmb_auth_token', appState.token);
+    params.delete('token');
+    const clean = location.pathname + (params.toString() ? '?' + params.toString() : '');
+    history.replaceState(null, '', clean);
+  }
+
+  const $ = (id) => document.getElementById(id);
+
+  // Theme initialization
+  const savedTheme = localStorage.getItem('mpmb_theme') || 'dark';
+  applyTheme(savedTheme);
+  function applyTheme(mode) {
+    document.documentElement.setAttribute('data-theme', mode);
+    localStorage.setItem('mpmb_theme', mode);
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.content = mode === 'light' ? '#f4f1ea' : '#111318';
+    const btn = $('btn-theme');
+    if (btn) btn.textContent = mode === 'light' ? '☾' : '☀';
+  }
+  $('btn-theme').addEventListener('click', () => {
+    const cur = document.documentElement.getAttribute('data-theme');
+    applyTheme(cur === 'light' ? 'dark' : 'light');
+  });
+
+  // Service Worker registration for offline PWA shell + cached reads
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }
+
+  function showBanner(msg, kind = 'ok', autoClearMs = 4500) {
+    const el = $('banner');
+    if (!msg) {
+      el.className = 'banner hidden';
+      el.textContent = '';
+      return;
+    }
+    el.className = `banner ${kind}`;
+    el.textContent = msg;
+    if (autoClearMs > 0) {
+      clearTimeout(showBanner._t);
+      showBanner._t = setTimeout(() => {
+        if (el.textContent === msg) el.className = 'banner hidden';
+      }, autoClearMs);
+    }
+  }
+
+  function updateConnDot() {
+    const dot = $('conn-dot');
+    if (appState.offline) {
+      dot.className = 'brand-dot err';
+      dot.title = 'Offline (cached view)';
+    } else if (appState.wsConnected) {
+      dot.className = 'brand-dot ok';
+      dot.title = 'Connected (live)';
+    } else {
+      dot.className = 'brand-dot warn';
+      dot.title = 'Reconnecting…';
+    }
+  }
+
+  window.addEventListener('online', () => {
+    appState.offline = false;
+    updateConnDot();
+    showBanner('Back online — refreshing sheet', 'ok', 2500);
+    connectWs();
+    refreshAll();
+  });
+  window.addEventListener('offline', () => {
+    appState.offline = true;
+    appState.wsConnected = false;
+    updateConnDot();
+    showBanner('Offline — showing cached sheet data', 'warn', 0);
+  });
+
+  async function api(path, opts = {}) {
+    const headers = Object.assign({}, opts.headers || {});
+    if (appState.token) headers['Authorization'] = `Bearer ${appState.token}`;
+    if (opts.json !== undefined) {
+      headers['Content-Type'] = 'application/json';
+      opts.body = JSON.stringify(opts.json);
+      delete opts.json;
+    }
+    const res = await fetch(path, Object.assign({}, opts, { headers }));
+    if (res.status === 401) {
+      $('auth-modal').classList.remove('hidden');
+      throw new Error('Authentication required');
+    }
+    const ct = res.headers.get('content-type') || '';
+    const data = ct.includes('application/json') ? await res.json() : await res.text();
+    if (!res.ok) {
+      const msg = typeof data === 'object' && data && data.error ? data.error : String(data || res.statusText);
+      throw new Error(msg);
+    }
+    return data;
+  }
+
+  $('auth-token-save').addEventListener('click', async () => {
+    appState.token = $('auth-token-input').value.trim();
+    localStorage.setItem('mpmb_auth_token', appState.token);
+    $('auth-modal').classList.add('hidden');
+    connectWs();
+    await refreshAll();
+  });
+
+  // WebSocket live updates
+  function connectWs() {
+    if (appState.ws && (appState.ws.readyState === WebSocket.OPEN || appState.ws.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const qs = appState.token ? `?token=${encodeURIComponent(appState.token)}` : '';
+    const ws = new WebSocket(`${proto}//${location.host}/ws${qs}`);
+    appState.ws = ws;
+    ws.onopen = () => {
+      appState.wsConnected = true;
+      appState.offline = false;
+      updateConnDot();
+    };
+    ws.onclose = () => {
+      appState.wsConnected = false;
+      updateConnDot();
+      setTimeout(connectWs, 2500);
+    };
+    ws.onerror = () => {
+      appState.wsConnected = false;
+      updateConnDot();
+    };
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === 'state_updated' && msg.state) {
+          applySessionState(msg.state);
+        } else if (msg.type === 'interaction_requested' && msg.interaction) {
+          openAcrobatInteraction(msg.interaction);
+        } else if (msg.type === 'interaction_cleared') {
+          closeAcrobatModal();
+        } else if (msg.type === 'git_status' && msg.git) {
+          appState.git = msg.git;
+          renderGit();
+        } else if (msg.type === 'launch_url' && msg.url) {
+          showBanner(`MPMB link: ${msg.url}`, 'ok', 8000);
+          window.open(msg.url, '_blank', 'noopener');
+        } else if (msg.type === 'error' && msg.message) {
+          showBanner(msg.message, 'err', 6000);
+        }
+      } catch (_) {}
+    };
+  }
+
+  // Tab Navigation
+  document.querySelectorAll('.tab-btn').forEach((btn) => {
+    btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+  });
+  $('btn-go-library').addEventListener('click', () => switchTab('library'));
+
+  function switchTab(name) {
+    document.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
+    document.querySelectorAll('.tab-panel').forEach((p) => p.classList.toggle('active', p.id === `tab-${name}`));
+    if (name === 'sheet' && appState.sheet) loadPdfPage();
+    if (name === 'library') refreshLibrary();
+    if (name === 'tools' && appState.sheet) renderFieldList();
+  }
+
+  async function refreshAll() {
+    await Promise.all([refreshLibrary(), refreshSession()]);
+  }
+
+  async function refreshLibrary() {
+    try {
+      const data = await api('/api/sheets');
+      appState.sheets = data.sheets || [];
+      appState.git = data.git || null;
+      renderSheets();
+      renderGit();
+      if (appState.git && appState.git.enabled) {
+        const hist = await api('/api/git/history').catch(() => ({ commits: [] }));
+        renderHistory(hist.commits || []);
+      }
+    } catch (err) {
+      if (err.message !== 'Authentication required') showBanner(err.message, 'err');
+    }
+  }
+
+  async function refreshSession() {
+    try {
+      const state = await api('/api/session/state');
+      if (state && state.open) {
+        applySessionState(state);
+      } else {
+        appState.sheet = null;
+        renderPlay();
+      }
+    } catch (err) {
+      if (err.message !== 'Authentication required') showBanner(err.message, 'err');
+    }
+  }
+
+  function applySessionState(state) {
+    const prevRev = appState.sheet ? appState.sheet.revision : -1;
+    const prevPath = appState.sheet ? appState.sheet.path : null;
+    appState.sheet = state;
+    if (state.git) appState.git = state.git;
+    if (state.pageCount && appState.page >= state.pageCount) {
+      appState.page = Math.max(0, state.pageCount - 1);
+    }
+    renderTopbar();
+    renderPlay();
+    renderTools();
+    renderGit();
+    if (state.activeInteraction) {
+      openAcrobatInteraction(state.activeInteraction);
+    } else if (appState.activeInteraction) {
+      closeAcrobatModal();
+    }
+    const sheetTabActive = $('tab-sheet').classList.contains('active');
+    if (sheetTabActive && (prevRev !== state.revision || prevPath !== state.path)) {
+      loadPdfPage();
+    }
+  }
+
+  function renderTopbar() {
+    const s = appState.sheet;
+    const syncBtn = $('btn-top-sync');
+    if (!s || !s.open) {
+      $('top-char-name').textContent = 'MPMB Sheet';
+      $('top-char-sub').textContent = 'No sheet loaded';
+      syncBtn.textContent = 'Sync';
+      syncBtn.classList.remove('dirty');
+      return;
+    }
+    const ch = s.character || {};
+    $('top-char-name').textContent = ch.name || s.path;
+    const subParts = [];
+    if (ch.classAndLevels) subParts.push(ch.classAndLevels);
+    else if (ch.level) subParts.push(`Level ${ch.level}`);
+    subParts.push(`Rev ${s.revision}`);
+    $('top-char-sub').textContent = subParts.join(' • ');
+
+    const gitDirty = appState.git && appState.git.enabled && (appState.git.dirty || appState.git.ahead > 0);
+    if (s.dirtySinceSave || gitDirty) {
+      syncBtn.textContent = appState.git && appState.git.enabled ? 'Sync ●' : 'Save ●';
+      syncBtn.classList.add('dirty');
+    } else {
+      syncBtn.textContent = appState.git && appState.git.enabled ? 'Synced ✓' : 'Saved ✓';
+      syncBtn.classList.remove('dirty');
+    }
+  }
+
+  // --- PLAY / TABLE VIEW ---
+  function renderPlay() {
+    const s = appState.sheet;
+    if (!s || !s.open) {
+      $('play-empty').classList.remove('hidden');
+      $('play-content').classList.add('hidden');
+      return;
+    }
+    $('play-empty').classList.add('hidden');
+    $('play-content').classList.remove('hidden');
+
+    const v = s.vitals || {};
+    $('v-ac').textContent = v.ac || '—';
+    $('v-init').textContent = v.init || '—';
+    $('v-speed').textContent = v.speed || '—';
+    $('v-prof').textContent = v.proficiency || '—';
+
+    const cur = parseInt(v.hpCurrent, 10);
+    const max = parseInt(v.hpMax, 10);
+    $('v-hp-cur').textContent = v.hpCurrent || '—';
+    $('v-hp-max').textContent = v.hpMax || '—';
+    const pct = (!isNaN(cur) && !isNaN(max) && max > 0) ? Math.max(0, Math.min(100, (cur / max) * 100)) : 0;
+    const fill = $('hp-bar-fill');
+    fill.style.width = `${pct}%`;
+    fill.style.background = pct <= 25 ? 'var(--danger)' : pct <= 50 ? 'var(--warn)' : 'var(--success)';
+
+    const tempVal = (v.hpTemp || '').trim();
+    if (tempVal && tempVal !== '0') {
+      $('v-hp-temp').textContent = tempVal;
+      $('v-hp-temp-wrap').classList.remove('hidden');
+    } else {
+      $('v-hp-temp-wrap').classList.add('hidden');
+    }
+
+    // Abilities
+    const abGrid = $('abilities-grid');
+    abGrid.innerHTML = '';
+    (s.abilities || []).forEach((ab) => {
+      const div = document.createElement('button');
+      div.type = 'button';
+      div.className = 'ability-card';
+      div.innerHTML = `
+        <div class="vital-label">${esc(ab.label)}</div>
+        <div class="ability-mod">${esc(ab.modifier || '—')}</div>
+        <div class="ability-score">${esc(ab.score || '—')}</div>
+        <div class="ability-save">Save ${ab.saveProf ? '● ' : ''}${esc(ab.saveMod || '—')}</div>
+      `;
+      div.addEventListener('click', () => openFieldEditorByName(ab.scoreField));
+      abGrid.appendChild(div);
+    });
+
+    // Attacks
+    const atkList = $('attacks-list');
+    atkList.innerHTML = '';
+    const attacks = s.attacks || [];
+    $('attacks-card').classList.toggle('hidden', attacks.length === 0);
+    attacks.forEach((a) => {
+      const row = document.createElement('div');
+      row.className = 'row-card';
+      row.innerHTML = `
+        <div class="row-main">
+          <div class="row-title">${esc(a.name)}</div>
+          <div class="row-sub">${esc([a.damage, a.damageType, a.range, a.description].filter(Boolean).join(' • '))}</div>
+        </div>
+        <span class="status-badge ok">${esc(a.toHit || '—')}</span>
+      `;
+      atkList.appendChild(row);
+    });
+
+    // Spell Slots
+    const slots = s.spellSlots || [];
+    const slotsCard = $('slots-card');
+    const slotsList = $('slots-list');
+    slotsList.innerHTML = '';
+    slotsCard.classList.toggle('hidden', slots.length === 0);
+    slots.forEach((sl) => {
+      const row = document.createElement('div');
+      row.className = 'row-card';
+      const left = document.createElement('div');
+      left.className = 'row-main';
+      left.innerHTML = `<div class="row-title">${esc(sl.label)}</div><div class="row-sub">${sl.used} / ${sl.total} used</div>`;
+      const pips = document.createElement('div');
+      pips.className = 'slot-pips';
+      (sl.boxes || []).forEach((box, idx) => {
+        const pip = document.createElement('button');
+        pip.type = 'button';
+        pip.className = `slot-pip ${box.checked ? 'used' : ''}`;
+        pip.textContent = String(idx + 1);
+        pip.title = box.field;
+        pip.addEventListener('click', () => activateField(box.field, 0));
+        pips.appendChild(pip);
+      });
+      row.appendChild(left);
+      row.appendChild(pips);
+      slotsList.appendChild(row);
+    });
+
+    // Limited Features / Resources
+    const resources = s.resources || [];
+    const resCard = $('resources-card');
+    const resList = $('resources-list');
+    resList.innerHTML = '';
+    resCard.classList.toggle('hidden', resources.length === 0);
+    resources.forEach((r) => {
+      const row = document.createElement('div');
+      row.className = 'row-card';
+      const usedNum = parseInt(r.used || '0', 10) || 0;
+      const maxLabel = r.max ? `/ ${r.max}` : '';
+      row.innerHTML = `
+        <div class="row-main">
+          <div class="row-title">${esc(r.name)}</div>
+          <div class="row-sub">${esc(r.recovery || 'Resource')} • Used: ${esc(r.used || '0')} ${esc(maxLabel)}</div>
+        </div>
+      `;
+      const ctrls = document.createElement('div');
+      ctrls.className = 'seg-group';
+      const minus = document.createElement('button');
+      minus.type = 'button';
+      minus.className = 'btn small';
+      minus.textContent = '−';
+      minus.addEventListener('click', () => editField(r.usedField, String(Math.max(0, usedNum - 1)), 'user'));
+      const plus = document.createElement('button');
+      plus.type = 'button';
+      plus.className = 'btn small accent';
+      plus.textContent = '+';
+      plus.addEventListener('click', () => editField(r.usedField, String(usedNum + 1), 'user'));
+      ctrls.appendChild(minus);
+      ctrls.appendChild(plus);
+      row.appendChild(ctrls);
+      resList.appendChild(row);
+    });
+
+    // Skills
+    const skList = $('skills-list');
+    skList.innerHTML = '';
+    (s.skills || []).forEach((sk) => {
+      const item = document.createElement('div');
+      item.className = 'skill-row';
+      const mark = sk.expertise ? '◆ ' : sk.proficient ? '● ' : '';
+      item.innerHTML = `<span>${mark}${esc(sk.label)}</span><span class="skill-mod">${esc(sk.mod || '—')}</span>`;
+      skList.appendChild(item);
+    });
+
+    // Notes
+    const notesList = $('notes-list');
+    notesList.innerHTML = '';
+    (s.notes || []).forEach((n) => {
+      if (!n.value) return;
+      const block = document.createElement('div');
+      block.className = 'note-item';
+      block.innerHTML = `<div class="vital-label">${esc(n.label)}</div><pre>${esc(n.value)}</pre>`;
+      notesList.appendChild(block);
+    });
+  }
+
+  // HP Quick Steppers & Quick Actions
+  document.querySelectorAll('[data-hp-delta]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (!appState.sheet || !appState.sheet.open) return;
+      const v = appState.sheet.vitals || {};
+      const cur = parseInt(v.hpCurrent, 10);
+      const max = parseInt(v.hpMax, 10);
+      const base = isNaN(cur) ? (isNaN(max) ? 0 : max) : cur;
+      const delta = parseInt(btn.dataset.hpDelta, 10);
+      const next = Math.max(0, base + delta);
+      editField('HP Current', String(next), 'user');
+    });
+  });
+  $('btn-hp-full').addEventListener('click', () => {
+    const max = appState.sheet?.vitals?.hpMax;
+    if (max) editField('HP Current', String(max), 'user');
+  });
+  $('btn-hp-edit').addEventListener('click', () => openFieldEditorByName('HP Current'));
+  $('btn-hp-temp').addEventListener('click', () => openFieldEditorByName('HP Temp'));
+  $('btn-classes').addEventListener('click', () => invokeMenu('ClassesButton'));
+  $('btn-short-rest').addEventListener('click', () => runCommand('short_rest'));
+  $('btn-long-rest').addEventListener('click', () => runCommand('long_rest'));
+  $('btn-spell-sheet').addEventListener('click', () => runCommand('spell_sheet'));
+  $('btn-top-sync').addEventListener('click', async () => {
+    if (appState.git && appState.git.enabled) {
+      await doGitSync('');
+    } else {
+      await doSaveNow();
+    }
+  });
+
+  // --- PDF SHEET VIEW ---
+  $('btn-prev-page').addEventListener('click', () => {
+    if (appState.page > 0) {
+      appState.page--;
+      loadPdfPage();
+    }
+  });
+  $('btn-next-page').addEventListener('click', () => {
+    const maxPages = appState.sheet?.pageCount || 1;
+    if (appState.page + 1 < maxPages) {
+      appState.page++;
+      loadPdfPage();
+    }
+  });
+  $('btn-zoom-out').addEventListener('click', () => {
+    appState.zoom = Math.max(0.75, +(appState.zoom - 0.25).toFixed(2));
+    applyPdfZoom();
+  });
+  $('btn-zoom-in').addEventListener('click', () => {
+    appState.zoom = Math.min(2.5, +(appState.zoom + 0.25).toFixed(2));
+    applyPdfZoom();
+  });
+
+  function applyPdfZoom() {
+    $('zoom-label').textContent = `${Math.round(appState.zoom * 100)}%`;
+    $('pdf-stage').style.width = `${Math.round(appState.zoom * 100)}%`;
+  }
+
+  async function loadPdfPage() {
+    if (!appState.sheet || !appState.sheet.open) return;
+    const page = appState.page;
+    const rev = appState.sheet.revision;
+    const maxPages = appState.sheet.pageCount || 1;
+    $('page-label').textContent = `${page + 1} / ${maxPages}`;
+    $('btn-prev-page').disabled = page <= 0;
+    $('btn-next-page').disabled = page + 1 >= maxPages;
+    applyPdfZoom();
+
+    const width = Math.min(1800, Math.max(900, Math.round(window.innerWidth * (window.devicePixelRatio || 2))));
+    const tokenQs = appState.token ? `&token=${encodeURIComponent(appState.token)}` : '';
+    const imgUrl = `/api/session/page/${page}/image?w=${width}&rev=${rev}${tokenQs}`;
+    $('pdf-img').src = imgUrl;
+
+    try {
+      const wdata = await api(`/api/session/page/${page}/widgets`);
+      appState.pageWidgets = wdata.widgets || [];
+      appState.pageSize = wdata.pageSize || [612, 792];
+      renderPdfOverlay();
+    } catch (_) {}
+  }
+
+  function renderPdfOverlay() {
+    const overlay = $('pdf-overlay');
+    overlay.innerHTML = '';
+    const [pw, ph] = appState.pageSize;
+    if (!pw || !ph) return;
+    appState.pageWidgets.forEach((w) => {
+      if (w.type === 'button' && w.readonly) return;
+      const r = w.rect;
+      if (!Array.isArray(r) || r.length < 4) return;
+      const left = (Math.min(r[0], r[2]) / pw) * 100;
+      const right = (Math.max(r[0], r[2]) / pw) * 100;
+      const top = ((ph - Math.max(r[1], r[3])) / ph) * 100;
+      const bottom = ((ph - Math.min(r[1], r[3])) / ph) * 100;
+      const box = document.createElement('div');
+      box.className = 'widget-box';
+      box.style.left = `${left}%`;
+      box.style.top = `${top}%`;
+      box.style.width = `${Math.max(0.5, right - left)}%`;
+      box.style.height = `${Math.max(0.5, bottom - top)}%`;
+      box.title = `${w.name} (${w.type})`;
+      box.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const shift = $('chk-shift').checked || ev.shiftKey;
+        const modifier = ev.ctrlKey || ev.metaKey;
+        if (w.type === 'button' || w.type === 'checkbox' || w.type === 'radiobutton') {
+          await activateField(w.name, w.index || 0, shift, modifier);
+        } else {
+          openFieldEditorByName(w.name);
+        }
+      });
+      overlay.appendChild(box);
+    });
+  }
+
+  // --- TOOLS TAB ---
+  document.querySelectorAll('[data-cmd]').forEach((btn) => {
+    btn.addEventListener('click', () => runCommand(btn.dataset.cmd));
+  });
+  $('field-search').addEventListener('input', renderFieldList);
+  $('field-filter').addEventListener('change', renderFieldList);
+
+  function renderTools() {
+    const s = appState.sheet;
+    if (!s || !s.open) return;
+
+    const menuBox = $('mpmb-menus');
+    menuBox.innerHTML = '';
+    (s.menus || []).forEach((m) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn small';
+      btn.disabled = !m.enabled;
+      btn.textContent = (m.marked ? '✓ ' : '') + (m.label || m.name);
+      btn.title = m.tooltip || m.name;
+      btn.addEventListener('click', () => invokeMenu(m.name));
+      menuBox.appendChild(btn);
+    });
+
+    renderFieldList();
+
+    const bmBox = $('bookmarks-tree');
+    bmBox.innerHTML = '';
+    function renderBm(node, path, depth) {
+      if (!node || !Array.isArray(node.children)) return;
+      node.children.forEach((child, idx) => {
+        const childPath = `${path}.children[${idx}]`;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'bm-item';
+        btn.style.marginLeft = `${depth * 14}px`;
+        btn.textContent = child.name || '(Bookmark)';
+        btn.addEventListener('click', () => runBookmark(childPath));
+        bmBox.appendChild(btn);
+        if (child.children && child.children.length) {
+          renderBm(child, childPath, depth + 1);
+        }
+      });
+    }
+    renderBm(s.bookmarks, 'bookmarkRoot', 0);
+
+    $('diag-output').textContent = JSON.stringify(
+      {
+        revision: s.revision,
+        pageCount: s.pageCount,
+        diagnostics: s.diagnostics,
+        console: s.console,
+      },
+      null,
+      2
+    );
+  }
+
+  function renderFieldList() {
+    const list = $('field-list');
+    list.innerHTML = '';
+    const s = appState.sheet;
+    if (!s || !s.open) return;
+    const q = ($('field-search').value || '').trim().toLowerCase();
+    const filter = $('field-filter').value;
+    const pageNames = new Set((appState.pageWidgets || []).map((w) => w.name));
+    let shown = 0;
+    for (const f of s.fields || []) {
+      if (filter === 'writable' && (f.readonly || f.type === 'button')) continue;
+      if (filter === 'page' && !pageNames.has(f.name)) continue;
+      if (q && !f.name.toLowerCase().includes(q)) continue;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'field-item';
+      btn.innerHTML = `<span>${esc(f.name)}</span><span class="ftype">${esc(f.type)}${f.readonly ? ' · RO' : ''}</span>`;
+      btn.addEventListener('click', () => openFieldEditorByName(f.name));
+      list.appendChild(btn);
+      shown++;
+      if (shown >= 120) break;
+    }
+    if (shown === 0) {
+      list.innerHTML = '<div class="muted small-text">No matching fields.</div>';
+    }
+  }
+
+  // --- QUICK FIELD EDITOR MODAL ---
+  async function openFieldEditorByName(name) {
+    if (!name || !appState.sheet?.open) return;
+    try {
+      const info = await api(`/api/session/field?name=${encodeURIComponent(name)}`);
+      appState.selectedField = info;
+      $('fm-title').textContent = info.name;
+      $('fm-meta').textContent = `${info.type}${info.readonly ? ' • read-only' : ''}`;
+      const body = $('fm-body');
+      body.innerHTML = '';
+      if ((info.type === 'combobox' || info.type === 'listbox') && Array.isArray(info.items) && info.items.length > 0 && !info.editable) {
+        const sel = document.createElement('select');
+        sel.id = 'fm-input';
+        info.items.forEach(([label, val]) => {
+          const opt = document.createElement('option');
+          opt.value = val;
+          opt.textContent = label;
+          if (val === info.value || label === info.value) opt.selected = true;
+          sel.appendChild(opt);
+        });
+        sel.disabled = !!info.readonly;
+        body.appendChild(sel);
+      } else if (info.multiline) {
+        const ta = document.createElement('textarea');
+        ta.id = 'fm-input';
+        ta.value = info.value || '';
+        ta.readOnly = !!info.readonly;
+        body.appendChild(ta);
+      } else {
+        const inp = document.createElement('input');
+        inp.type = 'text';
+        inp.id = 'fm-input';
+        inp.value = info.value || '';
+        inp.readOnly = !!info.readonly;
+        body.appendChild(inp);
+        if (Array.isArray(info.items) && info.items.length > 0) {
+          const sel = document.createElement('select');
+          sel.innerHTML = '<option value="">Choose preset…</option>';
+          info.items.forEach(([label, val]) => {
+            const opt = document.createElement('option');
+            opt.value = val;
+            opt.textContent = label;
+            sel.appendChild(opt);
+          });
+          sel.addEventListener('change', () => {
+            if (sel.value) inp.value = sel.value;
+          });
+          body.appendChild(sel);
+        }
+      }
+      $('fm-save').disabled = !!info.readonly || info.type === 'button';
+      $('field-modal').classList.remove('hidden');
+      setTimeout(() => $('fm-input')?.focus(), 50);
+    } catch (err) {
+      showBanner(err.message, 'err');
+    }
+  }
+
+  function closeFieldModal() {
+    $('field-modal').classList.add('hidden');
+    appState.selectedField = null;
+  }
+  $('fm-close').addEventListener('click', closeFieldModal);
+  $('fm-cancel').addEventListener('click', closeFieldModal);
+  $('fm-save').addEventListener('click', async () => {
+    const info = appState.selectedField;
+    const inp = $('fm-input');
+    if (!info || !inp) return;
+    const mode = (info.type === 'combobox' || info.type === 'listbox') && !info.editable ? 'choice' : 'user';
+    closeFieldModal();
+    await editField(info.name, inp.value, mode);
+  });
+
+  // --- SESSION ACTIONS ---
+  async function handleActionResponse(res) {
+    if (!res) return;
+    if (res.status === 'interaction_required' && res.interaction) {
+      openAcrobatInteraction(res.interaction);
+      return;
+    }
+    if (res.state) applySessionState(res.state);
+    if (res.message) showBanner(res.message, 'ok', 3000);
+  }
+
+  async function editField(field, value, mode = 'user') {
+    try {
+      const res = await api('/api/session/edit', { method: 'POST', json: { field, value, mode } });
+      await handleActionResponse(res);
+    } catch (err) {
+      showBanner(err.message, 'err');
+    }
+  }
+
+  async function activateField(field, index = 0, shift = false, modifier = false) {
+    try {
+      const res = await api('/api/session/activate', {
+        method: 'POST',
+        json: { field, index, shift, modifier },
+      });
+      await handleActionResponse(res);
+    } catch (err) {
+      showBanner(err.message, 'err');
+    }
+  }
+
+  async function invokeMenu(name) {
+    try {
+      const res = await api('/api/session/menu', { method: 'POST', json: { name } });
+      await handleActionResponse(res);
+    } catch (err) {
+      showBanner(err.message, 'err');
+    }
+  }
+
+  async function runCommand(action) {
+    try {
+      const res = await api('/api/session/command', { method: 'POST', json: { action } });
+      await handleActionResponse(res);
+    } catch (err) {
+      showBanner(err.message, 'err');
+    }
+  }
+
+  async function runBookmark(path) {
+    try {
+      const res = await api('/api/session/bookmark', { method: 'POST', json: { path } });
+      await handleActionResponse(res);
+    } catch (err) {
+      showBanner(err.message, 'err');
+    }
+  }
+
+  // --- LIVE ACROBAT MODAL / POPUP MENU / ALERT RENDERER ---
+  function optionMinOrder(val) {
+    if (typeof val === 'number') return Math.abs(val);
+    if (val && typeof val === 'object') {
+      let best = Infinity;
+      for (const v of Object.values(val)) best = Math.min(best, optionMinOrder(v));
+      return best;
+    }
+    return Infinity;
+  }
+
+  function optionLeaves(obj, prefix = [], out = []) {
+    if (!obj || typeof obj !== 'object') return out;
+    const entries = Object.entries(obj).sort(([ka, va], [kb, vb]) => {
+      const d = optionMinOrder(va) - optionMinOrder(vb);
+      return d !== 0 ? d : ka.localeCompare(kb);
+    });
+    for (const [k, v] of entries) {
+      const next = prefix.concat([k]);
+      if (typeof v === 'number') out.push({ path: next, value: v });
+      else if (v && typeof v === 'object') optionLeaves(v, next, out);
+    }
+    return out;
+  }
+
+  function selectOption(tree, targetPath, multiple) {
+    function clear(node) {
+      if (!node || typeof node !== 'object') return;
+      for (const k of Object.keys(node)) {
+        if (typeof node[k] === 'number') node[k] = -Math.max(1, Math.abs(node[k]));
+        else clear(node[k]);
+      }
+    }
+    if (!multiple) clear(tree);
+    let cur = tree;
+    for (let i = 0; i < targetPath.length - 1; i++) cur = cur[targetPath[i]];
+    const leaf = targetPath[targetPath.length - 1];
+    const old = typeof cur[leaf] === 'number' ? cur[leaf] : -1;
+    cur[leaf] = multiple && old > 0 ? -old : Math.max(1, Math.abs(old));
+  }
+
+  function openAcrobatInteraction(interaction) {
+    appState.activeInteraction = interaction;
+    const body = $('am-body');
+    const footer = $('am-footer');
+    body.innerHTML = '';
+    footer.innerHTML = '';
+
+    if (interaction.kind === 'alert') {
+      const req = interaction.request || {};
+      $('am-title').textContent = req.cTitle || 'MPMB Alert';
+      const msg = document.createElement('div');
+      msg.className = 'ac-static';
+      msg.textContent = req.cMsg || '';
+      body.appendChild(msg);
+
+      let chkInput = null;
+      if (req.oCheckbox) {
+        const lbl = document.createElement('label');
+        lbl.className = 'ac-check';
+        chkInput = document.createElement('input');
+        chkInput.type = 'checkbox';
+        chkInput.checked = !!req.oCheckbox.bInitialValue;
+        lbl.appendChild(chkInput);
+        lbl.appendChild(document.createTextNode(req.oCheckbox.cMsg || 'Do not show again'));
+        body.appendChild(lbl);
+      }
+
+      const nType = Number(req.nType || 0);
+      const buttons =
+        nType === 1 ? [['Cancel', 2], ['OK', 1]] :
+        nType === 2 ? [['No', 3], ['Yes', 4]] :
+        nType === 3 ? [['Cancel', 2], ['No', 3], ['Yes', 4]] :
+        [['OK', 1]];
+      buttons.forEach(([label, code], idx) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = idx === buttons.length - 1 ? 'btn primary' : 'btn';
+        b.textContent = label;
+        b.addEventListener('click', () => submitInteraction({ button: code, checked: !!(chkInput && chkInput.checked) }));
+        footer.appendChild(b);
+      });
+      $('acrobat-modal').classList.remove('hidden');
+      return;
+    }
+
+    // Standard Acrobat execDialog / popUpMenuEx
+    const req = interaction.request || {};
+    const desc = req.description || {};
+    $('am-title').textContent = desc.name || 'MPMB Dialog';
+    appState.modalValues = JSON.parse(JSON.stringify(req.values || {}));
+    appState.modalPopupOptions = {};
+    for (const [k, v] of Object.entries(appState.modalValues)) {
+      if (v && typeof v === 'object' && !Array.isArray(v) && v.argb === undefined) {
+        appState.modalPopupOptions[k] = JSON.parse(JSON.stringify(v));
+      }
+    }
+    const enabled = req.enabled || {};
+    const visible = req.visible || {};
+    const red = req.red || {};
+
+    function renderNode(el) {
+      if (!el) return null;
+      const id = el.item_id || '';
+      const kind = el.type || 'view';
+      if (visible[id] === false || (typeof el.height === 'number' && el.height < 0)) return null;
+      const disabled = enabled[id] === false;
+
+      if (Array.isArray(el.elements)) {
+        if (kind === 'cluster') {
+          const det = document.createElement('details');
+          det.className = 'ac-cluster';
+          det.open = true;
+          const sum = document.createElement('summary');
+          sum.textContent = el.name || 'Options';
+          det.appendChild(sum);
+          const inner = document.createElement('div');
+          inner.className = el.align_children === 'align_row' ? 'ac-row' : 'ac-col';
+          el.elements.forEach((c) => {
+            const child = renderNode(c);
+            if (child) inner.appendChild(child);
+          });
+          det.appendChild(inner);
+          return det;
+        }
+        const wrap = document.createElement('div');
+        wrap.className = (el.align_children === 'align_row' || el.align_children === 'align_distribute') ? 'ac-row' : 'ac-col';
+        el.elements.forEach((c) => {
+          const child = renderNode(c);
+          if (child) wrap.appendChild(child);
+        });
+        return wrap;
+      }
+
+      const rawVal = Object.prototype.hasOwnProperty.call(appState.modalValues, id) ? appState.modalValues[id] : undefined;
+      const textClass = `ac-static${el.bold ? ' ac-bold' : ''}${red[id] ? ' ac-red' : ''}`;
+
+      if (kind === 'static_text') {
+        const div = document.createElement('div');
+        div.className = textClass;
+        div.textContent = (typeof rawVal === 'string' && rawVal.length > 0) ? rawVal : (el.name || '');
+        return div;
+      }
+      if (kind === 'link_text') {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = `ac-link${el.bold ? ' ac-bold' : ''}${red[id] ? ' ac-red' : ''}`;
+        b.disabled = disabled;
+        b.textContent = (typeof rawVal === 'string' && rawVal.length > 0) ? rawVal : (el.name || '');
+        b.addEventListener('click', () => submitInteraction({ event: id, values: appState.modalValues }));
+        return b;
+      }
+      if (kind === 'button') {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'btn';
+        b.disabled = disabled;
+        b.textContent = (typeof rawVal === 'string' && rawVal.length > 0) ? rawVal : (el.name || id);
+        b.addEventListener('click', () => submitInteraction({ event: id, values: appState.modalValues }));
+        return b;
+      }
+      if (kind === 'ok' || kind === 'ok_cancel' || kind === 'ok_cancel_other') {
+        const row = document.createElement('div');
+        row.className = 'ac-row';
+        const okBtn = document.createElement('button');
+        okBtn.type = 'button';
+        okBtn.className = 'btn primary';
+        okBtn.disabled = disabled;
+        okBtn.textContent = el.ok_name || 'OK';
+        okBtn.addEventListener('click', () => submitInteraction({ result: 'ok', values: appState.modalValues }));
+        row.appendChild(okBtn);
+        if (kind === 'ok_cancel_other') {
+          const otherBtn = document.createElement('button');
+          otherBtn.type = 'button';
+          otherBtn.className = 'btn';
+          otherBtn.disabled = disabled;
+          otherBtn.textContent = el.other_name || 'Other';
+          otherBtn.addEventListener('click', () => submitInteraction({ result: 'other', values: appState.modalValues }));
+          row.appendChild(otherBtn);
+        }
+        if (kind !== 'ok') {
+          const cancelBtn = document.createElement('button');
+          cancelBtn.type = 'button';
+          cancelBtn.className = 'btn';
+          cancelBtn.textContent = el.cancel_name || 'Cancel';
+          cancelBtn.addEventListener('click', () => submitInteraction({ result: 'cancel', values: appState.modalValues }));
+          row.appendChild(cancelBtn);
+        }
+        return row;
+      }
+      if (kind === 'check_box') {
+        const lbl = document.createElement('label');
+        lbl.className = 'ac-check';
+        const inp = document.createElement('input');
+        inp.type = 'checkbox';
+        inp.checked = !!rawVal;
+        inp.disabled = disabled;
+        inp.addEventListener('change', () => {
+          appState.modalValues[id] = inp.checked;
+          submitInteraction({ event: id, values: appState.modalValues });
+        });
+        lbl.appendChild(inp);
+        const span = document.createElement('span');
+        span.className = textClass;
+        span.textContent = el.name || id;
+        lbl.appendChild(span);
+        return lbl;
+      }
+      if (kind === 'radio') {
+        const lbl = document.createElement('label');
+        lbl.className = 'ac-check';
+        const inp = document.createElement('input');
+        inp.type = 'radio';
+        inp.name = el.group_id || 'radio';
+        inp.checked = !!rawVal;
+        inp.disabled = disabled;
+        inp.addEventListener('change', () => {
+          appState.modalValues[id] = true;
+          submitInteraction({ event: id, values: appState.modalValues });
+        });
+        lbl.appendChild(inp);
+        const span = document.createElement('span');
+        span.className = textClass;
+        span.textContent = el.name || id;
+        lbl.appendChild(span);
+        return lbl;
+      }
+      if (kind === 'edit_text' && el.PopupEdit && (isPlainObj(rawVal) || appState.modalPopupOptions[id])) {
+        const opts = appState.modalPopupOptions[id] || (isPlainObj(rawVal) ? rawVal : {});
+        const leaves = optionLeaves(opts);
+        const selectedLeaf = leaves.find((l) => l.value > 0);
+        const wrap = document.createElement('div');
+        wrap.className = 'ac-col';
+        const inp = document.createElement('input');
+        inp.type = 'text';
+        inp.value = typeof rawVal === 'string' ? rawVal : (selectedLeaf ? selectedLeaf.path[selectedLeaf.path.length - 1] : '');
+        inp.disabled = disabled || !!el.readonly;
+        inp.addEventListener('change', () => {
+          appState.modalValues[id] = inp.value;
+          submitInteraction({ event: id, values: appState.modalValues });
+        });
+        wrap.appendChild(inp);
+        if (leaves.length > 0) {
+          const sel = document.createElement('select');
+          sel.disabled = disabled;
+          sel.innerHTML = '<option value="">Select preset…</option>';
+          leaves.forEach((l, idx) => {
+            const opt = document.createElement('option');
+            opt.value = String(idx);
+            opt.textContent = l.path.join(' › ');
+            if (l.value > 0) opt.selected = true;
+            sel.appendChild(opt);
+          });
+          sel.addEventListener('change', () => {
+            const chosen = leaves[Number(sel.value)];
+            if (!chosen) return;
+            const copy = JSON.parse(JSON.stringify(opts));
+            selectOption(copy, chosen.path, false);
+            appState.modalPopupOptions[id] = copy;
+            appState.modalValues[id] = copy;
+            submitInteraction({ event: id, values: appState.modalValues });
+          });
+          wrap.appendChild(sel);
+        }
+        return wrap;
+      }
+      if ((kind === 'popup' || kind === 'list_box' || kind === 'hier_list_box' || kind === 'edit_text') && isPlainObj(rawVal)) {
+        const leaves = optionLeaves(rawVal);
+        if (kind === 'list_box' || kind === 'hier_list_box') {
+          const box = document.createElement('div');
+          box.className = 'ac-listbox';
+          leaves.forEach((l) => {
+            const item = document.createElement('button');
+            item.type = 'button';
+            item.className = `ac-list-opt${l.value > 0 ? ' selected' : ''}`;
+            item.disabled = disabled;
+            item.textContent = l.path.join(' › ');
+            item.addEventListener('click', (ev) => {
+              const copy = JSON.parse(JSON.stringify(appState.modalValues[id]));
+              selectOption(copy, l.path, ev.ctrlKey || ev.metaKey);
+              appState.modalValues[id] = copy;
+              submitInteraction({ event: id, values: appState.modalValues });
+            });
+            box.appendChild(item);
+          });
+          return box;
+        }
+        const sel = document.createElement('select');
+        sel.disabled = disabled;
+        leaves.forEach((l, idx) => {
+          const opt = document.createElement('option');
+          opt.value = String(idx);
+          opt.textContent = l.path.join(' › ');
+          if (l.value > 0) opt.selected = true;
+          sel.appendChild(opt);
+        });
+        sel.addEventListener('change', () => {
+          const chosen = leaves[Number(sel.value)];
+          if (!chosen) return;
+          const copy = JSON.parse(JSON.stringify(appState.modalValues[id]));
+          selectOption(copy, chosen.path, false);
+          appState.modalValues[id] = copy;
+          submitInteraction({ event: id, values: appState.modalValues });
+        });
+        return sel;
+      }
+      if (kind === 'edit_text') {
+        const isMulti = !!el.multiline || (el.char_height && el.char_height > 1);
+        const isSpin = !!el.SpinEdit && !el.PopupEdit && !el.readonly;
+        const wrap = document.createElement('div');
+        wrap.className = isSpin ? 'ac-spin' : 'ac-col';
+        const inp = document.createElement(isMulti ? 'textarea' : 'input');
+        if (!isMulti) inp.type = el.password ? 'password' : 'text';
+        inp.value = rawVal === undefined || rawVal === null ? '' : String(rawVal);
+        inp.disabled = disabled;
+        inp.readOnly = !!el.readonly;
+        inp.addEventListener('input', () => {
+          appState.modalValues[id] = inp.value;
+        });
+        inp.addEventListener('change', () => {
+          appState.modalValues[id] = inp.value;
+          submitInteraction({ event: id, values: appState.modalValues });
+        });
+        wrap.appendChild(inp);
+        if (isSpin) {
+          const minus = document.createElement('button');
+          minus.type = 'button';
+          minus.className = 'btn small';
+          minus.disabled = disabled;
+          minus.textContent = '−';
+          minus.addEventListener('click', () => {
+            const n = parseInt(inp.value, 10) || 0;
+            appState.modalValues[id] = String(n - 1);
+            submitInteraction({ event: id, values: appState.modalValues });
+          });
+          const plus = document.createElement('button');
+          plus.type = 'button';
+          plus.className = 'btn small';
+          plus.disabled = disabled;
+          plus.textContent = '+';
+          plus.addEventListener('click', () => {
+            const n = parseInt(inp.value, 10) || 0;
+            appState.modalValues[id] = String(n + 1);
+            submitInteraction({ event: id, values: appState.modalValues });
+          });
+          wrap.appendChild(minus);
+          wrap.appendChild(plus);
+        }
+        return wrap;
+      }
+      if (kind === 'image' && rawVal && rawVal.argb && rawVal.width && rawVal.height) {
+        const c = document.createElement('canvas');
+        c.width = rawVal.width;
+        c.height = rawVal.height;
+        const ctx = c.getContext('2d');
+        const img = ctx.createImageData(rawVal.width, rawVal.height);
+        const hex = rawVal.argb;
+        for (let i = 0, p = 0; i + 8 <= hex.length && p < img.data.length; i += 8, p += 4) {
+          const v = parseInt(hex.slice(i, i + 8), 16);
+          img.data[p] = (v >> 16) & 255;
+          img.data[p + 1] = (v >> 8) & 255;
+          img.data[p + 2] = v & 255;
+          img.data[p + 3] = (v >>> 24) & 255;
+        }
+        ctx.putImageData(img, 0, 0);
+        return c;
+      }
+      if (kind === 'gap') {
+        const g = document.createElement('div');
+        g.className = 'ac-gap';
+        return g;
+      }
+      return null;
+    }
+
+    const rendered = renderNode(desc);
+    if (rendered) body.appendChild(rendered);
+
+    // Always offer a Cancel button in the footer if the dialog didn't embed ok_cancel buttons (e.g. popup menus).
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'btn';
+    cancelBtn.textContent = 'Close / Cancel';
+    cancelBtn.addEventListener('click', () => submitInteraction({ result: 'cancel', values: appState.modalValues }));
+    footer.appendChild(cancelBtn);
+
+    $('acrobat-modal').classList.remove('hidden');
+  }
+
+  function closeAcrobatModal() {
+    $('acrobat-modal').classList.add('hidden');
+    appState.activeInteraction = null;
+  }
+
+  $('am-close').addEventListener('click', () => {
+    const inter = appState.activeInteraction;
+    if (!inter) return closeAcrobatModal();
+    if (inter.kind === 'alert') {
+      const nType = Number(inter.request?.nType || 0);
+      const code = (nType === 1 || nType === 3) ? 2 : nType === 2 ? 4 : 1;
+      submitInteraction({ button: code, checked: false });
+    } else {
+      submitInteraction({ result: 'cancel', values: appState.modalValues });
+    }
+  });
+
+  async function submitInteraction(reply) {
+    const inter = appState.activeInteraction;
+    if (!inter) return;
+    try {
+      const res = await api(`/api/session/interaction/${encodeURIComponent(inter.id)}`, {
+        method: 'POST',
+        json: reply,
+      });
+      if (res.status === 'interaction_required' && res.interaction) {
+        openAcrobatInteraction(res.interaction);
+      } else {
+        closeAcrobatModal();
+        if (res.state) applySessionState(res.state);
+      }
+    } catch (err) {
+      closeAcrobatModal();
+      showBanner(err.message, 'err');
+    }
+  }
+
+  // --- LIBRARY & GIT TAB ---
+  function renderGit() {
+    const g = appState.git;
+    const badge = $('git-badge');
+    const summary = $('git-summary');
+    const conflictBox = $('git-conflict-box');
+    const syncBtn = $('btn-git-sync');
+    const pullBtn = $('btn-git-pull');
+    const histCard = $('git-history-card');
+
+    if (!g || !g.enabled) {
+      badge.textContent = 'Local Store';
+      badge.className = 'status-badge';
+      summary.textContent = 'Running against local directory storage. Pass --git-repo / MPMB_GIT_REPO to enable GitHub sync.';
+      syncBtn.disabled = true;
+      pullBtn.disabled = true;
+      conflictBox.classList.add('hidden');
+      histCard.classList.add('hidden');
+      return;
+    }
+
+    syncBtn.disabled = false;
+    pullBtn.disabled = false;
+    histCard.classList.remove('hidden');
+
+    if (g.last_conflict_branch) {
+      badge.textContent = 'Conflict Branch';
+      badge.className = 'status-badge warn';
+      conflictBox.textContent = `Diverged edits were preserved safely on remote branch "${g.last_conflict_branch}".`;
+      conflictBox.classList.remove('hidden');
+    } else if (g.dirty || g.ahead > 0) {
+      badge.textContent = `${g.changed_files.length} Unsynced`;
+      badge.className = 'status-badge warn';
+      conflictBox.classList.add('hidden');
+    } else {
+      badge.textContent = 'Synced ✓';
+      badge.className = 'status-badge ok';
+      conflictBox.classList.add('hidden');
+    }
+
+    const parts = [
+      `Branch: ${g.branch || 'main'}`,
+      g.head_sha ? `HEAD: ${g.head_sha.slice(0, 7)}` : 'No commits yet',
+      g.repo_url ? `Remote: ${g.repo_url}` : '',
+      g.last_error ? `Note: ${g.last_error}` : '',
+    ].filter(Boolean);
+    summary.textContent = parts.join(' • ');
+  }
+
+  function renderSheets() {
+    const list = $('sheets-list');
+    list.innerHTML = '';
+    if (!appState.sheets.length) {
+      list.innerHTML = '<div class="muted small-text">No PDF sheets in store yet. Tap "Upload PDF" to add one.</div>';
+      return;
+    }
+    const activePath = appState.sheet?.path;
+    appState.sheets.forEach((sh) => {
+      const row = document.createElement('div');
+      row.className = 'row-card';
+      const title = sh.character_name ? `${sh.character_name} (${sh.name})` : sh.name;
+      const meta = [
+        sh.class_and_levels || (sh.level ? `Lv ${sh.level}` : ''),
+        `${(sh.size_bytes / (1024 * 1024)).toFixed(2)} MB`,
+        sh.path,
+      ].filter(Boolean).join(' • ');
+      row.innerHTML = `
+        <div class="row-main">
+          <div class="row-title">${esc(title)}</div>
+          <div class="row-sub">${esc(meta)}</div>
+        </div>
+      `;
+      const actions = document.createElement('div');
+      actions.className = 'seg-group';
+      const dl = document.createElement('a');
+      const tokenQs = appState.token ? `?token=${encodeURIComponent(appState.token)}` : '';
+      dl.href = `/api/sheets/${encodeURIComponent(sh.path)}/download${tokenQs}`;
+      dl.className = 'btn small';
+      dl.textContent = '↓';
+      dl.title = 'Download PDF';
+      const openBtn = document.createElement('button');
+      openBtn.type = 'button';
+      openBtn.className = activePath === sh.path ? 'btn small accent' : 'btn small primary';
+      openBtn.textContent = activePath === sh.path ? 'Open ✓' : 'Open';
+      openBtn.addEventListener('click', () => openSheet(sh.path));
+      actions.appendChild(dl);
+      actions.appendChild(openBtn);
+      row.appendChild(actions);
+      list.appendChild(row);
+    });
+  }
+
+  function renderHistory(commits) {
+    const box = $('git-history-list');
+    box.innerHTML = '';
+    if (!commits.length) {
+      box.innerHTML = '<div class="muted small-text">No commits yet.</div>';
+      return;
+    }
+    commits.forEach((c) => {
+      const row = document.createElement('div');
+      row.className = 'row-card';
+      row.innerHTML = `
+        <div class="row-main">
+          <div class="row-title">${esc(c.subject)}</div>
+          <div class="row-sub">${esc(c.short_sha)} • ${esc(c.author)} • ${esc(c.date)}</div>
+        </div>
+      `;
+      box.appendChild(row);
+    });
+  }
+
+  async function openSheet(path) {
+    try {
+      showBanner(`Loading ${path}…`, 'warn', 0);
+      const res = await api('/api/session/open', { method: 'POST', json: { path } });
+      appState.page = 0;
+      if (res.state) applySessionState(res.state);
+      showBanner(`Loaded ${path}`, 'ok', 2500);
+      switchTab('play');
+    } catch (err) {
+      showBanner(err.message, 'err');
+    }
+  }
+
+  async function doSaveNow() {
+    try {
+      const res = await api('/api/session/save', { method: 'POST', json: {} });
+      if (res.state) applySessionState(res.state);
+      showBanner(res.message || 'Saved PDF to disk', 'ok', 3000);
+      await refreshLibrary();
+    } catch (err) {
+      showBanner(err.message, 'err');
+    }
+  }
+
+  async function doGitSync(message) {
+    try {
+      showBanner('Syncing with GitHub…', 'warn', 0);
+      const res = await api('/api/git/sync', { method: 'POST', json: { message } });
+      $('git-commit-msg').value = '';
+      if (res.git) appState.git = res.git;
+      if (res.state) applySessionState(res.state);
+      const kind = res.sync?.status === 'conflict_branch' ? 'warn' : 'ok';
+      showBanner(res.sync?.message || 'Synced', kind, 6000);
+      await refreshLibrary();
+    } catch (err) {
+      showBanner(err.message, 'err', 7000);
+    }
+  }
+
+  async function doGitPull() {
+    try {
+      showBanner('Pulling latest from GitHub…', 'warn', 0);
+      const res = await api('/api/git/pull', { method: 'POST', json: {} });
+      if (res.state) applySessionState(res.state);
+      showBanner(res.pull?.message || 'Pull complete', res.pull?.dirty ? 'warn' : 'ok', 5000);
+      await refreshLibrary();
+    } catch (err) {
+      showBanner(err.message, 'err', 7000);
+    }
+  }
+
+  $('btn-git-sync').addEventListener('click', () => doGitSync($('git-commit-msg').value.trim()));
+  $('btn-git-pull').addEventListener('click', doGitPull);
+  $('btn-save-now').addEventListener('click', doSaveNow);
+
+  $('file-upload').addEventListener('change', async (ev) => {
+    const file = ev.target.files?.[0];
+    ev.target.value = '';
+    if (!file) return;
+    try {
+      showBanner(`Uploading ${file.name}…`, 'warn', 0);
+      const buf = await file.arrayBuffer();
+      await api(`/api/sheets/upload?name=${encodeURIComponent(file.name)}&overwrite=true`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/pdf' },
+        body: buf,
+      });
+      showBanner(`Uploaded ${file.name}`, 'ok', 3000);
+      await refreshLibrary();
+    } catch (err) {
+      showBanner(err.message, 'err');
+    }
+  });
+
+  function isPlainObj(v) {
+    return v !== null && typeof v === 'object' && !Array.isArray(v) && v.argb === undefined;
+  }
+
+  function esc(s) {
+    return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[c]));
+  }
+
+  // Boot
+  updateConnDot();
+  connectWs();
+  refreshAll();
+})();
