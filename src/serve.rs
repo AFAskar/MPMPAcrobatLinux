@@ -236,20 +236,10 @@ pub struct PublicInteraction {
     pub request: Value,
 }
 
-#[derive(Clone, Debug)]
-enum WorkerPhase {
-    Idle {
-        job_id: u64,
-        result: Option<std::result::Result<Value, String>>,
-    },
-    Running,
-    WaitingInteraction {
-        job_id: u64,
-        interaction: PublicInteraction,
-    },
-}
+type JobOutcome = std::result::Result<Value, (StatusCode, Value)>;
 
 struct PendingInteraction {
+    job_id: u64,
     public: PublicInteraction,
     tx: mpsc::SyncSender<Value>,
 }
@@ -257,20 +247,38 @@ struct PendingInteraction {
 struct InteractionBridge {
     seq: AtomicU64,
     current_job: AtomicU64,
+    cancelling_job: AtomicU64,
     active: Mutex<Option<PendingInteraction>>,
-    phase_tx: watch::Sender<WorkerPhase>,
+    in_flight_jobs: Mutex<BTreeMap<u64, watch::Receiver<Option<JobOutcome>>>>,
+    interaction_tx: watch::Sender<Option<(u64, PublicInteraction)>>,
     events_tx: broadcast::Sender<Value>,
 }
 
 impl InteractionBridge {
-    fn new(phase_tx: watch::Sender<WorkerPhase>, events_tx: broadcast::Sender<Value>) -> Arc<Self> {
+    fn new(
+        interaction_tx: watch::Sender<Option<(u64, PublicInteraction)>>,
+        events_tx: broadcast::Sender<Value>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             seq: AtomicU64::new(1),
             current_job: AtomicU64::new(0),
+            cancelling_job: AtomicU64::new(0),
             active: Mutex::new(None),
-            phase_tx,
+            in_flight_jobs: Mutex::new(BTreeMap::new()),
+            interaction_tx,
             events_tx,
         })
+    }
+
+    fn register_job(&self, job_id: u64, rx: watch::Receiver<Option<JobOutcome>>) {
+        self.in_flight_jobs.lock().unwrap().insert(job_id, rx);
+    }
+
+    fn finish_job(&self, job_id: u64) {
+        self.in_flight_jobs.lock().unwrap().remove(&job_id);
+        let _ = self
+            .cancelling_job
+            .compare_exchange(job_id, 0, Ordering::SeqCst, Ordering::SeqCst);
     }
 
     fn set_current_job(&self, job_id: u64) {
@@ -285,44 +293,69 @@ impl InteractionBridge {
             .map(|p| p.public.clone())
     }
 
+    fn cancel_reply_for(kind: &str, request: &Value) -> Value {
+        if kind == "alert" {
+            let ntype = request["nType"].as_i64().unwrap_or(0);
+            let button = match ntype {
+                1 | 3 => 2,
+                2 => 4,
+                _ => 1,
+            };
+            json!({"button": button, "checked": false})
+        } else {
+            json!({"result": "cancel"})
+        }
+    }
+
     fn cancel_active(&self) {
         if let Some(pending) = self.active.lock().unwrap().take() {
-            let cancel_reply = if pending.public.kind == "alert" {
-                let kind = pending.public.request["nType"].as_i64().unwrap_or(0);
-                let button = match kind {
-                    1 | 3 => 2,
-                    2 => 4,
-                    _ => 1,
-                };
-                json!({"button": button, "checked": false})
-            } else {
-                json!({"result": "cancel"})
-            };
+            // Mark this job as cancelling so any cascading follow-up modal/alert
+            // fired while unwinding auto-cancels instead of re-blocking the worker.
+            self.cancelling_job.store(pending.job_id, Ordering::SeqCst);
+            let _ = self.interaction_tx.send(None);
+            let cancel_reply =
+                Self::cancel_reply_for(&pending.public.kind, &pending.public.request);
             let _ = pending.tx.send(cancel_reply);
             let _ = self.events_tx.send(json!({"type": "interaction_cleared"}));
         }
     }
 
-    fn respond(&self, id: &str, reply: Value) -> Result<u64> {
-        let mut active = self.active.lock().unwrap();
-        let Some(pending) = active.as_ref() else {
-            bail!("no active dialog or alert");
+    fn respond(
+        &self,
+        id: &str,
+        reply: Value,
+    ) -> Result<(u64, watch::Receiver<Option<JobOutcome>>)> {
+        let pending = {
+            let mut active = self.active.lock().unwrap();
+            let Some(cur) = active.as_ref() else {
+                bail!("no active dialog or alert");
+            };
+            if cur.public.id != id {
+                bail!("interaction id mismatch (dialog already changed)");
+            }
+            active.take().unwrap()
         };
-        if pending.public.id != id {
-            bail!("interaction id mismatch (dialog already changed)");
-        }
-        let pending = active.take().unwrap();
-        let job_id = self.current_job.load(Ordering::SeqCst);
-        let _ = self.phase_tx.send(WorkerPhase::Running);
+        let done_rx = self
+            .in_flight_jobs
+            .lock()
+            .unwrap()
+            .get(&pending.job_id)
+            .cloned()
+            .ok_or_else(|| anyhow!("job {} is no longer in flight", pending.job_id))?;
+        let _ = self.interaction_tx.send(None);
         pending
             .tx
             .send(reply)
             .map_err(|_| anyhow!("dialog worker is no longer waiting"))?;
         let _ = self.events_tx.send(json!({"type": "interaction_cleared"}));
-        Ok(job_id)
+        Ok((pending.job_id, done_rx))
     }
 
     fn wait_for_user(&self, kind: &str, request: &Value) -> Result<Value> {
+        let job_id = self.current_job.load(Ordering::SeqCst);
+        if job_id != 0 && self.cancelling_job.load(Ordering::SeqCst) == job_id {
+            return Ok(Self::cancel_reply_for(kind, request));
+        }
         let id = format!("int-{}", self.seq.fetch_add(1, Ordering::SeqCst));
         let public = PublicInteraction {
             id,
@@ -330,18 +363,15 @@ impl InteractionBridge {
             request: request.clone(),
         };
         let (tx, rx) = mpsc::sync_channel(1);
-        let job_id = self.current_job.load(Ordering::SeqCst);
         {
             let mut active = self.active.lock().unwrap();
             *active = Some(PendingInteraction {
+                job_id,
                 public: public.clone(),
                 tx,
             });
         }
-        let _ = self.phase_tx.send(WorkerPhase::WaitingInteraction {
-            job_id,
-            interaction: public.clone(),
-        });
+        let _ = self.interaction_tx.send(Some((job_id, public.clone())));
         let _ = self.events_tx.send(json!({
             "type": "interaction_requested",
             "interaction": public,
@@ -375,6 +405,7 @@ impl InteractionHandler for InteractionBridge {
 enum WorkerCommand {
     Open {
         job_id: u64,
+        done: watch::Sender<Option<JobOutcome>>,
         rel_path: String,
     },
     GetState {
@@ -395,12 +426,14 @@ enum WorkerCommand {
     },
     Edit {
         job_id: u64,
+        done: watch::Sender<Option<JobOutcome>>,
         field: String,
         value: Value,
         mode: String,
     },
     Activate {
         job_id: u64,
+        done: watch::Sender<Option<JobOutcome>>,
         field: String,
         index: i64,
         shift: bool,
@@ -408,26 +441,32 @@ enum WorkerCommand {
     },
     InvokeMenu {
         job_id: u64,
+        done: watch::Sender<Option<JobOutcome>>,
         name: String,
     },
     RunCommand {
         job_id: u64,
+        done: watch::Sender<Option<JobOutcome>>,
         action: String,
     },
     RunBookmark {
         job_id: u64,
+        done: watch::Sender<Option<JobOutcome>>,
         path: String,
     },
     SaveNow {
         job_id: u64,
+        done: watch::Sender<Option<JobOutcome>>,
         force: bool,
     },
     GitSync {
         job_id: u64,
+        done: watch::Sender<Option<JobOutcome>>,
         message: String,
     },
     GitPull {
         job_id: u64,
+        done: watch::Sender<Option<JobOutcome>>,
     },
     CheckIdleAutoSync {
         idle_secs: u64,
@@ -499,56 +538,75 @@ impl SheetWorker {
                         }
                     }
                 }
-                WorkerCommand::Open { job_id, rel_path } => {
-                    self.run_job(job_id, |w| w.open_sheet(&rel_path));
+                WorkerCommand::Open {
+                    job_id,
+                    done,
+                    rel_path,
+                } => {
+                    self.run_job(job_id, done, |w| w.open_sheet(&rel_path));
                 }
                 WorkerCommand::Edit {
                     job_id,
+                    done,
                     field,
                     value,
                     mode,
                 } => {
-                    self.run_job(job_id, |w| w.edit_field(&field, &value, &mode));
+                    self.run_job(job_id, done, |w| w.edit_field(&field, &value, &mode));
                 }
                 WorkerCommand::Activate {
                     job_id,
+                    done,
                     field,
                     index,
                     shift,
                     modifier,
                 } => {
-                    self.run_job(job_id, |w| w.activate_field(&field, index, shift, modifier));
+                    self.run_job(job_id, done, |w| {
+                        w.activate_field(&field, index, shift, modifier)
+                    });
                 }
-                WorkerCommand::InvokeMenu { job_id, name } => {
-                    self.run_job(job_id, |w| w.invoke_menu(&name));
+                WorkerCommand::InvokeMenu { job_id, done, name } => {
+                    self.run_job(job_id, done, |w| w.invoke_menu(&name));
                 }
-                WorkerCommand::RunCommand { job_id, action } => {
-                    self.run_job(job_id, |w| w.run_command(&action));
+                WorkerCommand::RunCommand {
+                    job_id,
+                    done,
+                    action,
+                } => {
+                    self.run_job(job_id, done, |w| w.run_command(&action));
                 }
-                WorkerCommand::RunBookmark { job_id, path } => {
-                    self.run_job(job_id, |w| w.run_bookmark(&path));
+                WorkerCommand::RunBookmark { job_id, done, path } => {
+                    self.run_job(job_id, done, |w| w.run_bookmark(&path));
                 }
-                WorkerCommand::SaveNow { job_id, force } => {
-                    self.run_job(job_id, |w| w.save_active(force));
+                WorkerCommand::SaveNow {
+                    job_id,
+                    done,
+                    force,
+                } => {
+                    self.run_job(job_id, done, |w| w.save_active(force));
                 }
-                WorkerCommand::GitSync { job_id, message } => {
-                    self.run_job(job_id, |w| w.do_git_sync(&message));
+                WorkerCommand::GitSync {
+                    job_id,
+                    done,
+                    message,
+                } => {
+                    self.run_job(job_id, done, |w| w.do_git_sync(&message));
                 }
-                WorkerCommand::GitPull { job_id } => {
-                    self.run_job(job_id, |w| w.do_git_pull());
+                WorkerCommand::GitPull { job_id, done } => {
+                    self.run_job(job_id, done, |w| w.do_git_pull());
                 }
             }
         }
     }
 
-    fn run_job<F>(&mut self, job_id: u64, f: F)
+    fn run_job<F>(&mut self, job_id: u64, done: watch::Sender<Option<JobOutcome>>, f: F)
     where
         F: FnOnce(&mut Self) -> Result<Value>,
     {
         self.bridge.set_current_job(job_id);
-        let _ = self.bridge.phase_tx.send(WorkerPhase::Running);
         let outcome = f(self);
-        match &outcome {
+        let job_result: JobOutcome = match outcome {
             Ok(val) => {
                 if let Some(state) = val.get("state") {
                     let _ = self.bridge.events_tx.send(json!({
@@ -562,19 +620,29 @@ impl SheetWorker {
                         "git": git,
                     }));
                 }
+                if val.get("status").and_then(Value::as_str) == Some("conflict") {
+                    Err((StatusCode::CONFLICT, val))
+                } else {
+                    Ok(val)
+                }
             }
             Err(err) => {
+                let msg = format!("{err:#}");
                 let _ = self.bridge.events_tx.send(json!({
                     "type": "error",
-                    "message": format!("{err:#}"),
+                    "message": msg,
                 }));
+                let status = if msg.contains("conflict") || msg.contains("changed externally") {
+                    StatusCode::CONFLICT
+                } else {
+                    StatusCode::BAD_REQUEST
+                };
+                Err((status, json!({"error": msg})))
             }
-        }
-        let result = outcome.map_err(|e| format!("{e:#}"));
-        let _ = self.bridge.phase_tx.send(WorkerPhase::Idle {
-            job_id,
-            result: Some(result),
-        });
+        };
+        let _ = self.bridge.interaction_tx.send(None);
+        let _ = done.send(Some(job_result));
+        self.bridge.finish_job(job_id);
     }
 
     fn open_sheet(&mut self, rel_path: &str) -> Result<Value> {
@@ -760,10 +828,22 @@ impl SheetWorker {
                 sh.last_edit_at = Some(Instant::now());
             }
         }
+        let mut save_conflict: Option<SaveResult> = None;
         if self.autosave && self.active.as_ref().is_some_and(|s| s.dirty_since_save) {
-            let _ = self.persist_active(false)?;
+            let res = self.persist_active(false)?;
+            if matches!(res, SaveResult::Conflict { .. }) {
+                save_conflict = Some(res);
+            }
         }
         let state = self.build_state_payload()?;
+        if let Some(conflict) = save_conflict {
+            return Ok(json!({
+                "status": "conflict",
+                "error": "Sheet changed externally on disk; pull or force-save to resolve",
+                "save": conflict,
+                "state": state,
+            }));
+        }
         Ok(json!({"status": "ok", "state": state}))
     }
 
@@ -892,14 +972,16 @@ impl SheetWorker {
     fn save_active(&mut self, force: bool) -> Result<Value> {
         let res = self.persist_active(force)?;
         let state = self.build_state_payload()?;
-        let message = match &res {
-            SaveResult::Saved { .. } => "Saved PDF & state sidecar to disk",
-            SaveResult::Conflict { .. } => {
-                "File changed externally on disk; pass force=true or pull before overwriting"
-            }
+        let (status, message) = match &res {
+            SaveResult::Saved { .. } => ("ok", "Saved PDF & state sidecar to disk"),
+            SaveResult::Conflict { .. } => (
+                "conflict",
+                "File changed externally on disk; pass force=true or pull before overwriting",
+            ),
         };
         Ok(json!({
-            "status": "ok",
+            "status": status,
+            "error": if status == "conflict" { Value::String(message.into()) } else { Value::Null },
             "save": res,
             "message": message,
             "state": state,
@@ -1015,7 +1097,7 @@ struct AppState {
     bridge: Arc<InteractionBridge>,
     cmd_tx: mpsc::Sender<WorkerCommand>,
     job_seq: Arc<AtomicU64>,
-    phase_rx: watch::Receiver<WorkerPhase>,
+    interaction_rx: watch::Receiver<Option<(u64, PublicInteraction)>>,
     auth_token: Option<String>,
     pdfium_available: bool,
 }
@@ -1023,12 +1105,9 @@ struct AppState {
 impl AppState {
     fn start(config: &ServeConfig) -> Result<Self> {
         let store = Arc::new(SheetStore::open(config.store.clone())?);
-        let (phase_tx, phase_rx) = watch::channel(WorkerPhase::Idle {
-            job_id: 0,
-            result: None,
-        });
+        let (interaction_tx, interaction_rx) = watch::channel(None);
         let (events_tx, _) = broadcast::channel(64);
-        let bridge = InteractionBridge::new(phase_tx, events_tx);
+        let bridge = InteractionBridge::new(interaction_tx, events_tx);
         let (cmd_tx, cmd_rx) = mpsc::channel();
 
         let (ready_tx, ready_rx) = mpsc::sync_channel::<bool>(1);
@@ -1066,15 +1145,18 @@ impl AppState {
             bridge,
             cmd_tx,
             job_seq: Arc::new(AtomicU64::new(1)),
-            phase_rx,
+            interaction_rx,
             auth_token: config.auth_token.clone().filter(|t| !t.is_empty()),
             pdfium_available,
         };
 
         if let Some(default_sheet) = &config.default_sheet {
             let job_id = state.job_seq.fetch_add(1, Ordering::SeqCst);
+            let (done_tx, done_rx) = watch::channel(None);
+            state.bridge.register_job(job_id, done_rx);
             let _ = state.cmd_tx.send(WorkerCommand::Open {
                 job_id,
+                done: done_tx,
                 rel_path: default_sheet.clone(),
             });
         }
@@ -1103,9 +1185,9 @@ impl AppState {
         false
     }
 
-    async fn dispatch_job(&self, make_cmd: impl FnOnce(u64) -> WorkerCommand) -> Response {
-        if let Some(active) = self.bridge.active_public() {
-            return (
+    fn interaction_conflict_response(&self) -> Option<Response> {
+        self.bridge.active_public().map(|active| {
+            (
                 StatusCode::CONFLICT,
                 Json(json!({
                     "status": "interaction_required",
@@ -1113,37 +1195,45 @@ impl AppState {
                     "interaction": active,
                 })),
             )
-                .into_response();
+                .into_response()
+        })
+    }
+
+    async fn dispatch_job(
+        &self,
+        make_cmd: impl FnOnce(u64, watch::Sender<Option<JobOutcome>>) -> WorkerCommand,
+    ) -> Response {
+        if let Some(conflict) = self.interaction_conflict_response() {
+            return conflict;
         }
-        let mut rx = self.phase_rx.clone();
         let job_id = self.job_seq.fetch_add(1, Ordering::SeqCst);
-        if self.cmd_tx.send(make_cmd(job_id)).is_err() {
+        let (done_tx, done_rx) = watch::channel(None);
+        self.bridge.register_job(job_id, done_rx.clone());
+        let mut int_rx = self.interaction_rx.clone();
+        if self.cmd_tx.send(make_cmd(job_id, done_tx)).is_err() {
+            self.bridge.finish_job(job_id);
             return err_response(StatusCode::INTERNAL_SERVER_ERROR, "sheet worker stopped");
         }
-        self.await_job_or_interaction(&mut rx, job_id, None).await
+        self.await_job_or_interaction(done_rx, &mut int_rx, job_id, None)
+            .await
     }
 
     async fn await_job_or_interaction(
         &self,
-        rx: &mut watch::Receiver<WorkerPhase>,
+        mut done_rx: watch::Receiver<Option<JobOutcome>>,
+        int_rx: &mut watch::Receiver<Option<(u64, PublicInteraction)>>,
         target_job_id: u64,
         previous_interaction_id: Option<&str>,
     ) -> Response {
         loop {
-            let snapshot = rx.borrow().clone();
-            match snapshot {
-                WorkerPhase::Idle { job_id, result } if job_id >= target_job_id => {
-                    return match result {
-                        Some(Ok(val)) => (StatusCode::OK, Json(val)).into_response(),
-                        Some(Err(msg)) => err_response(StatusCode::BAD_REQUEST, msg),
-                        None => err_response(StatusCode::INTERNAL_SERVER_ERROR, "empty job result"),
-                    };
-                }
-                WorkerPhase::WaitingInteraction {
-                    job_id,
-                    interaction,
-                } if job_id == target_job_id
-                    && previous_interaction_id != Some(interaction.id.as_str()) =>
+            if let Some(outcome) = done_rx.borrow().clone() {
+                return match outcome {
+                    Ok(val) => (StatusCode::OK, Json(val)).into_response(),
+                    Err((status, body)) => (status, Json(body)).into_response(),
+                };
+            }
+            if let Some((jid, interaction)) = int_rx.borrow().clone() {
+                if jid == target_job_id && previous_interaction_id != Some(interaction.id.as_str())
                 {
                     return (
                         StatusCode::ACCEPTED,
@@ -1154,8 +1244,19 @@ impl AppState {
                     )
                         .into_response();
                 }
-                _ => {
-                    if rx.changed().await.is_err() {
+            }
+            tokio::select! {
+                biased;
+                res = done_rx.changed() => {
+                    if res.is_err() {
+                        return err_response(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "sheet worker dropped job",
+                        );
+                    }
+                }
+                res = int_rx.changed() => {
+                    if res.is_err() {
                         return err_response(
                             StatusCode::INTERNAL_SERVER_ERROR,
                             "sheet worker terminated",
@@ -1489,11 +1590,12 @@ async fn handle_open_session(
     if !state.check_auth(&headers, None) {
         return err_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
-    // Switching sheets cancels any lingering modal on the previous sheet.
+    // Switching sheets cancels any lingering modal (including cascading dialogs) on the previous sheet.
     state.bridge.cancel_active();
     state
-        .dispatch_job(|job_id| WorkerCommand::Open {
+        .dispatch_job(|job_id, done| WorkerCommand::Open {
             job_id,
+            done,
             rel_path: req.path,
         })
         .await
@@ -1525,10 +1627,10 @@ async fn handle_session_state(
     {
         return err_response(StatusCode::INTERNAL_SERVER_ERROR, "sheet worker stopped");
     }
-    match tokio::task::spawn_blocking(move || rx.recv()).await {
+    match tokio::task::spawn_blocking(move || rx.recv_timeout(Duration::from_secs(60))).await {
         Ok(Ok(Ok(v))) => Json(v).into_response(),
         Ok(Ok(Err(e))) => err_response(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")),
-        _ => err_response(StatusCode::INTERNAL_SERVER_ERROR, "failed reading session"),
+        _ => err_response(StatusCode::GATEWAY_TIMEOUT, "timed out reading session"),
     }
 }
 
@@ -1539,6 +1641,9 @@ async fn handle_get_field(
 ) -> Response {
     if !state.check_auth(&headers, q.token.as_deref()) {
         return err_response(StatusCode::UNAUTHORIZED, "unauthorized");
+    }
+    if let Some(conflict) = state.interaction_conflict_response() {
+        return conflict;
     }
     let (tx, rx) = mpsc::sync_channel(1);
     if state
@@ -1551,10 +1656,10 @@ async fn handle_get_field(
     {
         return err_response(StatusCode::INTERNAL_SERVER_ERROR, "sheet worker stopped");
     }
-    match tokio::task::spawn_blocking(move || rx.recv()).await {
+    match tokio::task::spawn_blocking(move || rx.recv_timeout(Duration::from_secs(60))).await {
         Ok(Ok(Ok(v))) => Json(v).into_response(),
         Ok(Ok(Err(e))) => err_response(StatusCode::NOT_FOUND, format!("{e:#}")),
-        _ => err_response(StatusCode::INTERNAL_SERVER_ERROR, "failed inspecting field"),
+        _ => err_response(StatusCode::GATEWAY_TIMEOUT, "timed out inspecting field"),
     }
 }
 
@@ -1567,8 +1672,9 @@ async fn handle_edit_field(
         return err_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
     state
-        .dispatch_job(|job_id| WorkerCommand::Edit {
+        .dispatch_job(|job_id, done| WorkerCommand::Edit {
             job_id,
+            done,
             field: req.field,
             value: req.value,
             mode: req.mode,
@@ -1585,8 +1691,9 @@ async fn handle_activate_field(
         return err_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
     state
-        .dispatch_job(|job_id| WorkerCommand::Activate {
+        .dispatch_job(|job_id, done| WorkerCommand::Activate {
             job_id,
+            done,
             field: req.field,
             index: req.index,
             shift: req.shift,
@@ -1604,8 +1711,9 @@ async fn handle_invoke_menu(
         return err_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
     state
-        .dispatch_job(|job_id| WorkerCommand::InvokeMenu {
+        .dispatch_job(|job_id, done| WorkerCommand::InvokeMenu {
             job_id,
+            done,
             name: req.name,
         })
         .await
@@ -1620,8 +1728,9 @@ async fn handle_run_command(
         return err_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
     state
-        .dispatch_job(|job_id| WorkerCommand::RunCommand {
+        .dispatch_job(|job_id, done| WorkerCommand::RunCommand {
             job_id,
+            done,
             action: req.action,
         })
         .await
@@ -1636,8 +1745,9 @@ async fn handle_run_bookmark(
         return err_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
     state
-        .dispatch_job(|job_id| WorkerCommand::RunBookmark {
+        .dispatch_job(|job_id, done| WorkerCommand::RunBookmark {
             job_id,
+            done,
             path: req.path,
         })
         .await
@@ -1652,8 +1762,9 @@ async fn handle_save_session(
         return err_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
     state
-        .dispatch_job(|job_id| WorkerCommand::SaveNow {
+        .dispatch_job(|job_id, done| WorkerCommand::SaveNow {
             job_id,
+            done,
             force: req.force,
         })
         .await
@@ -1668,6 +1779,9 @@ async fn handle_page_image(
     if !state.check_auth(&headers, q.token.as_deref()) {
         return err_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
+    if let Some(conflict) = state.interaction_conflict_response() {
+        return conflict;
+    }
     let width = q.w.unwrap_or(1024);
     let (tx, rx) = mpsc::sync_channel(1);
     if state
@@ -1681,7 +1795,7 @@ async fn handle_page_image(
     {
         return err_response(StatusCode::INTERNAL_SERVER_ERROR, "sheet worker stopped");
     }
-    match tokio::task::spawn_blocking(move || rx.recv()).await {
+    match tokio::task::spawn_blocking(move || rx.recv_timeout(Duration::from_secs(60))).await {
         Ok(Ok(Ok(png))) => (
             [
                 (header::CONTENT_TYPE, "image/png"),
@@ -1699,7 +1813,7 @@ async fn handle_page_image(
             };
             err_response(status, msg)
         }
-        _ => err_response(StatusCode::INTERNAL_SERVER_ERROR, "failed rendering page"),
+        _ => err_response(StatusCode::GATEWAY_TIMEOUT, "timed out rendering page"),
     }
 }
 
@@ -1712,6 +1826,9 @@ async fn handle_page_widgets(
     if !state.check_auth(&headers, q.token.as_deref()) {
         return err_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
+    if let Some(conflict) = state.interaction_conflict_response() {
+        return conflict;
+    }
     let (tx, rx) = mpsc::sync_channel(1);
     if state
         .cmd_tx
@@ -1720,10 +1837,10 @@ async fn handle_page_widgets(
     {
         return err_response(StatusCode::INTERNAL_SERVER_ERROR, "sheet worker stopped");
     }
-    match tokio::task::spawn_blocking(move || rx.recv()).await {
+    match tokio::task::spawn_blocking(move || rx.recv_timeout(Duration::from_secs(60))).await {
         Ok(Ok(Ok(v))) => Json(v).into_response(),
         Ok(Ok(Err(e))) => err_response(StatusCode::BAD_REQUEST, format!("{e:#}")),
-        _ => err_response(StatusCode::INTERNAL_SERVER_ERROR, "failed reading widgets"),
+        _ => err_response(StatusCode::GATEWAY_TIMEOUT, "timed out reading widgets"),
     }
 }
 
@@ -1736,13 +1853,13 @@ async fn handle_interaction_reply(
     if !state.check_auth(&headers, None) {
         return err_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
-    let mut rx = state.phase_rx.clone();
-    let job_id = match state.bridge.respond(&id, reply) {
-        Ok(jid) => jid,
+    let mut int_rx = state.interaction_rx.clone();
+    let (job_id, done_rx) = match state.bridge.respond(&id, reply) {
+        Ok(pair) => pair,
         Err(e) => return err_response(StatusCode::CONFLICT, format!("{e:#}")),
     };
     state
-        .await_job_or_interaction(&mut rx, job_id, Some(&id))
+        .await_job_or_interaction(done_rx, &mut int_rx, job_id, Some(&id))
         .await
 }
 
@@ -1769,8 +1886,9 @@ async fn handle_git_sync(
         return err_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
     state
-        .dispatch_job(|job_id| WorkerCommand::GitSync {
+        .dispatch_job(|job_id, done| WorkerCommand::GitSync {
             job_id,
+            done,
             message: req.message,
         })
         .await
@@ -1781,7 +1899,7 @@ async fn handle_git_pull(State(state): State<AppState>, headers: HeaderMap) -> R
         return err_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
     state
-        .dispatch_job(|job_id| WorkerCommand::GitPull { job_id })
+        .dispatch_job(|job_id, done| WorkerCommand::GitPull { job_id, done })
         .await
 }
 
@@ -2307,5 +2425,709 @@ mod tests {
         assert!(!is_safe_bookmark_path("bookmarkRoot"));
         assert!(!is_safe_bookmark_path("bookmarkRoot.children[0];alert(1)"));
         assert!(!is_safe_bookmark_path("evil.children[0]"));
+    }
+
+    fn make_cascading_dialog_pdf(path: &std::path::Path) {
+        let mut doc = lopdf::Document::with_version("1.7");
+        let pages_id = doc.new_object_id();
+        let page_id = doc.new_object_id();
+        let f_name = doc.add_object(dictionary! {
+            "Type" => "Annot",
+            "Subtype" => "Widget",
+            "FT" => "Tx",
+            "T" => Object::String(b"PC Name".to_vec(), StringFormat::Literal),
+            "V" => Object::String(b"Cascade Hero".to_vec(), StringFormat::Literal),
+            "Rect" => vec![40.into(), 700.into(), 240.into(), 724.into()],
+            "P" => page_id,
+        });
+        // Clicking CascadeButton opens Dialog 1; cancelling Dialog 1 triggers a follow-up alert!
+        let btn_action = doc.add_object(dictionary! {
+            "S" => "JavaScript",
+            "JS" => Object::String(
+                b"var r=app.execDialog({description:{name:'Step 1',elements:[{type:'ok_cancel'}]}});if(r==='cancel'){app.alert({cTitle:'Confirm Cancel',cMsg:'Really cancel?',nType:2});}".to_vec(),
+                StringFormat::Literal,
+            ),
+        });
+        let f_btn = doc.add_object(dictionary! {
+            "Type" => "Annot",
+            "Subtype" => "Widget",
+            "FT" => "Btn",
+            "Ff" => 65536,
+            "T" => Object::String(b"CascadeButton".to_vec(), StringFormat::Literal),
+            "AA" => dictionary! { "U" => btn_action },
+            "Rect" => vec![260.into(), 700.into(), 360.into(), 724.into()],
+            "P" => page_id,
+        });
+        doc.objects.insert(
+            page_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Page",
+                "Parent" => pages_id,
+                "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+                "Annots" => vec![f_name.into(), f_btn.into()],
+            }),
+        );
+        doc.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => vec![page_id.into()],
+                "Count" => 1,
+            }),
+        );
+        let form_id = doc.add_object(dictionary! {
+            "Fields" => vec![f_name.into(), f_btn.into()],
+        });
+        let catalog_id = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+            "AcroForm" => form_id,
+        });
+        doc.trailer.set("Root", catalog_id);
+        doc.save(path).unwrap();
+    }
+
+    fn setup_test_app(label: &str, with_git: bool) -> (PathBuf, Option<PathBuf>, Router) {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base =
+            std::env::temp_dir().join(format!("mpmb-serve-{label}-{}-{nanos}", std::process::id()));
+        let data_dir = base.join("sheets");
+        let git_cfg = if with_git {
+            let bare = base.join("remote.git");
+            std::fs::create_dir_all(&bare).unwrap();
+            assert!(Command::new("git")
+                .args(["init", "--bare", "-b", "main"])
+                .arg(&bare)
+                .status()
+                .unwrap()
+                .success());
+            Some((
+                bare.clone(),
+                GitConfig::new(bare.to_string_lossy().into_owned()),
+            ))
+        } else {
+            None
+        };
+        let cfg = ServeConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            store: StoreConfig {
+                root: data_dir,
+                git: git_cfg.as_ref().map(|(_, g)| g.clone()),
+            },
+            default_sheet: None,
+            auth_token: None,
+            autosave: true,
+            git_auto_sync_secs: 0,
+        };
+        let state = AppState::start(&cfg).unwrap();
+        (base, git_cfg.map(|(b, _)| b), build_router(state))
+    }
+
+    async fn post_json(app: &Router, uri: &str, body: Value) -> (StatusCode, Value) {
+        let res = tokio::time::timeout(
+            Duration::from_secs(15),
+            app.clone().oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            ),
+        )
+        .await
+        .expect("HTTP POST timed out")
+        .unwrap();
+        let st = res.status();
+        (st, json_body(res).await)
+    }
+
+    async fn get_json(app: &Router, uri: &str) -> (StatusCode, Value) {
+        let res = tokio::time::timeout(
+            Duration::from_secs(15),
+            app.clone()
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap()),
+        )
+        .await
+        .expect("HTTP GET timed out")
+        .unwrap();
+        let st = res.status();
+        (st, json_body(res).await)
+    }
+
+    #[tokio::test]
+    async fn concurrent_edits_never_mix_results_or_drop_updates() {
+        let (base, _, app) = setup_test_app("concurrent-edits", false);
+        let seed = base.join("seed.pdf");
+        make_interactive_test_pdf(&seed);
+        let bytes = std::fs::read(&seed).unwrap();
+
+        let up = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sheets/upload?name=hero.pdf")
+                    .body(Body::from(bytes))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(up.status(), StatusCode::CREATED);
+        assert_eq!(
+            post_json(&app, "/api/session/open", json!({"path": "hero.pdf"}))
+                .await
+                .0,
+            StatusCode::OK
+        );
+
+        // Fire 16 concurrent edits: even tasks edit valid fields (expect 200),
+        // odd tasks target a non-existent field (expect 400).
+        // Per-job channels must ensure ZERO cross-contamination of results!
+        let mut tasks = Vec::new();
+        for i in 0..16usize {
+            let app_c = app.clone();
+            tasks.push(tokio::spawn(async move {
+                if i % 2 == 0 {
+                    let score = 10 + (i % 10);
+                    let (st, body) = post_json(
+                        &app_c,
+                        "/api/session/edit",
+                        json!({"field": "Str", "value": score.to_string(), "mode": "user"}),
+                    )
+                    .await;
+                    (i, true, st, body)
+                } else {
+                    let (st, body) = post_json(
+                        &app_c,
+                        "/api/session/edit",
+                        json!({"field": format!("MissingField_{i}"), "value": "x", "mode": "user"}),
+                    )
+                    .await;
+                    (i, false, st, body)
+                }
+            }));
+        }
+
+        for task in tasks {
+            let (i, expect_ok, st, body) = task.await.unwrap();
+            if expect_ok {
+                assert_eq!(
+                    st,
+                    StatusCode::OK,
+                    "valid concurrent edit {i} got wrong status: {body}"
+                );
+                assert_eq!(body["status"], "ok");
+            } else {
+                assert_eq!(
+                    st,
+                    StatusCode::BAD_REQUEST,
+                    "invalid concurrent edit {i} got wrong status (cross-contaminated!): {body}"
+                );
+            }
+        }
+
+        // Verify saved PDF on disk is still valid and reopenable.
+        let reopen = post_json(&app, "/api/session/open", json!({"path": "hero.pdf"})).await;
+        assert_eq!(reopen.0, StatusCode::OK);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn concurrent_double_reply_to_modal_allows_exactly_one_winner() {
+        let (base, _, app) = setup_test_app("double-reply", false);
+        let seed = base.join("seed.pdf");
+        make_interactive_test_pdf(&seed);
+        let bytes = std::fs::read(&seed).unwrap();
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sheets/upload?name=hero.pdf")
+                    .body(Body::from(bytes))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            post_json(&app, "/api/session/open", json!({"path": "hero.pdf"}))
+                .await
+                .0,
+            StatusCode::OK
+        );
+
+        // Open RenameButton modal -> 202 Accepted
+        let (st, modal) = post_json(
+            &app,
+            "/api/session/activate",
+            json!({"field": "RenameButton", "index": 0}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::ACCEPTED);
+        let int_id = modal["interaction"]["id"].as_str().unwrap().to_owned();
+
+        // Fire 6 simultaneous replies to the exact same interaction id!
+        let barrier = Arc::new(tokio::sync::Barrier::new(6));
+        let mut tasks = Vec::new();
+        for idx in 0..6usize {
+            let app_c = app.clone();
+            let id_c = int_id.clone();
+            let bar = Arc::clone(&barrier);
+            tasks.push(tokio::spawn(async move {
+                bar.wait().await;
+                post_json(
+                    &app_c,
+                    &format!("/api/session/interaction/{id_c}"),
+                    json!({"result": "ok", "values": {"hero": format!("Winner-{idx}")}}),
+                )
+                .await
+            }));
+        }
+
+        let mut ok_count = 0;
+        let mut conflict_count = 0;
+        let mut winner_name = String::new();
+        for task in tasks {
+            let (st, body) = task.await.unwrap();
+            match st {
+                StatusCode::OK => {
+                    ok_count += 1;
+                    winner_name = body["state"]["character"]["name"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned();
+                }
+                StatusCode::CONFLICT => conflict_count += 1,
+                other => panic!("unexpected status {other}: {body}"),
+            }
+        }
+        assert_eq!(ok_count, 1, "exactly one reply must win the modal");
+        assert_eq!(conflict_count, 5, "all duplicate replies must get 409");
+        assert!(winner_name.starts_with("Winner-"));
+
+        let (st, state) = get_json(&app, "/api/session/state").await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(state["character"]["name"], winner_name);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn endpoints_do_not_hang_while_modal_is_open() {
+        let (base, _, app) = setup_test_app("modal-nonblocking", false);
+        let seed = base.join("seed.pdf");
+        make_interactive_test_pdf(&seed);
+        let bytes = std::fs::read(&seed).unwrap();
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sheets/upload?name=hero.pdf")
+                    .body(Body::from(bytes))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            post_json(&app, "/api/session/open", json!({"path": "hero.pdf"}))
+                .await
+                .0,
+            StatusCode::OK
+        );
+
+        let (st, modal) = post_json(
+            &app,
+            "/api/session/activate",
+            json!({"field": "RenameButton", "index": 0}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::ACCEPTED);
+        let int_id = modal["interaction"]["id"].as_str().unwrap().to_owned();
+
+        // None of these calls may hang while QuickJS is blocked on the modal!
+        let (edit_st, edit_body) = post_json(
+            &app,
+            "/api/session/edit",
+            json!({"field": "Str", "value": "16", "mode": "user"}),
+        )
+        .await;
+        assert_eq!(edit_st, StatusCode::CONFLICT);
+        assert_eq!(edit_body["interaction"]["id"], int_id);
+
+        assert_eq!(
+            get_json(&app, "/api/session/field?name=Str").await.0,
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            get_json(&app, "/api/session/page/0/widgets").await.0,
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            get_json(&app, "/api/session/page/0/image?w=640").await.0,
+            StatusCode::CONFLICT
+        );
+
+        let (state_st, state_body) = get_json(&app, "/api/session/state").await;
+        assert_eq!(state_st, StatusCode::OK);
+        assert_eq!(state_body["busy"], true);
+        assert_eq!(state_body["activeInteraction"]["id"], int_id);
+
+        // Cancel the modal and verify normal operations immediately resume.
+        assert_eq!(
+            post_json(
+                &app,
+                &format!("/api/session/interaction/{int_id}"),
+                json!({"result": "cancel"}),
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            get_json(&app, "/api/session/field?name=Str").await.0,
+            StatusCode::OK
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn switching_sheets_mid_cascading_dialog_cancels_cleanly_without_deadlock() {
+        let (base, _, app) = setup_test_app("cascade-cancel", false);
+        let cascade_pdf = base.join("cascade.pdf");
+        let second_pdf = base.join("second.pdf");
+        make_cascading_dialog_pdf(&cascade_pdf);
+        make_interactive_test_pdf(&second_pdf);
+
+        for (name, path) in [("cascade.pdf", &cascade_pdf), ("second.pdf", &second_pdf)] {
+            let up = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/api/sheets/upload?name={name}"))
+                        .body(Body::from(std::fs::read(path).unwrap()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(up.status(), StatusCode::CREATED);
+        }
+
+        assert_eq!(
+            post_json(&app, "/api/session/open", json!({"path": "cascade.pdf"}))
+                .await
+                .0,
+            StatusCode::OK
+        );
+        let (st, modal) = post_json(
+            &app,
+            "/api/session/activate",
+            json!({"field": "CascadeButton", "index": 0}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::ACCEPTED);
+        assert_eq!(
+            modal["interaction"]["request"]["description"]["name"],
+            "Step 1"
+        );
+
+        // Opening second.pdf while Step 1 is open must auto-cancel BOTH Step 1 AND
+        // the cascading follow-up 'Confirm Cancel' alert without deadlocking!
+        let (open2_st, open2_body) =
+            post_json(&app, "/api/session/open", json!({"path": "second.pdf"})).await;
+        assert_eq!(
+            open2_st,
+            StatusCode::OK,
+            "sheet switch failed: {open2_body}"
+        );
+        assert_eq!(open2_body["state"]["character"]["name"], "Initial Hero");
+        assert!(open2_body["state"]["activeInteraction"].is_null());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn external_file_conflict_surfaces_409_protects_disk_and_resolves_with_force() {
+        let (base, _, app) = setup_test_app("external-conflict", true);
+        let seed = base.join("seed.pdf");
+        make_interactive_test_pdf(&seed);
+        let seed_bytes = std::fs::read(&seed).unwrap();
+
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sheets/upload?name=hero.pdf")
+                    .body(Body::from(seed_bytes.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            post_json(&app, "/api/session/open", json!({"path": "hero.pdf"}))
+                .await
+                .0,
+            StatusCode::OK
+        );
+
+        // Simulate external modification on disk (e.g. Syncthing/desktop overwrite or upload?overwrite=true).
+        let external_bytes = [seed_bytes.as_slice(), b"\n%external-desktop-edit\n"].concat();
+        let ov = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sheets/upload?name=hero.pdf&overwrite=true")
+                    .body(Body::from(external_bytes.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ov.status(), StatusCode::CREATED);
+
+        // Editing in memory now hits the external-modification SHA-256 guard -> 409 Conflict!
+        let (edit_st, edit_body) = post_json(
+            &app,
+            "/api/session/edit",
+            json!({"field": "PC Name", "value": "Phone Edit", "mode": "user"}),
+        )
+        .await;
+        assert_eq!(edit_st, StatusCode::CONFLICT, "expected 409: {edit_body}");
+        assert_eq!(edit_body["save"]["status"], "conflict");
+        // Verify the external file on disk was NOT overwritten!
+        assert_eq!(
+            std::fs::read(base.join("sheets/hero.pdf")).unwrap(),
+            external_bytes
+        );
+
+        // Git sync must ALSO refuse while conflicted -> 409 Conflict!
+        let (sync_st, _) =
+            post_json(&app, "/api/git/sync", json!({"message": "should fail"})).await;
+        assert_eq!(sync_st, StatusCode::CONFLICT);
+
+        // Explicit force save overwrites cleanly and allows Git sync to succeed.
+        let (force_st, force_body) =
+            post_json(&app, "/api/session/save", json!({"force": true})).await;
+        assert_eq!(force_st, StatusCode::OK, "force save failed: {force_body}");
+        assert_eq!(force_body["save"]["status"], "saved");
+
+        let (sync_ok_st, sync_ok_body) =
+            post_json(&app, "/api/git/sync", json!({"message": "resolved"})).await;
+        assert_eq!(
+            sync_ok_st,
+            StatusCode::OK,
+            "sync after resolve failed: {sync_ok_body}"
+        );
+        assert_eq!(sync_ok_body["sync"]["status"], "synced");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn corrupted_pdf_and_invalid_requests_never_break_active_session() {
+        let (base, _, app) = setup_test_app("bad-inputs", false);
+        let seed = base.join("seed.pdf");
+        make_interactive_test_pdf(&seed);
+
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sheets/upload?name=good.pdf")
+                    .body(Body::from(std::fs::read(&seed).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sheets/upload?name=corrupt.pdf")
+                    .body(Body::from(b"%PDF-1.7\nthis-is-corrupt-garbage".to_vec()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            post_json(&app, "/api/session/open", json!({"path": "good.pdf"}))
+                .await
+                .0,
+            StatusCode::OK
+        );
+
+        // Opening corrupted PDF returns 400 without crashing worker or losing good.pdf!
+        assert_eq!(
+            post_json(&app, "/api/session/open", json!({"path": "corrupt.pdf"}))
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            post_json(&app, "/api/session/open", json!({"path": "missing.pdf"}))
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            post_json(&app, "/api/session/command", json!({"action": "eval_evil"}))
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            post_json(
+                &app,
+                "/api/session/bookmark",
+                json!({"path": "bookmarkRoot.children[0];process.exit(1)"}),
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            post_json(
+                &app,
+                "/api/session/interaction/int-99999",
+                json!({"result": "ok"}),
+            )
+            .await
+            .0,
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            get_json(&app, "/api/sheets/..%2F..%2Fetc%2Fpasswd.pdf/download")
+                .await
+                .0,
+            StatusCode::NOT_FOUND
+        );
+
+        // Good session is still completely healthy and editable!
+        let (st, edited) = post_json(
+            &app,
+            "/api/session/edit",
+            json!({"field": "PC Name", "value": "Still Alive", "mode": "user"}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(edited["state"]["character"]["name"], "Still Alive");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn websocket_broadcasts_live_state_and_interaction_lifecycle() {
+        let (base, _, app) = setup_test_app("ws-live", false);
+        let seed = base.join("seed.pdf");
+        make_interactive_test_pdf(&seed);
+
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sheets/upload?name=hero.pdf")
+                    .body(Body::from(std::fs::read(&seed).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            post_json(&app, "/api/session/open", json!({"path": "hero.pdf"}))
+                .await
+                .0,
+            StatusCode::OK
+        );
+
+        // Bind a real ephemeral TCP server so we exercise the real Axum WebSocket upgrade path.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app_srv = app.clone();
+        let server_task = tokio::spawn(async move {
+            let _ = axum::serve(listener, app_srv).await;
+        });
+
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream
+            .write_all(
+                format!(
+                    "GET /ws HTTP/1.1\r\nHost: {addr}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        // Read HTTP 101 Switching Protocols response header.
+        let mut hdr = Vec::new();
+        while !hdr.windows(4).any(|w| w == b"\r\n\r\n") {
+            let b = stream.read_u8().await.unwrap();
+            hdr.push(b);
+        }
+        assert!(String::from_utf8_lossy(&hdr).starts_with("HTTP/1.1 101"));
+
+        async fn read_ws_json(stream: &mut tokio::net::TcpStream) -> Value {
+            let mut h = [0u8; 2];
+            stream.read_exact(&mut h).await.unwrap();
+            let mut len = (h[1] & 0x7f) as usize;
+            if len == 126 {
+                let mut ext = [0u8; 2];
+                stream.read_exact(&mut ext).await.unwrap();
+                len = u16::from_be_bytes(ext) as usize;
+            } else if len == 127 {
+                let mut ext = [0u8; 8];
+                stream.read_exact(&mut ext).await.unwrap();
+                len = u64::from_be_bytes(ext) as usize;
+            }
+            let mut payload = vec![0u8; len];
+            stream.read_exact(&mut payload).await.unwrap();
+            serde_json::from_slice(&payload).unwrap()
+        }
+
+        // Trigger live modal and verify WS receives interaction_requested.
+        let (st, modal) = post_json(
+            &app,
+            "/api/session/activate",
+            json!({"field": "RenameButton", "index": 0}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::ACCEPTED);
+        let int_id = modal["interaction"]["id"].as_str().unwrap().to_owned();
+
+        let ev1 = tokio::time::timeout(Duration::from_secs(5), read_ws_json(&mut stream))
+            .await
+            .unwrap();
+        assert_eq!(ev1["type"], "interaction_requested");
+        assert_eq!(ev1["interaction"]["id"], int_id);
+
+        // Reply to modal and verify WS receives interaction_cleared then state_updated!
+        let (st, _) = post_json(
+            &app,
+            &format!("/api/session/interaction/{int_id}"),
+            json!({"result": "ok", "values": {"hero": "WS Hero"}}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+
+        let ev2 = tokio::time::timeout(Duration::from_secs(5), read_ws_json(&mut stream))
+            .await
+            .unwrap();
+        let ev3 = tokio::time::timeout(Duration::from_secs(5), read_ws_json(&mut stream))
+            .await
+            .unwrap();
+        assert_eq!(ev2["type"], "interaction_cleared");
+        assert_eq!(ev3["type"], "state_updated");
+        assert_eq!(ev3["state"]["character"]["name"], "WS Hero");
+
+        server_task.abort();
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

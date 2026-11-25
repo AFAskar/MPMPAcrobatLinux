@@ -233,6 +233,9 @@
     renderPlay();
     renderTools();
     renderGit();
+    if (state.saveConflict) {
+      showBanner('File changed externally on disk — pull latest or Force Save from the Git tab', 'warn', 0);
+    }
     if (state.activeInteraction) {
       openAcrobatInteraction(state.activeInteraction);
     } else if (appState.activeInteraction) {
