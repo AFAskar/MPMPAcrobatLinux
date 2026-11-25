@@ -1030,15 +1030,21 @@ impl SheetStore {
     fn ahead_behind(&self, cfg: &GitConfig) -> (usize, usize) {
         let remote_ref = format!("{}/{}", cfg.remote, cfg.branch);
         let range = format!("{remote_ref}...HEAD");
-        let Ok(out) =
+        if let Ok(out) =
             self.run_git_allow_fail(cfg, &["rev-list", "--left-right", "--count", &range])
-        else {
-            return (0, 0);
-        };
-        let mut parts = out.split_whitespace();
-        let behind = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-        let ahead = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-        (ahead, behind)
+        {
+            let mut parts = out.split_whitespace();
+            let behind = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+            let ahead = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+            return (ahead, behind);
+        }
+        // Remote tracking ref may not exist yet (e.g. local commits before first successful push).
+        if let Ok(count) = self.run_git_allow_fail(cfg, &["rev-list", "--count", "HEAD"]) {
+            if let Ok(ahead) = count.trim().parse::<usize>() {
+                return (ahead, 0);
+            }
+        }
+        (0, 0)
     }
 
     fn run_git(&self, cfg: &GitConfig, args: &[&str]) -> Result<String> {

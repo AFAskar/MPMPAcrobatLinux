@@ -233,31 +233,59 @@ pub struct ServeConfig {
 static SERVER_INSTANCE_SEQ: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Default)]
+struct StoreSyncState {
+    gen: u64,
+    last_write_at: Option<Instant>,
+}
+
+#[derive(Default)]
 struct StoreSyncTracker {
-    last_write_at: Mutex<Option<Instant>>,
+    inner: Mutex<StoreSyncState>,
 }
 
 impl StoreSyncTracker {
-    fn mark_dirty(&self) {
-        *self.last_write_at.lock().unwrap() = Some(Instant::now());
+    fn mark_dirty(&self) -> u64 {
+        let mut guard = self.inner.lock().unwrap();
+        guard.gen = guard.gen.saturating_add(1);
+        guard.last_write_at = Some(Instant::now());
+        guard.gen
     }
 
-    fn clear(&self) {
-        *self.last_write_at.lock().unwrap() = None;
+    fn snapshot_gen(&self) -> u64 {
+        self.inner.lock().unwrap().gen
+    }
+
+    fn clear_if_unchanged(&self, expected_gen: u64) -> bool {
+        let mut guard = self.inner.lock().unwrap();
+        if guard.gen == expected_gen {
+            guard.last_write_at = None;
+            true
+        } else {
+            false
+        }
     }
 
     fn is_dirty(&self) -> bool {
-        self.last_write_at.lock().unwrap().is_some()
+        self.inner.lock().unwrap().last_write_at.is_some()
     }
 
     fn is_idle_due(&self, idle_secs: u64) -> bool {
         idle_secs > 0
             && self
-                .last_write_at
+                .inner
                 .lock()
                 .unwrap()
+                .last_write_at
                 .is_some_and(|t| t.elapsed() >= Duration::from_secs(idle_secs))
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct DiscardTarget {
+    sheet: String,
+    session_id: String,
+    revision: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -486,6 +514,8 @@ enum WorkerCommand {
         done: watch::Sender<Option<JobOutcome>>,
         rel_path: String,
         force: bool,
+        discard: Option<DiscardTarget>,
+        expected_session: Option<String>,
     },
     GetState {
         reply: mpsc::SyncSender<Result<Value>>,
@@ -575,6 +605,8 @@ enum WorkerCommand {
         gate: JobGate,
         done: watch::Sender<Option<JobOutcome>>,
         force: bool,
+        discard: Option<DiscardTarget>,
+        expected_session: Option<String>,
     },
     CheckIdleAutoSync {
         job_id: u64,
@@ -809,8 +841,17 @@ impl SheetWorker {
                 done,
                 rel_path,
                 force,
+                discard,
+                expected_session,
             } => {
-                self.run_job(job_id, gate, done, |w| w.open_sheet(&rel_path, force));
+                self.run_job(job_id, gate, done, |w| {
+                    w.open_sheet(
+                        &rel_path,
+                        force,
+                        discard.as_ref(),
+                        expected_session.as_deref(),
+                    )
+                });
             }
             WorkerCommand::Edit {
                 job_id,
@@ -926,8 +967,12 @@ impl SheetWorker {
                 gate,
                 done,
                 force,
+                discard,
+                expected_session,
             } => {
-                self.run_job(job_id, gate, done, |w| w.do_git_pull(force));
+                self.run_job(job_id, gate, done, |w| {
+                    w.do_git_pull(force, discard.as_ref(), expected_session.as_deref())
+                });
             }
         }
     }
@@ -1038,17 +1083,92 @@ impl SheetWorker {
         Ok(())
     }
 
-    fn open_sheet(&mut self, rel_path: &str, force: bool) -> Result<Value> {
+    fn check_discard_guard(
+        &self,
+        action: &str,
+        force: bool,
+        discard: Option<&DiscardTarget>,
+        expected_session: Option<&str>,
+    ) -> Option<Value> {
+        let cur = self.active.as_ref()?;
+        if !cur.dirty_since_save {
+            return None;
+        }
+        let current_target = DiscardTarget {
+            sheet: cur.rel_path.clone(),
+            session_id: cur.session_id.clone(),
+            revision: cur.revision,
+        };
         if !force {
-            if let Some(cur) = &self.active {
-                if cur.dirty_since_save {
-                    bail!(
-                        "conflict: active sheet '{}' has unsaved edits; save first or pass force=true to discard",
-                        cur.rel_path
-                    );
-                }
+            return Some(json!({
+                "status": "conflict",
+                "code": "unsaved_edits",
+                "error": format!(
+                    "conflict: active sheet '{}' has unsaved edits (rev {}); save first or confirm discarding them before {action}",
+                    cur.rel_path, cur.revision
+                ),
+                "discardTarget": current_target,
+            }));
+        }
+        if let Some(exp_sess) = expected_session.map(str::trim).filter(|s| !s.is_empty()) {
+            if cur.session_id != exp_sess {
+                return Some(json!({
+                    "status": "conflict",
+                    "code": "discard_target_stale",
+                    "error": format!(
+                        "conflict: active unsaved session changed before {action} (expected session '{exp_sess}', active is '{}' session '{}' rev {}); refresh before discarding",
+                        cur.rel_path, cur.session_id, cur.revision
+                    ),
+                    "discardTarget": current_target,
+                }));
             }
         }
+        let Some(req_discard) = discard else {
+            return Some(json!({
+                "status": "conflict",
+                "code": "discard_target_required",
+                "error": format!(
+                    "conflict: discarding unsaved edits on '{}' (rev {}) requires passing the matching discardTarget",
+                    cur.rel_path, cur.revision
+                ),
+                "discardTarget": current_target,
+            }));
+        };
+        if req_discard != &current_target {
+            return Some(json!({
+                "status": "conflict",
+                "code": "discard_target_stale",
+                "error": format!(
+                    "conflict: active unsaved edits changed before {action} (expected '{}' session '{}' rev {}, active is '{}' session '{}' rev {}); refresh before discarding",
+                    req_discard.sheet,
+                    req_discard.session_id,
+                    req_discard.revision,
+                    cur.rel_path,
+                    cur.session_id,
+                    cur.revision,
+                ),
+                "discardTarget": current_target,
+            }));
+        }
+        None
+    }
+
+    fn open_sheet(
+        &mut self,
+        rel_path: &str,
+        force: bool,
+        discard: Option<&DiscardTarget>,
+        expected_session: Option<&str>,
+    ) -> Result<Value> {
+        if let Some(conflict) =
+            self.check_discard_guard("opening another sheet", force, discard, expected_session)
+        {
+            return Ok(conflict);
+        }
+        self.open_sheet_unchecked(rel_path)
+    }
+
+    fn open_sheet_unchecked(&mut self, rel_path: &str) -> Result<Value> {
         // Pull latest changes opportunistically if Git is enabled and clean.
         if self.store.git_enabled() {
             let _ = self.store.git_pull();
@@ -1538,11 +1658,14 @@ impl SheetWorker {
         } else {
             message.trim().to_owned()
         };
+        let sync_gen = self.sync_tracker.snapshot_gen();
         let sync = self.store.git_sync(&commit_msg)?;
-        if sync.pushed || sync.status == "clean" {
-            self.sync_tracker.clear();
-        }
         let git = self.store.git_status()?;
+        if (sync.pushed || sync.status == "clean") && !git.dirty && git.ahead == 0 {
+            self.sync_tracker.clear_if_unchanged(sync_gen);
+        } else if (git.dirty || git.ahead > 0) && !self.sync_tracker.is_dirty() {
+            self.sync_tracker.mark_dirty();
+        }
         let state = self.build_state_payload()?;
         Ok(json!({
             "status": "ok",
@@ -1552,23 +1675,23 @@ impl SheetWorker {
         }))
     }
 
-    fn do_git_pull(&mut self, force: bool) -> Result<Value> {
-        if !force {
-            if let Some(cur) = &self.active {
-                if cur.dirty_since_save {
-                    bail!(
-                        "conflict: active sheet '{}' has unsaved edits; save before pulling or pass force=true to discard",
-                        cur.rel_path
-                    );
-                }
-            }
+    fn do_git_pull(
+        &mut self,
+        force: bool,
+        discard: Option<&DiscardTarget>,
+        expected_session: Option<&str>,
+    ) -> Result<Value> {
+        if let Some(conflict) =
+            self.check_discard_guard("pulling from Git", force, discard, expected_session)
+        {
+            return Ok(conflict);
         }
         let pull = self.store.git_pull()?;
         if pull.updated {
             if let Some(rel) = self.active.as_ref().map(|s| s.rel_path.clone()) {
                 match self.store.read_sheet_bytes(&rel) {
                     Ok(_) => {
-                        let _ = self.open_sheet(&rel, true)?;
+                        let _ = self.open_sheet_unchecked(&rel)?;
                     }
                     Err(err) => {
                         let is_missing = err.chain().any(|cause| {
@@ -1697,9 +1820,20 @@ impl AppState {
         let (events_tx, _) = broadcast::channel(64);
         let bridge = InteractionBridge::new(interaction_tx, events_tx);
         let sync_tracker = Arc::new(StoreSyncTracker::default());
+        if store.git_enabled() {
+            if let Ok(status) = store.git_status() {
+                if status.dirty || status.ahead > 0 {
+                    sync_tracker.mark_dirty();
+                }
+            }
+        }
         let job_seq = Arc::new(AtomicU64::new(1));
+        let boot_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
         let server_instance_id = format!(
-            "srv-{}-{}",
+            "srv-{boot_ms}-{}-{}",
             std::process::id(),
             SERVER_INSTANCE_SEQ.fetch_add(1, Ordering::SeqCst)
         );
@@ -1766,6 +1900,8 @@ impl AppState {
                 done: done_tx,
                 rel_path: default_sheet.clone(),
                 force: true,
+                discard: None,
+                expected_session: None,
             });
         }
         Ok(state)
@@ -1978,10 +2114,15 @@ struct UploadQuery {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct OpenRequest {
     path: String,
     #[serde(default)]
     force: bool,
+    #[serde(default)]
+    discard: Option<DiscardTarget>,
+    #[serde(default)]
+    session: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -2078,9 +2219,14 @@ struct SaveRequest {
 }
 
 #[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 struct PullRequest {
     #[serde(default)]
     force: bool,
+    #[serde(default)]
+    discard: Option<DiscardTarget>,
+    #[serde(default)]
+    session: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -2419,6 +2565,8 @@ async fn handle_open_session(
             done,
             rel_path: req.path,
             force: req.force,
+            discard: req.discard,
+            expected_session: req.session,
         })
         .await
 }
@@ -2806,13 +2954,15 @@ async fn handle_git_pull(
     if !state.check_auth(&headers, None) {
         return err_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
-    let force = req.map(|Json(r)| r.force).unwrap_or(false);
+    let req = req.map(|Json(r)| r).unwrap_or_default();
     state
         .dispatch_job(|job_id, gate, done| WorkerCommand::GitPull {
             job_id,
             gate,
             done,
-            force,
+            force: req.force,
+            discard: req.discard,
+            expected_session: req.session,
         })
         .await
 }
@@ -4186,7 +4336,8 @@ mod tests {
         .await;
         assert_eq!(st, StatusCode::CONFLICT);
 
-        // 3. Valid edit with --no-autosave marks sheet dirty; switching without force returns 409.
+        // 3. Valid edit with --no-autosave marks sheet dirty; switching without force returns 409
+        //    with a structured discardTarget.
         let (st, _) = post_json(
             &app,
             "/api/session/edit",
@@ -4194,14 +4345,17 @@ mod tests {
         )
         .await;
         assert_eq!(st, StatusCode::OK);
-        let (st, _) = post_json(&app, "/api/session/open", json!({"path": "other.pdf"})).await;
+        let (st, conflict) =
+            post_json(&app, "/api/session/open", json!({"path": "other.pdf"})).await;
         assert_eq!(st, StatusCode::CONFLICT);
+        let discard_target = conflict["discardTarget"].clone();
+        assert_eq!(discard_target["sheet"], "probe.pdf");
 
-        // 4. Switching with force=true succeeds.
+        // 4. Switching with force=true and matching discardTarget succeeds.
         let (st, switched) = post_json(
             &app,
             "/api/session/open",
-            json!({"path": "other.pdf", "force": true}),
+            json!({"path": "other.pdf", "force": true, "discard": discard_target}),
         )
         .await;
         assert_eq!(st, StatusCode::OK);
@@ -4540,11 +4694,16 @@ mod tests {
 
         // 6. Startup infinite-loop PDF times out cleanly without wedging the server worker,
         //    and the SAME worker immediately opens a normal sheet afterward.
+        let discard_good = json!({
+            "sheet": post_state["path"],
+            "sessionId": post_state["sessionId"],
+            "revision": post_state["revision"],
+        });
         let started = Instant::now();
         let (st_loop, body_loop) = authed_post(
             app.clone(),
             "/api/session/open",
-            json!({"path": "infinite-loop.pdf", "force": true}),
+            json!({"path": "infinite-loop.pdf", "force": true, "discard": discard_good}),
         )
         .await;
         assert_eq!(st_loop, StatusCode::BAD_REQUEST);
@@ -4562,7 +4721,7 @@ mod tests {
         let (st_ok, body_ok) = authed_post(
             app.clone(),
             "/api/session/open",
-            json!({"path": "second.pdf", "force": true}),
+            json!({"path": "second.pdf", "force": true, "discard": discard_good}),
         )
         .await;
         assert_eq!(st_ok, StatusCode::OK);
@@ -5100,6 +5259,345 @@ mod tests {
             "idle autosync must advance remote main"
         );
         assert_eq!(body["state"]["dirtySinceSync"], false);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn stale_discard_confirmation_is_rejected_on_open_and_git_pull() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!(
+            "mpmb-serve-discard-guard-{}-{nanos}",
+            std::process::id()
+        ));
+        let bare = base.join("remote.git");
+        let data_dir = base.join("sheets");
+        std::fs::create_dir_all(&bare).unwrap();
+        assert!(Command::new("git")
+            .args(["init", "--bare", "-b", "main"])
+            .arg(&bare)
+            .status()
+            .unwrap()
+            .success());
+
+        let state = AppState::start(&ServeConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            store: StoreConfig {
+                root: data_dir.clone(),
+                git: Some(GitConfig::new(bare.to_string_lossy().into_owned())),
+            },
+            default_sheet: None,
+            auth_token: None,
+            allow_unauthenticated: false,
+            autosave: false,
+            git_auto_sync_secs: 0,
+        })
+        .unwrap();
+        make_scripted_hp_pdf(&data_dir.join("alpha.pdf"), "10", "", None);
+        make_scripted_hp_pdf(&data_dir.join("beta.pdf"), "20", "", None);
+        let app = build_router(state);
+
+        assert_eq!(
+            post_json(&app, "/api/git/sync", json!({"message": "baseline"}))
+                .await
+                .0,
+            StatusCode::OK
+        );
+
+        // Open Alpha and make unsaved edit HP 10 -> 11.
+        let (st, a_open) = post_json(&app, "/api/session/open", json!({"path": "alpha.pdf"})).await;
+        assert_eq!(st, StatusCode::OK);
+        let alpha_session = a_open["state"]["sessionId"].as_str().unwrap().to_owned();
+        let (st, _) = post_json(
+            &app,
+            "/api/session/edit",
+            json!({"field": "HP Current", "value": "11", "sheet": "alpha.pdf", "session": alpha_session}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+
+        // Non-force switch returns 409 with structured discardTarget naming Alpha & rev.
+        let (st, conflict1) =
+            post_json(&app, "/api/session/open", json!({"path": "beta.pdf"})).await;
+        assert_eq!(st, StatusCode::CONFLICT);
+        assert_eq!(conflict1["code"], "unsaved_edits");
+        let alpha_target_v1 = conflict1["discardTarget"].clone();
+        assert_eq!(alpha_target_v1["sheet"], "alpha.pdf");
+        assert_eq!(alpha_target_v1["sessionId"], alpha_session);
+
+        // 1. Intervening edit within the SAME session invalidates the earlier confirmation!
+        let (st, _) = post_json(
+            &app,
+            "/api/session/edit",
+            json!({"field": "HP Current", "value": "12", "sheet": "alpha.pdf", "session": alpha_session}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        let (st, stale_same_sess) = post_json(
+            &app,
+            "/api/session/open",
+            json!({"path": "beta.pdf", "force": true, "discard": alpha_target_v1}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::CONFLICT);
+        assert_eq!(stale_same_sess["code"], "discard_target_stale");
+        let alpha_target_v2 = stale_same_sess["discardTarget"].clone();
+        assert_ne!(alpha_target_v2["revision"], alpha_target_v1["revision"]);
+
+        // 2. Force open without discardTarget is also rejected while dirty.
+        let (st, missing_target) = post_json(
+            &app,
+            "/api/session/open",
+            json!({"path": "beta.pdf", "force": true}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::CONFLICT);
+        assert_eq!(missing_target["code"], "discard_target_required");
+
+        // 3. Matching discardTarget lets Client 2 switch to Beta and edit HP 20 -> 21.
+        let (st, beta_open) = post_json(
+            &app,
+            "/api/session/open",
+            json!({"path": "beta.pdf", "force": true, "discard": alpha_target_v2}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        let beta_session = beta_open["state"]["sessionId"].as_str().unwrap().to_owned();
+        let (st, _) = post_json(
+            &app,
+            "/api/session/edit",
+            json!({"field": "HP Current", "value": "21", "sheet": "beta.pdf", "session": beta_session}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+
+        // 4. Client 1's now-stale confirmation (from Alpha) MUST NOT discard Beta's unsaved HP 21!
+        let (st, stale_cross) = post_json(
+            &app,
+            "/api/session/open",
+            json!({"path": "alpha.pdf", "force": true, "discard": alpha_target_v1}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::CONFLICT);
+        assert_eq!(stale_cross["code"], "discard_target_stale");
+        let (st, stale_sess_field) = post_json(
+            &app,
+            "/api/session/open",
+            json!({"path": "alpha.pdf", "force": true, "session": alpha_session}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::CONFLICT);
+        assert_eq!(stale_sess_field["code"], "discard_target_stale");
+
+        let (st, still_beta) = get_json(&app, "/api/session/state").await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(still_beta["path"], "beta.pdf");
+        assert_eq!(still_beta["vitals"]["hpCurrent"], "21");
+
+        // 5. Git pull enforces the exact same discardTarget guard (cross-sheet & same-session rev)!
+        let (st, pull_conflict) = post_json(&app, "/api/git/pull", json!({"force": false})).await;
+        assert_eq!(st, StatusCode::CONFLICT);
+        assert_eq!(pull_conflict["code"], "unsaved_edits");
+        let beta_target_v1 = pull_conflict["discardTarget"].clone();
+        assert_eq!(beta_target_v1["sheet"], "beta.pdf");
+        assert_eq!(beta_target_v1["sessionId"], beta_session);
+
+        // Stale Alpha target rejected on force pull.
+        let (st, stale_pull) = post_json(
+            &app,
+            "/api/git/pull",
+            json!({"force": true, "discard": alpha_target_v1}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::CONFLICT);
+        assert_eq!(stale_pull["code"], "discard_target_stale");
+
+        // Intervening Beta edit HP 21 -> 22 invalidates beta_target_v1 on force pull.
+        let (st, _) = post_json(
+            &app,
+            "/api/session/edit",
+            json!({"field": "HP Current", "value": "22", "sheet": "beta.pdf", "session": beta_session}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        let (st, stale_pull_rev) = post_json(
+            &app,
+            "/api/git/pull",
+            json!({"force": true, "discard": beta_target_v1}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::CONFLICT);
+        assert_eq!(stale_pull_rev["code"], "discard_target_stale");
+        let beta_target_v2 = stale_pull_rev["discardTarget"].clone();
+
+        // Exact fresh discardTarget succeeds on force pull.
+        let (st, pull_ok) = post_json(
+            &app,
+            "/api/git/pull",
+            json!({"force": true, "discard": beta_target_v2}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK, "pull failed: {pull_ok}");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn restart_recovers_pending_idle_git_sync_and_preserves_concurrent_writes() {
+        // 1. StoreSyncTracker generation guard never clears concurrent writes.
+        let tracker = StoreSyncTracker::default();
+        let gen1 = tracker.mark_dirty();
+        assert!(tracker.is_dirty());
+        let gen2 = tracker.mark_dirty();
+        assert_ne!(gen1, gen2);
+        assert!(!tracker.clear_if_unchanged(gen1));
+        assert!(tracker.is_dirty());
+        assert!(tracker.clear_if_unchanged(gen2));
+        assert!(!tracker.is_dirty());
+
+        // 2. Restarting a server against a dirty checkout recovers dirtySinceSync & idle auto-sync.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!(
+            "mpmb-serve-restart-sync-{}-{nanos}",
+            std::process::id()
+        ));
+        let bare = base.join("remote.git");
+        let data_dir = base.join("sheets");
+        std::fs::create_dir_all(&bare).unwrap();
+        assert!(Command::new("git")
+            .args(["init", "--bare", "-b", "main"])
+            .arg(&bare)
+            .status()
+            .unwrap()
+            .success());
+
+        let git_cmd = |dir: &std::path::Path, args: &[&str]| -> String {
+            let mut cmd = Command::new("git");
+            for key in [
+                "GIT_DIR",
+                "GIT_WORK_TREE",
+                "GIT_INDEX_FILE",
+                "GIT_COMMON_DIR",
+                "GIT_OBJECT_DIRECTORY",
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            ] {
+                cmd.env_remove(key);
+            }
+            let out = cmd.current_dir(dir).args(args).output().unwrap();
+            assert!(
+                out.status.success(),
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).trim().to_owned()
+        };
+
+        let make_cfg = |idle_secs: u64| ServeConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            store: StoreConfig {
+                root: data_dir.clone(),
+                git: Some(GitConfig::new(bare.to_string_lossy().into_owned())),
+            },
+            default_sheet: None,
+            auth_token: None,
+            allow_unauthenticated: false,
+            autosave: true,
+            git_auto_sync_secs: idle_secs,
+        };
+
+        // Server 1: baseline sync, edit Alpha HP 10 -> 17 (autosaved, not yet synced), then stop.
+        let base_sha = {
+            let s1 = AppState::start(&make_cfg(300)).unwrap();
+            make_scripted_hp_pdf(&data_dir.join("alpha.pdf"), "10", "", None);
+            let app1 = build_router(s1);
+            assert_eq!(
+                post_json(&app1, "/api/git/sync", json!({"message": "baseline"}))
+                    .await
+                    .0,
+                StatusCode::OK
+            );
+            let sha = git_cmd(&bare, &["rev-parse", "refs/heads/main"]);
+            assert_eq!(
+                post_json(&app1, "/api/session/open", json!({"path": "alpha.pdf"}))
+                    .await
+                    .0,
+                StatusCode::OK
+            );
+            assert_eq!(
+                post_json(
+                    &app1,
+                    "/api/session/edit",
+                    json!({"field": "HP Current", "value": "17", "sheet": "alpha.pdf"}),
+                )
+                .await
+                .0,
+                StatusCode::OK
+            );
+            assert_eq!(git_cmd(&bare, &["rev-parse", "refs/heads/main"]), sha);
+            sha
+        };
+
+        // Server 2: restart against same checkout -> must immediately report dirtySinceSync=true
+        // and push Alpha on idle auto-sync!
+        let s2 = AppState::start(&make_cfg(1)).unwrap();
+        let app2 = build_router(s2.clone());
+        let (st, state2) = get_json(&app2, "/api/session/state").await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(
+            state2["dirtySinceSync"], true,
+            "restarted server must recover dirty Git working tree state"
+        );
+        tokio::time::sleep(Duration::from_millis(1150)).await;
+        let res = s2
+            .dispatch_job(|job_id, gate, done| WorkerCommand::CheckIdleAutoSync {
+                job_id,
+                gate,
+                done,
+                idle_secs: 1,
+            })
+            .await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = json_body(res).await;
+        assert_eq!(body["sync"]["pushed"], true);
+        assert_eq!(body["state"]["dirtySinceSync"], false);
+        let after_dirty_sha = git_cmd(&bare, &["rev-parse", "refs/heads/main"]);
+        assert_ne!(after_dirty_sha, base_sha);
+
+        // Server 3: create an unpushed local commit (clean tree, ahead=1), restart -> must recover & push!
+        make_scripted_hp_pdf(&data_dir.join("beta.pdf"), "25", "", None);
+        git_cmd(&data_dir, &["add", "beta.pdf"]);
+        git_cmd(&data_dir, &["commit", "-m", "unpushed local commit"]);
+        let s3 = AppState::start(&make_cfg(1)).unwrap();
+        let app3 = build_router(s3.clone());
+        let (st, state3) = get_json(&app3, "/api/session/state").await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(
+            state3["dirtySinceSync"], true,
+            "restarted server must recover unpushed local commits (ahead > 0)"
+        );
+        tokio::time::sleep(Duration::from_millis(1150)).await;
+        let res3 = s3
+            .dispatch_job(|job_id, gate, done| WorkerCommand::CheckIdleAutoSync {
+                job_id,
+                gate,
+                done,
+                idle_secs: 1,
+            })
+            .await;
+        assert_eq!(res3.status(), StatusCode::OK);
+        let body3 = json_body(res3).await;
+        assert_eq!(body3["sync"]["pushed"], true);
+        assert_ne!(
+            git_cmd(&bare, &["rev-parse", "refs/heads/main"]),
+            after_dirty_sha
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }
