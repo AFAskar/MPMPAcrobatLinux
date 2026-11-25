@@ -20,6 +20,11 @@ import time
 from pathlib import Path
 from pypdf import PdfReader
 
+def _require(condition, message=None):
+    if not condition:
+        raise AssertionError(message)
+
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "tools/acrobat"), str(ROOT / "tools/native")]
 import fighter_additional_diagnostics as diagnostics
@@ -62,52 +67,52 @@ def imported_and_spell_digests(pdf_path):
 
 
 def validate_ashnar_phase(label, state, baseline_st=None):
-    assert not state["errors"], (label, state["errors"])
-    assert not state["unavailable"], (label, state["unavailable"])
+    _require(not state["errors"], (label, state["errors"]))
+    _require(not state["unavailable"], (label, state["unavailable"]))
     f = state["fields"]
     rows_by_prefix = {r["name"]: r for r in state["rows"]}
 
     def find_row(prefix):
         matches = [r for r in state["rows"] if r["name"].startswith(prefix)]
-        assert len(matches) == 1, (label, prefix, state["rows"])
+        _require(len(matches) == 1, (label, prefix, state["rows"]))
         return matches[0]
 
     if label == "ashnar-baseline":
-        assert f["Character Level"] == "12", f
-        assert f["Proficiency Bonus"] == "4", f
-        assert f["AC"] == "27", f
-        assert f["HP Max"] == "67", f
+        _require(f["Character Level"] == "12", f)
+        _require(f["Proficiency Bonus"] == "4", f)
+        _require(f["AC"] == "27", f)
+        _require(f["HP Max"] == "67", f)
         ki = find_row("Ki Points")
-        assert ki["max"] == "13" and ki["used"] == "4", ki
-        assert find_row("Faerie Fire")["max"] == "1"
-        assert find_row("Darkness")["max"] == "1"
+        _require(ki["max"] == "13" and ki["used"] == "4", ki)
+        _require(find_row("Faerie Fire")["max"] == "1", 'find_row("Faerie Fire")["max"] == "1"')
+        _require(find_row("Darkness")["max"] == "1", 'find_row("Darkness")["max"] == "1"')
     elif label == "ashnar-combat-spend-short-rest":
         ki = find_row("Ki Points")
         ff = find_row("Faerie Fire")
         dk = find_row("Darkness")
-        assert ki["used"] == "", ("Short rest should clear Ki Points", ki)
-        assert ff["used"] == "1", ("Short rest must keep Faerie Fire spent", ff)
-        assert dk["used"] == "1", ("Short rest must keep Darkness spent", dk)
-        assert f["HP Current"] == "38", f
-        assert f["HP Temp"] == "5", f
-        assert f["HD1 Used"] == "3", f
-        assert "Ashnar session note" in state["notesAndActions"]["P5.ASnotes.Notes.Left"]
+        _require(ki["used"] == "", ("Short rest should clear Ki Points", ki))
+        _require(ff["used"] == "1", ("Short rest must keep Faerie Fire spent", ff))
+        _require(dk["used"] == "1", ("Short rest must keep Darkness spent", dk))
+        _require(f["HP Current"] == "38", f)
+        _require(f["HP Temp"] == "5", f)
+        _require(f["HD1 Used"] == "3", f)
+        _require("Ashnar session note" in state["notesAndActions"]["P5.ASnotes.Notes.Left"], '"Ashnar session note" in state["notesAndActions"]["P5.ASnotes.Notes.Left"]')
     elif label in ("ashnar-long-rest-heal-level13", "ashnar-level13-cold"):
-        assert f["Character Level"] == "13", f
-        assert f["Proficiency Bonus"] == "5", f
-        assert find_row("Faerie Fire")["used"] == "", "Long rest should clear Faerie Fire"
-        assert find_row("Darkness")["used"] == "", "Long rest should clear Darkness"
-        assert f["HP Current"] == "", f["HP Current"]
-        assert f["HP Temp"] == "", f["HP Temp"]
-        assert f["HD1 Used"] == "", f["HD1 Used"]
-        assert "Ashnar session note" in state["notesAndActions"]["P5.ASnotes.Notes.Left"]
+        _require(f["Character Level"] == "13", f)
+        _require(f["Proficiency Bonus"] == "5", f)
+        _require(find_row("Faerie Fire")["used"] == "", "Long rest should clear Faerie Fire")
+        _require(find_row("Darkness")["used"] == "", "Long rest should clear Darkness")
+        _require(f["HP Current"] == "", f["HP Current"])
+        _require(f["HP Temp"] == "", f["HP Temp"])
+        _require(f["HD1 Used"] == "", f["HD1 Used"])
+        _require("Ashnar session note" in state["notesAndActions"]["P5.ASnotes.Notes.Left"], '"Ashnar session note" in state["notesAndActions"]["P5.ASnotes.Notes.Left"]')
     elif label == "ashnar-level14-diamond-soul":
-        assert f["Character Level"] == "14", f
-        assert f["Proficiency Bonus"] == "5", f
+        _require(f["Character Level"] == "14", f)
+        _require(f["Proficiency Bonus"] == "5", f)
         # Diamond Soul adds proficiency (+5) to all six saving throws (Con/Int/Wis/Cha newly proficient!)
         if baseline_st is not None:
             for key in ("Con ST Mod", "Int ST Mod", "Wis ST Mod", "Cha ST Mod"):
-                assert int(f[key]) == int(baseline_st[key]) + 5, (key, baseline_st[key], f[key])
+                _require(int(f[key]) == int(baseline_st[key]) + 5, (key, baseline_st[key], f[key]))
     else:
         raise ValueError(f"Unknown Ashnar phase: {label}")
 
@@ -123,7 +128,7 @@ def main():
         x for x in json.loads((ROOT / "docs/fixtures.json").read_text()) if "Ashnar" in x["file"]
     )
     orig_pdf = ROOT / "Testing" / fixture_item["file"]
-    assert sha256_file(orig_pdf) == fixture_item["sha256"]
+    _require(sha256_file(orig_pdf) == fixture_item["sha256"], 'sha256_file(orig_pdf) == fixture_item["sha256"]')
     orig_digests = imported_and_spell_digests(orig_pdf)
 
     if args.input and args.instrumentation:
@@ -148,7 +153,7 @@ def main():
         source = Path(json.loads(manifest_path.read_text())["input"]).resolve()
 
     manifest = json.loads(manifest_path.read_text())
-    assert manifest["passed"] and manifest["input_sha256"] == sha256_file(source)
+    _require(manifest["passed"] and manifest["input_sha256"] == sha256_file(source), 'manifest["passed"] and manifest["input_sha256"] == sha256_file(source)')
     expected_scripts = script_hashes(source)
 
     style = load_module("ashnar_style", "default-style-persistence.py")
@@ -201,12 +206,12 @@ def main():
             )
         data = json.loads(probe.read_text()) if probe.exists() else {"passed": False, "error": f"Missing {probe}"}
         msgs = data.get("diagnostics", {}).get("console", {}).get("messages", [])
-        assert [m["text"] for m in msgs] == [CONSOLE_SENTINEL], (label, msgs, data.get("error"))
+        _require([m["text"] for m in msgs] == [CONSOLE_SENTINEL], (label, msgs, data.get("error")))
         strict = copy.deepcopy(data)
         strict["diagnostics"]["console"]["messages"] = []
         checked = qualification.qualify_probe(proc.returncode, strict, label)
         report["probe_qualifications"].append(dict(checked, probe=str(probe), expected_console=msgs))
-        assert checked["passed"], (label, checked)
+        _require(checked["passed"], (label, checked))
 
         results = []
         for cap_label, summary_idx, saved_pdf in capture_specs:
@@ -214,13 +219,13 @@ def main():
             validate_ashnar_phase(cap_label, state, baseline_st=baseline_st)
             if cap_label == "ashnar-baseline":
                 baseline_st = {k: state["fields"][k] for k in ("Str ST Mod", "Dex ST Mod", "Con ST Mod", "Int ST Mod", "Wis ST Mod", "Cha ST Mod")}
-            assert script_hashes(saved_pdf) == expected_scripts, (cap_label, "script hashes changed")
+            _require(script_hashes(saved_pdf) == expected_scripts, (cap_label, "script hashes changed"))
             digests = imported_and_spell_digests(saved_pdf)
-            assert digests == orig_digests, (cap_label, "imported/spell payload changed", digests, orig_digests)
+            _require(digests == orig_digests, (cap_label, "imported/spell payload changed", digests, orig_digests))
             canonical_check = fields_mod.compare(saved_pdf, dict(state["fields"], **state["resources"]))
             populated = {k: v for k, v in state["fields"].items() if str(v).strip()}
             visible_check = inspect(saved_pdf, populated)
-            assert visible_check["actual"] == populated, (cap_label, "canonical mismatch")
+            _require(visible_check["actual"] == populated, (cap_label, "canonical mismatch"))
             results.append(
                 {
                     "label": cap_label,
@@ -314,11 +319,9 @@ def main():
         cold_specs.append(("ashnar-level14-diamond-soul", l14_summary_idx, l14_pdf))
 
         reopen_phases, _ = run_probe("reopen", l13_pdf, cold_steps, cold_specs, baseline_st=baseline_st)
-        assert encoded_state(reopen_phases[0]["state"]) == encoded_state(primary_phases[-1]["state"]), (
-            "Ashnar cold reopen state mismatch"
-        )
+        _require(encoded_state(reopen_phases[0]["state"]) == encoded_state(primary_phases[-1]["state"]), "Ashnar cold reopen state mismatch")
         report["phases"].extend(reopen_phases)
-        assert sha256_file(orig_pdf) == fixture_item["sha256"]
+        _require(sha256_file(orig_pdf) == fixture_item["sha256"], 'sha256_file(orig_pdf) == fixture_item["sha256"]')
         report["passed"] = True
         print(f"Ashnar native workflow ({len(report['phases'])} phases incl. cold reopen + L14 Diamond Soul): PASS", flush=True)
     except Exception as err:

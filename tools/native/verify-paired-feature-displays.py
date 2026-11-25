@@ -69,7 +69,7 @@ try:
  n=json.loads(args.native.read_text());ref=json.loads(args.reference.read_text());_require(n.get('passed') is True,'Native report must have passed=True');count=len(n['phases']) if args.diagnostic_prefix is None else args.diagnostic_prefix;_require(0<count<=min(len(n['phases']),len(ref['phases'])),'Invalid phase count');report.update(native_report_sha256=file_hash(args.native),reference_report_sha256=file_hash(args.reference),original=str(args.original) if args.original else None);original_scripts=script_hashes(args.original) if args.original else None
  if args.diagnostic_prefix is None:_require(ref.get('passed') is True and len(ref['phases'])==len(n['phases']),'Reference report must pass with matching phase count')
  for i in range(count):
-  a,b=n['phases'][i],ref['phases'][i];_require(a['label']==b['label'] and encoded_state(a['state'])==encoded_state(b['state']),('Phase label or state mismatch',a.get('label'),b.get('label')));s=a['state'];expected=dict(s['fields'],**s['resources'],**s['notesAndActions']);names=sorted(expected);phase={'label':a['label'],'batches':[],'native_sha256':file_hash(a['pdf']),'reference_sha256':file_hash(b['pdf'])};report['phases'].append(phase)
+  a,b=n['phases'][i],ref['phases'][i];_require(a['label']==b['label'] and encoded_state(a['state'])==encoded_state(b['state']),('Phase label or state mismatch',a.get('label'),b.get('label')));s=a['state'];expected=dict(s['fields'],**s['resources'],**s['notesAndActions']);names=sorted(expected);_require(bool(names),('Phase has no captured fields/resources/notesAndActions to compare',a['label']));phase={'label':a['label'],'batches':[],'native_sha256':file_hash(a['pdf']),'reference_sha256':file_hash(b['pdf'])};report['phases'].append(phase)
   for point,key in [(a,'native_sha256'),(b,'reference_sha256')]:
    recorded=producer_digests(point)
    _require(bool(recorded),('Missing producer PDF sha256 digest',a['label'],key))
@@ -80,6 +80,7 @@ try:
    stem=folder/(str(i)+'-'+str(bi));request=stem.with_suffix('.request.json');out=stem.with_suffix('.result.json');request.write_text(json.dumps({'native':a['pdf'],'reference':b['pdf'],'expected':{k:expected[k] for k in names[start:start+8]}}))
    with stem.with_suffix('.log').open('w') as log:r=subprocess.run([sys.executable,str(Path(__file__).resolve()),'--worker',str(request),'--worker-output',str(out)],stdout=log,stderr=log,timeout=240)
    data=json.loads(out.read_text());phase['batches'].append({'result':str(out),'returncode':r.returncode,'peak_rss_kib':data.get('peak_rss_kib')});_require(r.returncode==0 and data.get('passed') is True and data.get('source_sha256')==SELF,(a['label'],str(out),data.get('error')))
+  _require(bool(phase['batches']),('Phase executed zero comparison batches',a['label']))
   _require(file_hash(a['pdf'])==phase['native_sha256'] and file_hash(b['pdf'])==phase['reference_sha256'],'PDF changed during comparison')
   (folder/'progress.json').write_text(json.dumps(report,indent=2))
  report.update(passed=True,complete_report_pair=args.diagnostic_prefix is None)

@@ -8,6 +8,11 @@ Spell Sheet generation, Wild Shape,
 Companion pages, and cold save/reopen verification.
 """
 
+def _require(condition, message=None):
+    if not condition:
+        raise AssertionError(message)
+
+
 CONSOLE_SENTINEL = "MPMB 2024 comprehensive class workflow console sentinel"
 
 # Helper JS snippet to spend a named Limited Feature dynamically by scanning actual rows.
@@ -444,193 +449,193 @@ PROFILES = {
 
 def validate_profile_state(profile_name, phase_label, state):
     """Verify concrete functional invariants for each 2024 profile phase."""
-    assert not state["errors"], (profile_name, phase_label, state["errors"])
-    assert not state["unavailable"], (profile_name, phase_label, state["unavailable"])
-    assert state["calculation"] == {"app": True, "doc": True, "delay": False}, (
+    _require(not state["errors"], (profile_name, phase_label, state["errors"]))
+    _require(not state["unavailable"], (profile_name, phase_label, state["unavailable"]))
+    _require(state["calculation"] == {"app": True, "doc": True, "delay": False}, (
         profile_name,
         phase_label,
         state["calculation"],
-    )
+    ))
     f = state["fields"]
     rows = {r["name"]: r for r in state["rows"]}
 
     def find_row(prefix):
         matches = [r for k, r in rows.items() if k.startswith(prefix)]
-        assert matches, (profile_name, phase_label, f"Missing row starting with {prefix}", list(rows))
+        _require(matches, (profile_name, phase_label, f"Missing row starting with {prefix}", list(rows)))
         return matches[0]
 
     if profile_name == "cleric":
         if phase_label == "cleric-l1-setup":
-            assert f["Character Level"] == "1" and f["Proficiency Bonus"] == "2"
-            assert state["identity"]["cleric"]["level"] == 1
-            assert state["choices"]["classes"]["cleric"]["divine order"]["choice"] == "protector"
-            assert state["race"]["known"] == "dwarf"
-            assert state["background"]["known"] == "acolyte"
+            _require(f["Character Level"] == "1" and f["Proficiency Bonus"] == "2", 'f["Character Level"] == "1" and f["Proficiency Bonus"] == "2"')
+            _require(state["identity"]["cleric"]["level"] == 1, 'state["identity"]["cleric"]["level"] == 1')
+            _require(state["choices"]["classes"]["cleric"]["divine order"]["choice"] == "protector", 'state["choices"]["classes"]["cleric"]["divine order"]["choice"] == "protector"')
+            _require(state["race"]["known"] == "dwarf", 'state["race"]["known"] == "dwarf"')
+            _require(state["background"]["known"] == "acolyte", 'state["background"]["known"] == "acolyte"')
         elif phase_label == "cleric-l7-life-blessed-spells":
-            assert f["Character Level"] == "7" and f["Proficiency Bonus"] == "3"
-            assert state["identity"]["cleric"] == {"level": 7, "subclass": "cleric-life"}
-            assert state["choices"]["classes"]["cleric"]["blessed strikes"]["choice"] == "divine strike"
-            assert "cleric" in state["spells"]
-            assert state["pages"] > 6, "Spell Sheet pages must be generated"
+            _require(f["Character Level"] == "7" and f["Proficiency Bonus"] == "3", 'f["Character Level"] == "7" and f["Proficiency Bonus"] == "3"')
+            _require(state["identity"]["cleric"] == {"level": 7, "subclass": "cleric-life"}, 'state["identity"]["cleric"] == {"level": 7, "subclass": "cleric-life"}')
+            _require(state["choices"]["classes"]["cleric"]["blessed strikes"]["choice"] == "divine strike", 'state["choices"]["classes"]["cleric"]["blessed strikes"]["choice"] == "divine strike"')
+            _require("cleric" in state["spells"], '"cleric" in state["spells"]')
+            _require(state["pages"] > 6, "Spell Sheet pages must be generated")
         elif phase_label == "cleric-l7-spend-rest":
             cd = find_row("Channel Divinity")
             # 2024 Cleric regains 1 use of Channel Divinity on short rest (or full reset depending on recovery tag)
-            assert cd["used"] in ("", "0", "1"), (phase_label, cd)
+            _require(cd["used"] in ("", "0", "1"), (phase_label, cd))
         elif phase_label == "cleric-l14-progress":
-            assert f["Character Level"] == "14" and f["Proficiency Bonus"] == "5"
+            _require(f["Character Level"] == "14" and f["Proficiency Bonus"] == "5", 'f["Character Level"] == "14" and f["Proficiency Bonus"] == "5"')
         elif phase_label == "cleric-l5-down":
-            assert f["Character Level"] == "5" and f["Proficiency Bonus"] == "3"
+            _require(f["Character Level"] == "5" and f["Proficiency Bonus"] == "3", 'f["Character Level"] == "5" and f["Proficiency Bonus"] == "3"')
         elif phase_label == "cleric-l9-mixed":
-            assert f["Character Level"] == "9" and f["Proficiency Bonus"] == "4"
+            _require(f["Character Level"] == "9" and f["Proficiency Bonus"] == "4", 'f["Character Level"] == "9" and f["Proficiency Bonus"] == "4"')
 
     elif profile_name == "druid":
         if phase_label == "druid-l3-land-temperate":
-            assert f["Character Level"] == "3"
-            assert state["identity"]["druid"] == {"level": 3, "subclass": "druid-land"}
-            assert state["choices"]["classes"]["druid"]["primal order"]["choice"] == "magician"
-            assert state["choices"]["classes"]["druid"]["subclassfeature3"]["choice"] == "temperate"
+            _require(f["Character Level"] == "3", 'f["Character Level"] == "3"')
+            _require(state["identity"]["druid"] == {"level": 3, "subclass": "druid-land"}, 'state["identity"]["druid"] == {"level": 3, "subclass": "druid-land"}')
+            _require(state["choices"]["classes"]["druid"]["primal order"]["choice"] == "magician", 'state["choices"]["classes"]["druid"]["primal order"]["choice"] == "magician"')
+            _require(state["choices"]["classes"]["druid"]["subclassfeature3"]["choice"] == "temperate", 'state["choices"]["classes"]["druid"]["subclassfeature3"]["choice"] == "temperate"')
         elif phase_label == "druid-l7-wildshape-spells":
-            assert f["Character Level"] == "7"
-            assert state["choices"]["classes"]["druid"]["subclassfeature3"]["choice"] == "arid"
+            _require(f["Character Level"] == "7", 'f["Character Level"] == "7"')
+            _require(state["choices"]["classes"]["druid"]["subclassfeature3"]["choice"] == "arid", 'state["choices"]["classes"]["druid"]["subclassfeature3"]["choice"] == "arid"')
             ws_race = next((v for k, v in state["notesAndActions"].items() if k.endswith("Wildshape.Race.1")), "")
             ws_str = next((v for k, v in state["notesAndActions"].items() if k.endswith("Wildshape.1.Ability.Str.Score")), "")
-            assert ws_race.lower() == "wolf", state["notesAndActions"]
-            assert ws_str == "14", ("2024 Wolf Str expected 14", ws_str)
-            assert "druid" in state["spells"]
-            assert state["pages"] > 7
+            _require(ws_race.lower() == "wolf", state["notesAndActions"])
+            _require(ws_str == "14", ("2024 Wolf Str expected 14", ws_str))
+            _require("druid" in state["spells"], '"druid" in state["spells"]')
+            _require(state["pages"] > 7, 'state["pages"] > 7')
         elif phase_label == "druid-l7-spend-rest":
             ws = find_row("Wild Shape")
-            assert ws["used"] in ("", "0"), ws
+            _require(ws["used"] in ("", "0"), ws)
         elif phase_label == "druid-l10-mixed":
-            assert f["Character Level"] == "10" and f["Proficiency Bonus"] == "4"
+            _require(f["Character Level"] == "10" and f["Proficiency Bonus"] == "4", 'f["Character Level"] == "10" and f["Proficiency Bonus"] == "4"')
 
     elif profile_name == "paladin":
         if phase_label == "paladin-l2-setup":
-            assert f["Character Level"] == "2"
-            assert state["race"]["known"].startswith("dragonborn")
-            assert state["background"]["known"] == "soldier"
-            assert "longsword" in f["Attack.1.Weapon Selection"].lower()
+            _require(f["Character Level"] == "2", 'f["Character Level"] == "2"')
+            _require(state["race"]["known"].startswith("dragonborn"), 'state["race"]["known"].startswith("dragonborn")')
+            _require(state["background"]["known"] == "soldier", 'state["background"]["known"] == "soldier"')
+            _require("longsword" in f["Attack.1.Weapon Selection"].lower(), '"longsword" in f["Attack.1.Weapon Selection"].lower()')
         elif phase_label == "paladin-l6-devotion-aura-spells":
-            assert f["Character Level"] == "6"
-            assert state["identity"]["paladin"] == {"level": 6, "subclass": "paladin-devotion"}
+            _require(f["Character Level"] == "6", 'f["Character Level"] == "6"')
+            _require(state["identity"]["paladin"] == {"level": 6, "subclass": "paladin-devotion"}, 'state["identity"]["paladin"] == {"level": 6, "subclass": "paladin-devotion"}')
             # Aura of Protection adds Cha mod (+3) to all saving throws!
-            assert int(f["Dex ST Mod"]) >= 3, ("Aura of Protection missing on Dex ST", f["Dex ST Mod"])
-            assert "paladin" in state["spells"]
-            assert state["pages"] > 6
+            _require(int(f["Dex ST Mod"]) >= 3, ("Aura of Protection missing on Dex ST", f["Dex ST Mod"]))
+            _require("paladin" in state["spells"], '"paladin" in state["spells"]')
+            _require(state["pages"] > 6, 'state["pages"] > 6')
         elif phase_label == "paladin-l6-spend-rest":
             loh = find_row("Lay on Hands")
-            assert loh["used"] == "15", ("Short rest must NOT reset Long-Rest Lay on Hands", loh)
+            _require(loh["used"] == "15", ("Short rest must NOT reset Long-Rest Lay on Hands", loh))
         elif phase_label == "paladin-l11-mixed":
-            assert f["Character Level"] == "11" and f["Proficiency Bonus"] == "4"
+            _require(f["Character Level"] == "11" and f["Proficiency Bonus"] == "4", 'f["Character Level"] == "11" and f["Proficiency Bonus"] == "4"')
             loh = find_row("Lay on Hands")
-            assert loh["used"] in ("", "0"), ("Long rest must reset Lay on Hands", loh)
+            _require(loh["used"] in ("", "0"), ("Long rest must reset Lay on Hands", loh))
 
     elif profile_name == "ranger":
         if phase_label == "ranger-l3-hunter":
-            assert f["Character Level"] == "3"
-            assert state["identity"]["ranger"] == {"level": 3, "subclass": "ranger-hunter"}
-            assert "elf" in state["race"]["known"]
-            assert "longbow" in f["Attack.1.Weapon Selection"].lower()
+            _require(f["Character Level"] == "3", 'f["Character Level"] == "3"')
+            _require(state["identity"]["ranger"] == {"level": 3, "subclass": "ranger-hunter"}, 'state["identity"]["ranger"] == {"level": 3, "subclass": "ranger-hunter"}')
+            _require("elf" in state["race"]["known"], '"elf" in state["race"]["known"]')
+            _require("longbow" in f["Attack.1.Weapon Selection"].lower(), '"longbow" in f["Attack.1.Weapon Selection"].lower()')
         elif phase_label == "ranger-l5-companion-spells":
-            assert f["Character Level"] == "5"
+            _require(f["Character Level"] == "5", 'f["Character Level"] == "5"')
             comp_name = next((v for k, v in state["notesAndActions"].items() if k.endswith("Comp.Desc.Name")), "")
             comp_race = next((v for k, v in state["notesAndActions"].items() if k.endswith("Comp.Race")), "")
             comp_ac = next((v for k, v in state["notesAndActions"].items() if k.endswith("Comp.Use.AC")), "")
-            assert comp_name == "Timber" and "wolf" in comp_race.lower() and comp_ac != "", state["notesAndActions"]
-            assert "ranger" in state["spells"]
-            assert state["pages"] > 7
+            _require(comp_name == "Timber" and "wolf" in comp_race.lower() and comp_ac != "", state["notesAndActions"])
+            _require("ranger" in state["spells"], '"ranger" in state["spells"]')
+            _require(state["pages"] > 7, 'state["pages"] > 7')
         elif phase_label == "ranger-l5-spend-rest":
             fe = find_row("Favored Enemy")
-            assert fe["used"] in ("", "0"), fe
+            _require(fe["used"] in ("", "0"), fe)
         elif phase_label == "ranger-l9-mixed":
-            assert f["Character Level"] == "9" and f["Proficiency Bonus"] == "4"
+            _require(f["Character Level"] == "9" and f["Proficiency Bonus"] == "4", 'f["Character Level"] == "9" and f["Proficiency Bonus"] == "4"')
 
     elif profile_name == "rogue":
         if phase_label == "rogue-l1-criminal":
-            assert f["Character Level"] == "1"
-            assert state["race"]["known"].startswith("halfling")
-            assert state["background"]["known"] == "criminal"
+            _require(f["Character Level"] == "1", 'f["Character Level"] == "1"')
+            _require(state["race"]["known"].startswith("halfling"), 'state["race"]["known"].startswith("halfling")')
+            _require(state["background"]["known"] == "criminal", 'state["background"]["known"] == "criminal"')
         elif phase_label == "rogue-l5-thief-cunning":
-            assert f["Character Level"] == "5"
-            assert state["identity"]["rogue"] == {"level": 5, "subclass": "rogue-thief"}
-            assert "3d6" in state["notesAndActions"]["Class Features"].lower()
+            _require(f["Character Level"] == "5", 'f["Character Level"] == "5"')
+            _require(state["identity"]["rogue"] == {"level": 5, "subclass": "rogue-thief"}, 'state["identity"]["rogue"] == {"level": 5, "subclass": "rogue-thief"}')
+            _require("3d6" in state["notesAndActions"]["Class Features"].lower(), '"3d6" in state["notesAndActions"]["Class Features"].lower()')
         elif phase_label == "rogue-l11-reliable":
-            assert f["Character Level"] == "11" and f["Proficiency Bonus"] == "4"
-            assert "6d6" in state["notesAndActions"]["Class Features"].lower()
+            _require(f["Character Level"] == "11" and f["Proficiency Bonus"] == "4", 'f["Character Level"] == "11" and f["Proficiency Bonus"] == "4"')
+            _require("6d6" in state["notesAndActions"]["Class Features"].lower(), '"6d6" in state["notesAndActions"]["Class Features"].lower()')
         elif phase_label == "rogue-l20-capstone":
-            assert f["Character Level"] == "20" and f["Proficiency Bonus"] == "6"
-            assert "10d6" in state["notesAndActions"]["Class Features"].lower()
+            _require(f["Character Level"] == "20" and f["Proficiency Bonus"] == "6", 'f["Character Level"] == "20" and f["Proficiency Bonus"] == "6"')
+            _require("10d6" in state["notesAndActions"]["Class Features"].lower(), '"10d6" in state["notesAndActions"]["Class Features"].lower()')
         elif phase_label == "rogue-l7-mixed":
-            assert f["Character Level"] == "7" and f["Proficiency Bonus"] == "3"
+            _require(f["Character Level"] == "7" and f["Proficiency Bonus"] == "3", 'f["Character Level"] == "7" and f["Proficiency Bonus"] == "3"')
 
     elif profile_name == "sorcerer":
         if phase_label == "sorcerer-l3-draconic":
-            assert f["Character Level"] == "3"
-            assert state["identity"]["sorcerer"] == {"level": 3, "subclass": "sorcerer-draconic"}
+            _require(f["Character Level"] == "3", 'f["Character Level"] == "3"')
+            _require(state["identity"]["sorcerer"] == {"level": 3, "subclass": "sorcerer-draconic"}, 'state["identity"]["sorcerer"] == {"level": 3, "subclass": "sorcerer-draconic"}')
             mm = state["choices"]["classes"]["sorcerer"]["metamagic"]["extrachoices"]
-            assert "quickened spell" in mm and "subtle spell" in mm, mm
+            _require("quickened spell" in mm and "subtle spell" in mm, mm)
             # 2024 Draconic Resilience AC = 10 + Dex (+2) + Cha (+4) = 16!
-            assert int(f["AC"]) >= 16, ("Draconic Resilience AC expected >= 16", f["AC"])
+            _require(int(f["AC"]) >= 16, ("Draconic Resilience AC expected >= 16", f["AC"]))
         elif phase_label == "sorcerer-l6-spells":
-            assert f["Character Level"] == "6"
-            assert "sorcerer" in state["spells"]
-            assert state["pages"] > 6
+            _require(f["Character Level"] == "6", 'f["Character Level"] == "6"')
+            _require("sorcerer" in state["spells"], '"sorcerer" in state["spells"]')
+            _require(state["pages"] > 6, 'state["pages"] > 6')
         elif phase_label == "sorcerer-l6-spend-rest":
             sp = find_row("Sorcery Points")
-            assert sp["used"] in ("", "0"), sp
+            _require(sp["used"] in ("", "0"), sp)
         elif phase_label == "sorcerer-l10-mixed":
-            assert f["Character Level"] == "10" and f["Proficiency Bonus"] == "4"
+            _require(f["Character Level"] == "10" and f["Proficiency Bonus"] == "4", 'f["Character Level"] == "10" and f["Proficiency Bonus"] == "4"')
 
     elif profile_name == "warlock":
         if phase_label == "warlock-l3-fiend":
-            assert f["Character Level"] == "3"
-            assert state["identity"]["warlock"] == {"level": 3, "subclass": "warlock-fiend"}
+            _require(f["Character Level"] == "3", 'f["Character Level"] == "3"')
+            _require(state["identity"]["warlock"] == {"level": 3, "subclass": "warlock-fiend"}, 'state["identity"]["warlock"] == {"level": 3, "subclass": "warlock-fiend"}')
             inv = state["choices"]["classes"]["warlock"]["eldritch invocations"]["extrachoices"]
-            assert "devil's sight" in inv and "armor of shadows" in inv, inv
-            assert f["Feat Name 1"].lower().startswith("tough")
+            _require("devil's sight" in inv and "armor of shadows" in inv, inv)
+            _require(f["Feat Name 1"].lower().startswith("tough"), 'f["Feat Name 1"].lower().startswith("tough")')
         elif phase_label == "warlock-l11-pact-spells":
-            assert f["Character Level"] == "11" and f["Proficiency Bonus"] == "4"
-            assert "warlock" in state["spells"]
-            assert state["pages"] > 6
+            _require(f["Character Level"] == "11" and f["Proficiency Bonus"] == "4", 'f["Character Level"] == "11" and f["Proficiency Bonus"] == "4"')
+            _require("warlock" in state["spells"], '"warlock" in state["spells"]')
+            _require(state["pages"] > 6, 'state["pages"] > 6')
         elif phase_label == "warlock-l11-spend-rest":
             mc = find_row("Magical Cunning")
-            assert mc["used"] in ("", "0"), mc
+            _require(mc["used"] in ("", "0"), mc)
         elif phase_label == "warlock-l17-arcanum":
-            assert f["Character Level"] == "17" and f["Proficiency Bonus"] == "6"
+            _require(f["Character Level"] == "17" and f["Proficiency Bonus"] == "6", 'f["Character Level"] == "17" and f["Proficiency Bonus"] == "6"')
         elif phase_label == "warlock-l5-mixed":
-            assert f["Character Level"] == "5" and f["Proficiency Bonus"] == "3"
+            _require(f["Character Level"] == "5" and f["Proficiency Bonus"] == "3", 'f["Character Level"] == "5" and f["Proficiency Bonus"] == "3"')
 
     elif profile_name == "wizard":
         if phase_label == "wizard-l3-evoker":
-            assert f["Character Level"] == "3"
-            assert state["identity"]["wizard"] == {"level": 3, "subclass": "wizard-evoker"}
-            assert state["choices"]["classes"]["wizard"]["scholar"]["choice"] == "arcana expertise"
-            assert state["background"]["known"] == "sage"
+            _require(f["Character Level"] == "3", 'f["Character Level"] == "3"')
+            _require(state["identity"]["wizard"] == {"level": 3, "subclass": "wizard-evoker"}, 'state["identity"]["wizard"] == {"level": 3, "subclass": "wizard-evoker"}')
+            _require(state["choices"]["classes"]["wizard"]["scholar"]["choice"] == "arcana expertise", 'state["choices"]["classes"]["wizard"]["scholar"]["choice"] == "arcana expertise"')
+            _require(state["background"]["known"] == "sage", 'state["background"]["known"] == "sage"')
         elif phase_label == "wizard-l10-empowered-spells":
-            assert f["Character Level"] == "10" and f["Proficiency Bonus"] == "4"
-            assert "wizard" in state["spells"]
-            assert state["pages"] > 6
+            _require(f["Character Level"] == "10" and f["Proficiency Bonus"] == "4", 'f["Character Level"] == "10" and f["Proficiency Bonus"] == "4"')
+            _require("wizard" in state["spells"], '"wizard" in state["spells"]')
+            _require(state["pages"] > 6, 'state["pages"] > 6')
         elif phase_label == "wizard-l10-spend-rest":
             ar = find_row("Arcane Recovery")
-            assert ar["used"] in ("", "0"), ar
+            _require(ar["used"] in ("", "0"), ar)
         elif phase_label == "wizard-l6-mixed":
-            assert f["Character Level"] == "6" and f["Proficiency Bonus"] == "3"
+            _require(f["Character Level"] == "6" and f["Proficiency Bonus"] == "3", 'f["Character Level"] == "6" and f["Proficiency Bonus"] == "3"')
 
     elif profile_name == "multiclass":
         if phase_label == "mc-pal6-war3":
-            assert f["Character Level"] == "9" and f["Proficiency Bonus"] == "4"
-            assert set(state["identity"]) == {"paladin", "warlock"}
-            assert state["identity"]["paladin"] == {"level": 6, "subclass": "paladin-devotion"}
-            assert state["identity"]["warlock"] == {"level": 3, "subclass": "warlock-fiend"}
-            assert f["HD1 Level"] and f["HD2 Level"], (f["HD1 Level"], f["HD2 Level"])
-            assert "paladin" in state["spells"] and "warlock" in state["spells"]
-            assert state["pages"] > 6
+            _require(f["Character Level"] == "9" and f["Proficiency Bonus"] == "4", 'f["Character Level"] == "9" and f["Proficiency Bonus"] == "4"')
+            _require(set(state["identity"]) == {"paladin", "warlock"}, 'set(state["identity"]) == {"paladin", "warlock"}')
+            _require(state["identity"]["paladin"] == {"level": 6, "subclass": "paladin-devotion"}, 'state["identity"]["paladin"] == {"level": 6, "subclass": "paladin-devotion"}')
+            _require(state["identity"]["warlock"] == {"level": 3, "subclass": "warlock-fiend"}, 'state["identity"]["warlock"] == {"level": 3, "subclass": "warlock-fiend"}')
+            _require(f["HD1 Level"] and f["HD2 Level"], (f["HD1 Level"], f["HD2 Level"]))
+            _require("paladin" in state["spells"] and "warlock" in state["spells"], '"paladin" in state["spells"] and "warlock" in state["spells"]')
+            _require(state["pages"] > 6, 'state["pages"] > 6')
         elif phase_label == "mc-pal6-war3-rests":
             loh = find_row("Lay on Hands")
-            assert loh["used"] == "20", ("Short rest must not reset Lay on Hands", loh)
+            _require(loh["used"] == "20", ("Short rest must not reset Lay on Hands", loh))
         elif phase_label == "mc-ftr3-wiz5":
-            assert f["Character Level"] == "8" and f["Proficiency Bonus"] == "3"
-            assert set(state["identity"]) == {"fighter", "wizard"}
-            assert "wizard" in state["spells"]
+            _require(f["Character Level"] == "8" and f["Proficiency Bonus"] == "3", 'f["Character Level"] == "8" and f["Proficiency Bonus"] == "3"')
+            _require(set(state["identity"]) == {"fighter", "wizard"}, 'set(state["identity"]) == {"fighter", "wizard"}')
+            _require("wizard" in state["spells"], '"wizard" in state["spells"]')
         elif phase_label == "mc-ftr5-wiz5-mixed":
-            assert f["Character Level"] == "10" and f["Proficiency Bonus"] == "4"
+            _require(f["Character Level"] == "10" and f["Proficiency Bonus"] == "4", 'f["Character Level"] == "10" and f["Proficiency Bonus"] == "4"')

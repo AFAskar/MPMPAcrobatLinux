@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 
 from profile_qualification import finalize_profile_qualification
+import profiles_2014
+import profiles_2024
 
 
 class ProfileQualificationTests(unittest.TestCase):
@@ -109,6 +111,31 @@ class ProfileQualificationTests(unittest.TestCase):
             self.assertTrue(disk["state_capture_passed"])
             self.assertEqual(disk["paired_display_status"], "passed")
             self.assertTrue(disk["paired_display"].endswith("comparison.json"))
+
+    def test_profile_validators_reject_invalid_state_even_under_python_optimize(self):
+        bad_state = {
+            "errors": ["injected error"],
+            "unavailable": [],
+            "calculation": {"app": False, "doc": False, "delay": True},
+            "fields": {},
+            "rows": [],
+            "identity": {},
+            "choices": {},
+            "race": {},
+            "background": {},
+            "spells": {},
+            "pages": 0,
+            "notesAndActions": {},
+        }
+        with self.assertRaises(AssertionError):
+            profiles_2024.validate_profile_state("cleric", "cleric-l1-setup", bad_state)
+        with self.assertRaises(AssertionError):
+            profiles_2014.validate_profile_state("barbarian", "barbarian-l3-berserker", bad_state)
+        bad_fields_only = dict(bad_state, errors=[], calculation={"app": True, "doc": True, "delay": False}, fields={"Character Level": "99", "Proficiency Bonus": "9"})
+        with self.assertRaises(AssertionError):
+            profiles_2024.validate_profile_state("cleric", "cleric-l1-setup", bad_fields_only)
+        with self.assertRaises(AssertionError):
+            profiles_2014.validate_profile_state("barbarian", "barbarian-l3-berserker", bad_fields_only)
 
 
 if __name__ == "__main__":

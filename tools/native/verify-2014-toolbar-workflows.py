@@ -14,6 +14,11 @@ import time
 from pathlib import Path
 from pypdf import PdfReader
 
+def _require(condition, message=None):
+    if not condition:
+        raise AssertionError(message)
+
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools/acrobat"))
 from verify import canonical_fields, script_hashes
@@ -28,7 +33,7 @@ def fixture_2014():
         if "_2014_" in x["file"]
     )
     pdf = ROOT / "Testing" / item["file"]
-    assert hashlib.sha256(pdf.read_bytes()).hexdigest() == item["sha256"]
+    _require(hashlib.sha256(pdf.read_bytes()).hexdigest() == item["sha256"], 'hashlib.sha256(pdf.read_bytes()).hexdigest() == item["sha256"]')
     return pdf, item["sha256"]
 
 
@@ -51,23 +56,23 @@ def run_probe(binary, pdf, scenario, folder, label, timeout=300, allow_upstream_
         if evidence.exists()
         else {"passed": False, "error": f"No probe report; inspect {log}"}
     )
-    assert not data["diagnostics"]["console"]["messages"], (
+    _require(not data["diagnostics"]["console"]["messages"], (
         label,
         data["diagnostics"]["console"]["messages"],
-    )
+    ))
     errs = data["diagnostics"]["errors"]
     if allow_upstream_format2 and errs:
-        assert all(s["passed"] for s in data["stages"]), (label, data.get("error"), str(log))
-        assert all(
+        _require(all(s["passed"] for s in data["stages"]), (label, data.get("error"), str(log)))
+        _require(all(
             e.get("field") == "Carrying Capacity Multiplier"
             and e.get("event") == "F"
             and "format2" in str(e.get("stack", ""))
             for e in errs
-        ), (label, errs)
+        ), (label, errs))
     else:
-        assert proc.returncode == 0, (label, data.get("error"), str(log))
-        assert data.get("passed") is True, (label, data.get("error"))
-        assert not errs, (label, errs)
+        _require(proc.returncode == 0, (label, data.get("error"), str(log)))
+        _require(data.get("passed") is True, (label, data.get("error")))
+        _require(not errs, (label, errs))
     return {
         "probe": str(evidence),
         "seconds": round(time.monotonic() - started, 3),
@@ -154,7 +159,7 @@ def main():
             ],
         }
         r1 = run_probe(binary, pdf, c1_scenario, folder, "case1-create")
-        assert script_hashes(c1_pdf) == orig_scripts
+        _require(script_hashes(c1_pdf) == orig_scripts, 'script_hashes(c1_pdf) == orig_scripts')
         r1_reopen = run_probe(
             binary,
             c1_pdf,
@@ -229,7 +234,7 @@ def main():
             ],
         }
         r2 = run_probe(binary, pdf, c2_scenario, folder, "case2-create")
-        assert script_hashes(c2_pdf) == orig_scripts
+        _require(script_hashes(c2_pdf) == orig_scripts, 'script_hashes(c2_pdf) == orig_scripts')
         report["cases"]["sources_patreon_iconstream_launchurl_pane"] = {
             "passed": True,
             "create": r2["probe"],
@@ -266,9 +271,9 @@ def main():
             ],
         }
         r3 = run_probe(binary, pdf, c3_scenario, folder, "case3-create")
-        assert script_hashes(c3_pdf) == orig_scripts
+        _require(script_hashes(c3_pdf) == orig_scripts, 'script_hashes(c3_pdf) == orig_scripts')
         c3_fields = canonical_fields(PdfReader(c3_pdf))
-        assert "🔥" in c3_fields["Notes.Left"]["/V"], c3_fields["Notes.Left"]["/V"]
+        _require("🔥" in c3_fields["Notes.Left"]["/V"], c3_fields["Notes.Left"]["/V"])
         r3_reopen = run_probe(
             binary,
             c3_pdf,
@@ -316,8 +321,8 @@ def main():
             "case3-reset",
             allow_upstream_format2=True,
         )
-        assert script_hashes(c3_unmobile_pdf) == orig_scripts
-        assert script_hashes(c3_reset_pdf) == orig_scripts
+        _require(script_hashes(c3_unmobile_pdf) == orig_scripts, 'script_hashes(c3_unmobile_pdf) == orig_scripts')
+        _require(script_hashes(c3_reset_pdf) == orig_scripts, 'script_hashes(c3_reset_pdf) == orig_scripts')
         report["cases"]["color_nonbmp_mobile_reset"] = {
             "passed": True,
             "create": r3["probe"],
@@ -382,9 +387,9 @@ def main():
         )
         xfdf_text = r4_direct["stages"][-2]["result"]
         c4_xfdf.write_text(xfdf_text)
-        assert list(c4_attach_dir.glob("*.pdf")), "FAQ.pdf export missing"
+        _require(list(c4_attach_dir.glob("*.pdf")), "FAQ.pdf export missing")
         prints = list(c4_print_dir.glob("*.pdf"))
-        assert prints and len(PdfReader(prints[0]).pages) == 1, "Print output invalid"
+        _require(prints and len(PdfReader(prints[0]).pages) == 1, "Print output invalid")
         r4_xfdf = run_probe(
             binary,
             pdf,
@@ -405,8 +410,8 @@ def main():
             folder,
             "case4-xfdf-import",
         )
-        assert script_hashes(c4_import_pdf) == orig_scripts
-        assert script_hashes(c4_xfdf_pdf) == orig_scripts
+        _require(script_hashes(c4_import_pdf) == orig_scripts, 'script_hashes(c4_import_pdf) == orig_scripts')
+        _require(script_hashes(c4_xfdf_pdf) == orig_scripts, 'script_hashes(c4_xfdf_pdf) == orig_scripts')
         report["cases"]["direct_import_xfdf_attachment_print"] = {
             "passed": True,
             "direct": r4_direct["probe"],
@@ -416,7 +421,7 @@ def main():
         }
         print("2014 Case 4 (DirectImport built-in icon === + XFDF export/import + FAQ.pdf + Print): PASS", flush=True)
 
-        assert hashlib.sha256(pdf.read_bytes()).hexdigest() == orig_sha
+        _require(hashlib.sha256(pdf.read_bytes()).hexdigest() == orig_sha, 'hashlib.sha256(pdf.read_bytes()).hexdigest() == orig_sha')
         report["passed"] = True
     except Exception as exc:
         report["error"] = str(exc)

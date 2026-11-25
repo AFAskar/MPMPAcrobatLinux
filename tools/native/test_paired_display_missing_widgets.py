@@ -167,6 +167,30 @@ class MissingWidgetNegativeControls(unittest.TestCase):
         self.assertTrue(comp["passed"])
         self.assertTrue(comp["complete_report_pair"])
 
+    def test_rejects_empty_phase_with_zero_compared_fields(self):
+        with tempfile.TemporaryDirectory(prefix="paired-empty-phase-") as td:
+            tmp = Path(td)
+            nat_pdf, ref_pdf = tmp / "nat.pdf", tmp / "ref.pdf"
+            nat_sha = write_visible_page_pdf(nat_pdf, 0)
+            ref_sha = write_visible_page_pdf(ref_pdf, 0)
+            empty_state = {"fields": {}, "resources": {}, "notesAndActions": {}}
+            nat_report = tmp / "nat.json"
+            ref_report = tmp / "ref.json"
+            nat_report.write_text(json.dumps({"passed": True, "phases": [{"label": "empty", "pdf": str(nat_pdf), "pdf_sha256": nat_sha, "state": empty_state}]}))
+            ref_report.write_text(json.dumps({"passed": True, "phases": [{"label": "empty", "pdf": str(ref_pdf), "pdf_sha256": ref_sha, "state": empty_state}]}))
+            for optimize in (False, True):
+                out_dir = tmp / ("out-opt" if optimize else "out")
+                cmd = [sys.executable] + (["-O"] if optimize else []) + [
+                    str(VERIFIER), "--native", str(nat_report), "--reference", str(ref_report), "--output", str(out_dir)
+                ]
+                env = dict(os.environ, PYTHONOPTIMIZE="1") if optimize else None
+                proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
+                comp = json.loads((out_dir / "comparison.json").read_text())
+                self.assertNotEqual(proc.returncode, 0, comp)
+                self.assertFalse(comp["passed"], comp)
+                self.assertFalse(comp["complete_report_pair"], comp)
+                self.assertIn("no captured fields", comp.get("error", ""))
+
 
 if __name__ == "__main__":
     unittest.main()
