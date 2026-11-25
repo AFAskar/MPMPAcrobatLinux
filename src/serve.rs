@@ -41,6 +41,7 @@ const PWA_ICON_SVG: &str = include_str!("serve/pwa/icon.svg");
 
 const EXTRACT_STATE_JS: &str = r#"(function(){
   function gv(n){var f=getField(n);return f?String(f.valueAsString||''):'';}
+  function gd(n){var f=getField(n);if(!f)return '';return f._formatted!==undefined&&f._formatted!==''?String(f._formatted):String(f.valueAsString||'');}
   function gb(n){var f=getField(n);if(!f)return false;var v=String(f.valueAsString||'');return v!==''&&v!=='Off'&&v!=='false';}
   var abilitiesSpec=[
     ['STR','Str','Str Mod','Str ST Mod','Str ST Prof'],
@@ -54,8 +55,8 @@ const EXTRACT_STATE_JS: &str = r#"(function(){
   for(var i=0;i<abilitiesSpec.length;i++){
     var a=abilitiesSpec[i];
     abilities.push({
-      label:a[0],scoreField:a[1],score:gv(a[1]),modifier:gv(a[2]),
-      saveMod:gv(a[3]),saveProf:gb(a[4])
+      label:a[0],scoreField:a[1],score:gv(a[1]),modifier:gd(a[2]),
+      saveMod:gd(a[3]),saveProf:gb(a[4])
     });
   }
   var skillsSpec=[
@@ -71,7 +72,7 @@ const EXTRACT_STATE_JS: &str = r#"(function(){
     if(getField(sk[1]+' Mod')||getField(sk[1])){
       skills.push({
         label:sk[0],
-        mod:gv(sk[1]+' Mod')||gv(sk[1]),
+        mod:gd(sk[1]+' Mod')||gd(sk[1]),
         proficient:gb(sk[1]+' Prof'),
         expertise:gb(sk[1]+' Exp')
       });
@@ -195,9 +196,9 @@ const EXTRACT_STATE_JS: &str = r#"(function(){
     },
     vitals:{
       ac:gv('AC'),
-      init:gv('Init'),
+      init:gd('Init'),
       speed:gv('Speed'),
-      proficiency:gv('Proficiency Bonus'),
+      proficiency:gd('Proficiency Bonus'),
       hpCurrent:gv('HP Current'),
       hpMax:gv('HP Max'),
       hpTemp:gv('HP Temp'),

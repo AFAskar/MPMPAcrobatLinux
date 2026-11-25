@@ -1169,6 +1169,7 @@
   async function submitInteraction(reply) {
     const inter = appState.activeInteraction;
     if (!inter) return;
+    const wasUnopened = !appState.sheet || !appState.sheet.open;
     try {
       const res = await api(`/api/session/interaction/${encodeURIComponent(inter.id)}`, {
         method: 'POST',
@@ -1178,7 +1179,13 @@
         openAcrobatInteraction(res.interaction);
       } else {
         closeAcrobatModal();
-        if (res.state) applySessionState(res.state);
+        if (res.state) {
+          applySessionState(res.state);
+          if (wasUnopened && res.state.open) {
+            showBanner(`Loaded ${res.state.path}`, 'ok', 2500);
+            switchTab('play');
+          }
+        }
       }
     } catch (err) {
       closeAcrobatModal();
@@ -1303,9 +1310,11 @@
       showBanner(`Loading ${path}…`, 'warn', 0);
       const res = await api('/api/session/open', { method: 'POST', json: { path } });
       appState.page = 0;
-      if (res.state) applySessionState(res.state);
-      showBanner(`Loaded ${path}`, 'ok', 2500);
-      switchTab('play');
+      await handleActionResponse(res);
+      if (res.status !== 'interaction_required') {
+        showBanner(`Loaded ${path}`, 'ok', 2500);
+        switchTab('play');
+      }
     } catch (err) {
       showBanner(err.message, 'err');
     }
