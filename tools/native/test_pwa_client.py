@@ -16,7 +16,7 @@ PWA_HARNESS = textwrap.dedent(
 
     const source = fs.readFileSync(process.argv[process.argv.length - 1], 'utf8').replace(
       '  // Boot\n  updateConnDot();\n  connectWs();\n  refreshAll();',
-      '  globalThis.harness = { appState, applySessionState, openFieldEditorByName, enqueueStep, currentSessionRef, editField, openSheet, doGitPull, refreshSession, connectWs };'
+      '  globalThis.harness = { appState, applySessionState, openFieldEditorByName, enqueueStep, currentSessionRef, editField, activateField, openSheet, doGitPull, refreshSession, connectWs, openAcrobatInteraction, closeAcrobatModal };'
     );
 
     const elements = new Map();
@@ -99,10 +99,13 @@ PWA_HARNESS = textwrap.dedent(
       enqueueStep,
       currentSessionRef,
       editField,
+      activateField,
       openSheet,
       doGitPull,
       refreshSession,
       connectWs,
+      openAcrobatInteraction,
+      closeAcrobatModal,
     } = context.harness;
 
     function jsonResp(payload, status = 200) {
@@ -315,6 +318,67 @@ PWA_HARNESS = textwrap.dedent(
         { force: false },
         { force: true, discard: discardTarget },
       ]);
+
+      // 8. Late HTTP 202 must NOT resurrect a dialog already cleared over WebSocket,
+      //    duplicate deliveries must preserve in-progress modal input, stale clears must
+      //    not close newer dialogs, and a new server generation can reuse int-N IDs.
+      let resolveDelayedActivate;
+      fetchHandler = (path) => {
+        if (path === '/api/session/activate') {
+          return new Promise((r) => { resolveDelayedActivate = r; });
+        }
+        throw new Error('Unexpected interaction test fetch ' + path);
+      };
+      const alert77 = {
+        id: 'int-77',
+        serverInstanceId: 'srv-3',
+        kind: 'alert',
+        request: { cTitle: 'Alert', cMsg: 'Done', nType: 0 },
+      };
+      const pendingActivate = activateField('TimerButton', 0);
+      wsNew.onmessage({ data: JSON.stringify({ type: 'interaction_requested', interaction: alert77 }) });
+      assert.equal(appState.activeInteraction.id, 'int-77');
+      assert.equal(element('acrobat-modal').classList.contains('hidden'), false);
+
+      // WebSocket clears int-77 before the original HTTP 202 response arrives.
+      wsNew.onmessage({ data: JSON.stringify({ type: 'interaction_cleared', id: 'int-77', serverInstanceId: 'srv-3' }) });
+      assert.equal(appState.activeInteraction, null);
+      assert.equal(element('acrobat-modal').classList.contains('hidden'), true);
+
+      // Delayed HTTP 202 arrives for int-77 -> MUST NOT resurrect the cleared alert!
+      resolveDelayedActivate(jsonResp({ status: 'interaction_required', interaction: alert77 }, 202));
+      await pendingActivate;
+      assert.equal(appState.activeInteraction, null, 'late HTTP 202 must not resurrect cleared alert');
+      assert.equal(element('acrobat-modal').classList.contains('hidden'), true);
+
+      // Duplicate delivery for an open dialog must preserve user's in-progress modalValues!
+      const dialog78 = {
+        id: 'int-78',
+        serverInstanceId: 'srv-3',
+        kind: 'dialog',
+        request: {
+          description: { name: 'Edit Hero', elements: [{ type: 'edit_text', item_id: 'hero' }, { type: 'ok_cancel' }] },
+          values: { hero: 'Initial' },
+        },
+      };
+      assert.equal(openAcrobatInteraction(dialog78), true);
+      appState.modalValues.hero = 'User Typed Draft';
+      assert.equal(openAcrobatInteraction(dialog78), true);
+      assert.equal(appState.modalValues.hero, 'User Typed Draft', 'duplicate interaction must not reset user input');
+
+      // Opening int-79 retires int-78; a late interaction_cleared for int-78 must NOT close int-79!
+      const dialog79 = { ...alert77, id: 'int-79' };
+      assert.equal(openAcrobatInteraction(dialog79), true);
+      wsNew.onmessage({ data: JSON.stringify({ type: 'interaction_cleared', id: 'int-78', serverInstanceId: 'srv-3' }) });
+      assert.equal(appState.activeInteraction.id, 'int-79', 'stale clear for int-78 must not close int-79');
+      closeAcrobatModal('int-79', 'srv-3');
+      assert.equal(appState.activeInteraction, null);
+
+      // New server generation (srv-4) can cleanly reuse id 'int-77' without false collision!
+      assert.equal(openAcrobatInteraction({ ...alert77, serverInstanceId: 'srv-4' }), true);
+      assert.equal(appState.activeInteraction.id, 'int-77');
+      assert.equal(appState.activeInteraction.serverInstanceId, 'srv-4');
+      closeAcrobatModal('int-77', 'srv-4');
 
       console.log('PWA_CLIENT_REGRESSIONS_OK');
     })().catch((err) => {

@@ -20,6 +20,7 @@
     appliedLibraryFetchSeq: 0,
     selectedField: null,
     activeInteraction: null,
+    retiredInteractionKeys: new Set(),
     inFlightInteractionId: null,
     suppressNextBlurSubmit: false,
     stepChain: Promise.resolve(),
@@ -194,9 +195,15 @@
         } else if (msg.type === 'resync_required') {
           refreshSession();
         } else if (msg.type === 'interaction_requested' && msg.interaction) {
-          openAcrobatInteraction(msg.interaction);
+          const inter = msg.serverInstanceId && !msg.interaction.serverInstanceId
+            ? Object.assign({ serverInstanceId: msg.serverInstanceId }, msg.interaction)
+            : msg.interaction;
+          openAcrobatInteraction(inter);
         } else if (msg.type === 'interaction_cleared') {
-          closeAcrobatModal();
+          if (msg.serverInstanceId && appState.retiredServerInstanceIds.has(msg.serverInstanceId)) {
+            return;
+          }
+          closeAcrobatModal(msg.id || null, msg.serverInstanceId || null);
         } else if (msg.type === 'git_status' && msg.git) {
           appState.git = msg.git;
           renderGit();
@@ -863,8 +870,7 @@
   async function handleActionResponse(res) {
     if (!res) return false;
     if (res.status === 'interaction_required' && res.interaction) {
-      openAcrobatInteraction(res.interaction);
-      return true;
+      return openAcrobatInteraction(res.interaction);
     }
     let applied = true;
     if (res.state) applied = applySessionState(res.state);
@@ -996,7 +1002,39 @@
     cur[leaf] = multiple && old > 0 ? -old : Math.max(1, Math.abs(old));
   }
 
+  function interactionKey(inter) {
+    if (!inter || !inter.id) return '';
+    const inst = inter.serverInstanceId || appState.lastServerInstanceId || '';
+    return `${inst}:${inter.id}`;
+  }
+
+  function retireInteraction(id, serverInstanceId = null) {
+    if (!id) return;
+    const inst = serverInstanceId || appState.lastServerInstanceId || '';
+    appState.retiredInteractionKeys.add(`${inst}:${id}`);
+  }
+
   function openAcrobatInteraction(interaction) {
+    if (!interaction || !interaction.id) return false;
+    if (
+      interaction.serverInstanceId &&
+      appState.retiredServerInstanceIds.has(interaction.serverInstanceId)
+    ) {
+      return false;
+    }
+    const key = interactionKey(interaction);
+    if (appState.retiredInteractionKeys.has(key)) {
+      return false;
+    }
+    // Preserve in-progress user input if a duplicate delivery arrives for the
+    // exact same active interaction ID (e.g. HTTP 202 arriving after WS).
+    if (appState.activeInteraction && interactionKey(appState.activeInteraction) === key) {
+      $('acrobat-modal').classList.remove('hidden');
+      return true;
+    }
+    if (appState.activeInteraction) {
+      retireInteraction(appState.activeInteraction.id, appState.activeInteraction.serverInstanceId);
+    }
     appState.activeInteraction = interaction;
     const body = $('am-body');
     const footer = $('am-footer');
@@ -1038,7 +1076,7 @@
         footer.appendChild(b);
       });
       $('acrobat-modal').classList.remove('hidden');
-      return;
+      return true;
     }
 
     // Standard Acrobat execDialog / popUpMenuEx
@@ -1350,9 +1388,21 @@
     footer.appendChild(cancelBtn);
 
     $('acrobat-modal').classList.remove('hidden');
+    return true;
   }
 
-  function closeAcrobatModal() {
+  function closeAcrobatModal(clearedId = null, clearedServerInstanceId = null) {
+    if (clearedId) {
+      retireInteraction(clearedId, clearedServerInstanceId);
+      if (appState.activeInteraction && appState.activeInteraction.id !== clearedId) {
+        return;
+      }
+    } else if (appState.activeInteraction) {
+      retireInteraction(
+        appState.activeInteraction.id,
+        appState.activeInteraction.serverInstanceId
+      );
+    }
     $('acrobat-modal').classList.add('hidden');
     appState.activeInteraction = null;
     appState.inFlightInteractionId = null;
@@ -1389,11 +1439,10 @@
         appState.inFlightInteractionId = null;
       }
       if (res.status === 'interaction_required' && res.interaction) {
+        retireInteraction(interId, inter.serverInstanceId);
         openAcrobatInteraction(res.interaction);
       } else {
-        if (appState.activeInteraction && appState.activeInteraction.id === interId) {
-          closeAcrobatModal();
-        }
+        closeAcrobatModal(interId, inter.serverInstanceId);
         if (res.state) {
           applySessionState(res.state);
           if (wasUnopened && res.state.open) {
@@ -1406,8 +1455,11 @@
       if (appState.inFlightInteractionId === interId) {
         appState.inFlightInteractionId = null;
       }
-      if (appState.activeInteraction && appState.activeInteraction.id === interId) {
-        closeAcrobatModal();
+      if (err.status === 409) {
+        closeAcrobatModal(interId, inter.serverInstanceId);
+        showBanner(err.message, 'err');
+      } else if (appState.activeInteraction && appState.activeInteraction.id === interId) {
+        closeAcrobatModal(interId, inter.serverInstanceId);
         showBanner(err.message, 'err');
       }
     }
