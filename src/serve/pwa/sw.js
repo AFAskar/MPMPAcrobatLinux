@@ -1,5 +1,6 @@
 const CACHE_SHELL = 'mpmb-pwa-shell-v2';
 const CACHE_API_PREFIX = 'mpmb-pwa-api-v2-';
+const MAX_CACHED_PAGE_ENTRIES = 30;
 const SHELL_ASSETS = ['/', '/style.css', '/app.js', '/manifest.webmanifest', '/icon.svg'];
 
 self.addEventListener('install', (event) => {
@@ -38,6 +39,19 @@ async function apiCacheNameFor(req) {
   return `${CACHE_API_PREFIX}${hex}`;
 }
 
+async function putAndPruneApiCache(cacheName, req, res) {
+  const cache = await caches.open(cacheName);
+  await cache.put(req, res);
+  const reqUrl = new URL(req.url);
+  if (!reqUrl.pathname.startsWith('/api/session/page/')) return;
+  const keys = await cache.keys();
+  const pageKeys = keys.filter((k) => new URL(k.url).pathname.startsWith('/api/session/page/'));
+  const excess = pageKeys.length - MAX_CACHED_PAGE_ENTRIES;
+  if (excess > 0) {
+    await Promise.all(pageKeys.slice(0, excess).map((k) => cache.delete(k)));
+  }
+}
+
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
@@ -50,7 +64,9 @@ self.addEventListener('fetch', (event) => {
         .then((res) => {
           if (res.ok) {
             const copy = res.clone();
-            caches.open(CACHE_SHELL).then((c) => c.put(req, copy));
+            event.waitUntil(
+              caches.open(CACHE_SHELL).then((c) => c.put(req, copy)).catch(() => {})
+            );
           }
           return res;
         })
@@ -72,20 +88,20 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       (async () => {
         const cacheName = await apiCacheNameFor(req);
+        let res;
         try {
-          const res = await fetch(req);
-          if (res.ok) {
-            const copy = res.clone();
-            const cache = await caches.open(cacheName);
-            await cache.put(req, copy);
-          }
-          return res;
+          res = await fetch(req);
         } catch (_) {
           const cache = await caches.open(cacheName);
           const cached = await cache.match(req);
           if (cached) return cached;
           throw new Error('Offline and no cached response available');
         }
+        if (res.ok) {
+          const copy = res.clone();
+          event.waitUntil(putAndPruneApiCache(cacheName, req, copy).catch(() => {}));
+        }
+        return res;
       })()
     );
   }

@@ -11,6 +11,7 @@
     pageWidgets: [],
     pageSize: [612, 792],
     pageLoadSeq: 0,
+    lastStateSeq: 0,
     selectedField: null,
     activeInteraction: null,
     inFlightInteractionId: null,
@@ -239,7 +240,12 @@
       if (state && state.open) {
         applySessionState(state);
       } else {
+        if (state && typeof state.stateSeq === 'number' && state.stateSeq < appState.lastStateSeq) {
+          return;
+        }
+        appState.lastStateSeq = state && typeof state.stateSeq === 'number' ? state.stateSeq : 0;
         appState.sheet = null;
+        renderTopbar();
         renderPlay();
       }
     } catch (err) {
@@ -248,8 +254,44 @@
   }
 
   function applySessionState(state) {
+    if (!state) return;
+    if (state.busy && !state.path) {
+      if (state.git) {
+        appState.git = state.git;
+        renderGit();
+      }
+      if (state.activeInteraction) openAcrobatInteraction(state.activeInteraction);
+      return;
+    }
+    if (!state.open) {
+      if (typeof state.stateSeq === 'number' && state.stateSeq < appState.lastStateSeq) {
+        return;
+      }
+      appState.lastStateSeq = typeof state.stateSeq === 'number' ? state.stateSeq : 0;
+      appState.sheet = null;
+      if (state.git) appState.git = state.git;
+      renderTopbar();
+      renderPlay();
+      renderGit();
+      return;
+    }
     const prevRev = appState.sheet ? appState.sheet.revision : -1;
     const prevPath = appState.sheet ? appState.sheet.path : null;
+    if (prevPath !== state.path) {
+      appState.lastStateSeq = 0;
+    } else if (typeof state.stateSeq === 'number' && state.stateSeq < appState.lastStateSeq) {
+      return;
+    } else if (
+      typeof state.stateSeq !== 'number' &&
+      typeof state.revision === 'number' &&
+      typeof prevRev === 'number' &&
+      state.revision < prevRev
+    ) {
+      return;
+    }
+    if (typeof state.stateSeq === 'number') {
+      appState.lastStateSeq = state.stateSeq;
+    }
     appState.sheet = state;
     if (state.git) appState.git = state.git;
     if (state.pageCount && appState.page >= state.pageCount) {
@@ -539,6 +581,8 @@
   async function loadPdfPage() {
     if (!appState.sheet || !appState.sheet.open) return;
     const seq = ++appState.pageLoadSeq;
+    appState.pageWidgets = [];
+    renderPdfOverlay();
     const page = appState.page;
     const rev = appState.sheet.revision;
     const sheetPath = appState.sheet.path || '';
