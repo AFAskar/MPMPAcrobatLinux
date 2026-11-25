@@ -49,7 +49,7 @@ def main():
  try:
   with c.desktop_lock():
    assert not [w for w in c.command('inspect') if w.get('class')=='AcrobatSDIWindow' and '.pdf' in w.get('name','').lower()],'Pre-existing Reader document'
-   subprocess.run(c.SCP+[str(source),'mpmb-test@127.0.0.1:MPMB-Testing/runs/'+remote.replace('\\','/').split('/')[-1]],check=True,capture_output=True);opened=True;c.ensure_document(remote);install();capture('loaded-dueling-17')
+   subprocess.run(c.SCP+[str(source),c.SCP_TARGET + ':MPMB-Testing/runs/'+remote.replace('\\','/').split('/')[-1]],check=True,capture_output=True);opened=True;c.ensure_document(remote);install();capture('loaded-dueling-17')
    choose(['Champion','Additional Fighting Style','Superior Technique']);capture('superior-17');choose(['Bonus Battle Master Maneuver (selected 0 of 1)','Disarming Attack']);capture('disarming-17')
    report['inputs'].append(typing.commit(c,remote,'Limited Feature Used 4','1'));capture('spent-17');close_snapshot('spent17');capture('cold-spent-17');report['short_reset']=c.script('call',path=remote,name='resetLimFeaUsed',args=['short rest']);capture('short-reset-17')
    choose(['Bonus Battle Master Maneuver (selected 1 of 1)','Disarming Attack']);capture('maneuver-removed-17');choose(['Bonus Battle Master Maneuver (selected 0 of 1)','Riposte']);capture('riposte-17');report['drop_level']=c.script('call',path=remote,name='ApplyClasses',args=['Fighter (Champion) 9',False]);capture('removed-9');close_snapshot('removed9');capture('cold-removed-9')

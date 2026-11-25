@@ -80,7 +80,7 @@ def parse_spend_eval(code):
 def scp_to_windows(local_path, remote_win_path):
     filename = remote_win_path.replace("\\", "/").split("/")[-1]
     remote_dir = "MPMB-Testing/runs/" + filename
-    target = os.environ.get("MPMB_WIN_SCP_TARGET", "mpmb-test@127.0.0.1")
+    target = c.SCP_TARGET
     subprocess.run(
         c.SCP + [str(local_path), f"{target}:{remote_dir}"],
         check=True,

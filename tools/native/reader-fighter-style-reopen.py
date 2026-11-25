@@ -124,7 +124,7 @@ def main():
                 remote = base + '.pdf'
                 item = {'style': mode, 'input': str(source), 'input_sha256': hashlib.sha256(source.read_bytes()).hexdigest(), 'states': []}
                 report['cases'].append(item)
-                subprocess.run(c.SCP + [str(source), 'mpmb-test@127.0.0.1:MPMB-Testing/runs/' + remote.replace('\\', '/').split('/')[-1]], check=True, capture_output=True)
+                subprocess.run(c.SCP + [str(source), c.SCP_TARGET + ':MPMB-Testing/runs/' + remote.replace('\\', '/').split('/')[-1]], check=True, capture_output=True)
                 opened = True
                 c.ensure_document(remote)
                 script(profile.SETUP)

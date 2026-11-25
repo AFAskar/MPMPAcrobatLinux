@@ -15,15 +15,20 @@ import uuid
 
 REPO = Path(__file__).resolve().parents[2]
 STATE = REPO / 'output' / 'testing'
-WIN = r'C:\Users\mpmb-test\MPMB-Testing'
-KEY = Path.home() / '.ssh' / 'mpmb_win_vm'
-MUX = Path.home() / '.cache' / 'mpmb-testing'
+WIN_USER = os.environ.get('MPMB_WIN_USER', 'mpmb-test')
+WIN_HOST = os.environ.get('MPMB_WIN_HOST', '127.0.0.1')
+WIN_PORT = os.environ.get('MPMB_WIN_PORT', '2222')
+SCP_TARGET = os.environ.get('MPMB_WIN_SCP_TARGET', f'{WIN_USER}@{WIN_HOST}')
+VM_NAME = os.environ.get('MPMB_VM_NAME', 'mpmb-windows11')
+WIN = os.environ.get('MPMB_WIN_ROOT', rf'C:\Users\{WIN_USER}\MPMB-Testing')
+KEY = Path(os.environ.get('MPMB_WIN_SSH_KEY', str(Path.home() / '.ssh' / 'mpmb_win_vm'))).expanduser()
+MUX = Path(os.environ.get('MPMB_MUX_DIR', str(Path.home() / '.cache' / 'mpmb-testing'))).expanduser()
 MUX.mkdir(parents=True, exist_ok=True, mode=0o700)
 SSH = ['ssh', '-T', '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'ConnectTimeout=8',
        '-o', 'ControlMaster=auto', '-o', 'ControlPersist=300', '-o', f'ControlPath={MUX}/ssh',
-       '-i', str(KEY), '-p', '2222', 'mpmb-test@127.0.0.1']
+       '-i', str(KEY), '-p', WIN_PORT, SCP_TARGET]
 SCP = ['scp', '-q', '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes',
-       '-o', f'ControlPath={MUX}/ssh', '-i', str(KEY), '-P', '2222']
+       '-o', f'ControlPath={MUX}/ssh', '-i', str(KEY), '-P', WIN_PORT]
 
 
 def literal(s):
@@ -95,7 +100,7 @@ def fetch(path, destination=None):
         raise ValueError('Remote path outside testing workspace')
     destination = Path(destination) if destination else STATE / Path(rel).name
     destination.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(SCP + ['mpmb-test@127.0.0.1:MPMB-Testing/' + rel, str(destination)], check=True, capture_output=True)
+    subprocess.run(SCP + [SCP_TARGET + ':MPMB-Testing/' + rel, str(destination)], check=True, capture_output=True)
     return destination
 
 
@@ -108,7 +113,7 @@ def script_submit(op, **params):
     if op!='ping':req['session']=json.loads(session_file.read_text())['session']
     local=STATE/'commands'/(ident+'.json');local.parent.mkdir(parents=True,exist_ok=True)
     local.write_text(json.dumps(req,ensure_ascii=True,indent=2))
-    subprocess.run(SCP+[str(local),'mpmb-test@127.0.0.1:MPMB-Testing/runs/commands/'+ident+'.json'],check=True,capture_output=True)
+    subprocess.run(SCP+[str(local),SCP_TARGET+':MPMB-Testing/runs/commands/'+ident+'.json'],check=True,capture_output=True)
     command('dispatch',request_id=ident,path=params.get('path'))
     return ident
 

@@ -66,7 +66,7 @@ def main():
     try:
         with c.desktop_lock():
             assert not [e for e in c.command('inspect') if e.get('class') == 'AcrobatSDIWindow' and '.pdf' in e.get('name', '').lower()]
-            subprocess.run(c.SCP + [str(source), 'mpmb-test@127.0.0.1:MPMB-Testing/runs/' + remote.replace('\\', '/').split('/')[-1]], check=True, capture_output=True)
+            subprocess.run(c.SCP + [str(source), c.SCP_TARGET + ':MPMB-Testing/runs/' + remote.replace('\\', '/').split('/')[-1]], check=True, capture_output=True)
             for label, old_base, new_base, old_total, wanted in [
                 ('native-input-edit', '13', '15', '14', ('16', '7', '11')),
                 ('cold-reader-edit', '15', '17', '16', ('18', '8', '12')),

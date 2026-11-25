@@ -19,7 +19,7 @@ def main():
         checks['fixture:' + entry['file']] = path.exists() and hashlib.sha256(path.read_bytes()).hexdigest() == entry['sha256']
     for binary in ['ssh', 'scp', 'virsh', 'cargo', 'rustc', 'clang', 'cmake', 'pkg-config', 'pdftoppm']:
         checks['binary:' + binary] = shutil.which(binary) is not None
-    state = subprocess.check_output(['virsh', '-c', 'qemu:///session', 'domstate', 'mpmb-windows11'], text=True).strip()
+    state = subprocess.check_output(['virsh', '-c', 'qemu:///session', 'domstate', c.VM_NAME], text=True).strip()
     checks['vm-running'] = state == 'running'
     remote = json.loads(c.powershell(r"""
         $logon=Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'

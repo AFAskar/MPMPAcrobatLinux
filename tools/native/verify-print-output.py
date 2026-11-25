@@ -84,7 +84,7 @@ def main():
             assert not [e for e in c.command('inspect') if e.get('class')=='AcrobatSDIWindow' and '.pdf' in e.get('name','').lower()], 'Reference suite requires no pre-existing document'
             for case in native['cases']:
                 fixture = case['fixture']; source = Path(case['interactive_output']); name = 'print-output-' + str(time.time_ns()) + '-' + fixture + '.pdf'; remote = c.remote_path('runs/' + name)
-                subprocess.run(c.SCP + [str(source), 'mpmb-test@127.0.0.1:MPMB-Testing/runs/' + name], check=True, capture_output=True)
+                subprocess.run(c.SCP + [str(source), c.SCP_TARGET + ':MPMB-Testing/runs/' + name], check=True, capture_output=True)
                 c.ensure_document(remote)
                 params = c.script('print_params', path=remote)
                 assert params.get('printerName', '') in ['', 'Microsoft Print to PDF'], params

@@ -96,7 +96,7 @@ def main():
     try:
         with c.desktop_lock():
             assert not [e for e in c.command('inspect') if e.get('class')=='AcrobatSDIWindow' and '.pdf' in e.get('name','').lower()], 'Pre-existing Reader document'
-            for local,path in [(source,remote),(args.source,from_path)]:subprocess.run(c.SCP+[str(local),'mpmb-test@127.0.0.1:MPMB-Testing/runs/'+path.replace('\\','/').split('/')[-1]],check=True,capture_output=True)
+            for local,path in [(source,remote),(args.source,from_path)]:subprocess.run(c.SCP+[str(local),c.SCP_TARGET + ':MPMB-Testing/runs/'+path.replace('\\','/').split('/')[-1]],check=True,capture_output=True)
             assert c.powershell('(Get-FileHash -Algorithm SHA256 '+c.literal(from_path)+').Hash').strip().lower()==report['source_sha256']
             opened=True;c.ensure_document(remote);c.script('set',path=remote,values={'User Script':observer});pending=c.script_submit('call',path=remote,name='RunUserScript',args=[False]);report['request']=pending
             root,elements=wait_dialog('IMPORT FROM PDF DIALOG',time.monotonic()+90);report['import_controls']=elements

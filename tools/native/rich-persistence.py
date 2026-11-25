@@ -92,7 +92,7 @@ def main():
                         original_remote = {'2014':'blank-2014.pdf','2024':'blank-2024.pdf','ashnar':'ashnar.pdf'}[label]
                         c.powershell('Copy-Item '+c.literal(c.remote_path('fixtures/'+original_remote))+' '+c.literal(c.remote_path(remote))+' -Force;(Get-Item '+c.literal(c.remote_path(remote))+').IsReadOnly=$false')
                     else:
-                        subprocess.run(c.SCP + [str(restyled), 'mpmb-test@127.0.0.1:MPMB-Testing/' + remote], capture_output=True, check=True)
+                        subprocess.run(c.SCP + [str(restyled), c.SCP_TARGET + ':MPMB-Testing/' + remote], capture_output=True, check=True)
                     path = c.remote_path(remote)
                     observer = OBSERVER
                     if args.reader_authored:

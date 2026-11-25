@@ -67,7 +67,7 @@ def main():
         (folder / 'observer.js').write_text(observer); report['observer_sha256'] = hashlib.sha256(observer.encode()).hexdigest()
         with c.desktop_lock():
             assert not [e for e in c.command('inspect') if e.get('class') == 'AcrobatSDIWindow' and '.pdf' in e.get('name', '').lower()], 'Pre-existing Reader document'
-            for local, path in [(source, remote), (folder / 'input.xfdf', remote_xml)]: subprocess.run(c.SCP + [str(local), 'mpmb-test@127.0.0.1:MPMB-Testing/runs/' + path.replace('\\', '/').split('/')[-1]], check=True, capture_output=True)
+            for local, path in [(source, remote), (folder / 'input.xfdf', remote_xml)]: subprocess.run(c.SCP + [str(local), c.SCP_TARGET + ':MPMB-Testing/runs/' + path.replace('\\', '/').split('/')[-1]], check=True, capture_output=True)
             assert c.powershell('(Get-FileHash -Algorithm SHA256 ' + c.literal(remote_xml) + ').Hash').strip().lower() == report['input_sha256']
             opened = True; c.ensure_document(remote); c.script('set', path=remote, values={'User Script': observer}); pending = c.script_submit('call', path=remote, name='RunUserScript', args=[False]); report['request'] = pending
             if args.original_wrapper:

@@ -87,7 +87,7 @@ def main():
         with w.c.desktop_lock():
             assert not [e for e in w.c.command('inspect') if e.get('class')=='AcrobatSDIWindow' and '.pdf' in e.get('name','').lower()], 'Pre-existing Reader document'
             relative='runs/rich-font-roundtrip-'+str(time.time_ns())+'.pdf'
-            subprocess.run(w.c.SCP+[str(source),'mpmb-test@127.0.0.1:MPMB-Testing/'+relative],capture_output=True,check=True)
+            subprocess.run(w.c.SCP+[str(source),w.c.SCP_TARGET + ':MPMB-Testing/'+relative],capture_output=True,check=True)
             remote=w.c.remote_path(relative);report['reader_path']=remote
             saved=remote[:-4]+'-saved.pdf'
             report['reader_save']=w.c.script('save',path=remote,output=saved)

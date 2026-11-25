@@ -21,7 +21,7 @@ def main():
  try:
   with c.desktop_lock():
    assert not [e for e in c.command('inspect') if e.get('class')=='AcrobatSDIWindow' and '.pdf' in e.get('name','').lower()],'Pre-existing Reader document'
-   subprocess.run(c.SCP+[str(source),'mpmb-test@127.0.0.1:MPMB-Testing/runs/'+remote.replace('\\','/').split('/')[-1]],check=True,capture_output=True);opened=True;c.ensure_document(remote);c.script('set',path=remote,values={'User Script':script});pending=c.script_submit('call',path=remote,name='RunUserScript',args=[False]);report['request']=pending;deadline=time.monotonic()+150
+   subprocess.run(c.SCP+[str(source),c.SCP_TARGET + ':MPMB-Testing/runs/'+remote.replace('\\','/').split('/')[-1]],check=True,capture_output=True);opened=True;c.ensure_document(remote);c.script('set',path=remote,values={'User Script':script});pending=c.script_submit('call',path=remote,name='RunUserScript',args=[False]);report['request']=pending;deadline=time.monotonic()+150
    while time.monotonic()<deadline:
     elements=c.command('inspect')
     if any(e.get('name','').startswith('MPMB_RESULT') for e in elements):break

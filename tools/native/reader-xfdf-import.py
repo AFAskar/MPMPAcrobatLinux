@@ -67,7 +67,7 @@ def main():
                 target = c.remote_path('runs/native-' + label + '-' + str(time.time_ns()) + '.xfdf')
                 report['inputs'].append({'local': str(file.resolve()), 'remote': target, 'sha256': hashlib.sha256(file.read_bytes()).hexdigest()}); uploads.append((file, target))
             for local, target in uploads:
-                subprocess.run(c.SCP + [str(local), 'mpmb-test@127.0.0.1:MPMB-Testing/runs/' + target.replace('\\', '/').split('/')[-1]], check=True, capture_output=True)
+                subprocess.run(c.SCP + [str(local), c.SCP_TARGET + ':MPMB-Testing/runs/' + target.replace('\\', '/').split('/')[-1]], check=True, capture_output=True)
                 assert c.powershell('(Get-FileHash -Algorithm SHA256 ' + c.literal(target) + ').Hash').strip().lower() == hashlib.sha256(local.read_bytes()).hexdigest()
             opened = True; c.ensure_document(remote)
             c.script('set', path=remote, values={'User Script': observer}); pending = c.script_submit('call', path=remote, name='RunUserScript', args=[False]); report['request'] = pending

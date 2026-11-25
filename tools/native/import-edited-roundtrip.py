@@ -30,7 +30,7 @@ def main():
             with c.desktop_lock():
                 assert not [e for e in c.command('inspect') if e.get('class')=='AcrobatSDIWindow' and '.pdf' in e.get('name','').lower()], 'Pre-existing Reader document'
                 remote=c.remote_path('runs/import-roundtrip-'+str(time.time_ns())+'.pdf');case['remote']=remote
-                subprocess.run(c.SCP+[str(input_pdf),'mpmb-test@127.0.0.1:MPMB-Testing/runs/'+remote.replace('\\','/').split('/')[-1]],check=True,capture_output=True)
+                subprocess.run(c.SCP+[str(input_pdf),c.SCP_TARGET + ':MPMB-Testing/runs/'+remote.replace('\\','/').split('/')[-1]],check=True,capture_output=True)
                 opened=True;c.ensure_document(remote);actual=c.script('read',path=remote,fields=fields)['fields'];case['reopened_fields']=actual;assert actual==expected[0]['fields']
                 case['edits']=[]
                 for weapon,wanted in zip(['Quarterstaff','Eldritch Blast'],expected[1:]):

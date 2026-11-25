@@ -97,7 +97,7 @@ def main():
         with c.desktop_lock():
             assert not [e for e in c.command('inspect') if e.get('class')=='AcrobatSDIWindow' and '.pdf' in e.get('name','').lower()], 'Pre-existing Reader document'
             remote=c.remote_path('runs/warlock-selected-roundtrip-'+str(time.time_ns())+'.pdf');report['reader_path']=remote
-            subprocess.run(c.SCP+[str(first),'mpmb-test@127.0.0.1:MPMB-Testing/runs/'+remote.replace('\\','/').split('/')[-1]],check=True,capture_output=True)
+            subprocess.run(c.SCP+[str(first),c.SCP_TARGET + ':MPMB-Testing/runs/'+remote.replace('\\','/').split('/')[-1]],check=True,capture_output=True)
             opened=True;c.ensure_document(remote)
             assert c.script('read',path=remote,fields=list(fields))['fields']==fields
             for weapon in ['Quarterstaff','Eldritch Blast']:

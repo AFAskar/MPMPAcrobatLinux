@@ -90,7 +90,7 @@ def main():
     try:
         with c.desktop_lock():
             assert not [e for e in c.command('inspect') if e.get('class')=='AcrobatSDIWindow' and '.pdf' in e.get('name','').lower()], 'Pre-existing Reader document'
-            subprocess.run(c.SCP+[str(source),'mpmb-test@127.0.0.1:MPMB-Testing/runs/'+remote.replace('\\','/').split('/')[-1]],check=True,capture_output=True);opened=True;c.ensure_document(remote)
+            subprocess.run(c.SCP+[str(source),c.SCP_TARGET + ':MPMB-Testing/runs/'+remote.replace('\\','/').split('/')[-1]],check=True,capture_output=True);opened=True;c.ensure_document(remote)
             for phase,expected in [('printed',MESSAGE),('cleared','')]:
                 case_folder=folder/phase;case_folder.mkdir()
                 body="r.clear_return=typeof console.clear();"+("r.println_return_value=console.println("+json.dumps(MESSAGE)+");r.println_return=typeof r.println_return_value;" if phase=='printed' else '')+"r.show_return=typeof console.show();"

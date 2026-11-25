@@ -193,7 +193,7 @@ def main():
             assert not [r for r in c.command('inspect') if r['class'] == 'AcrobatSDIWindow'
                         and '.pdf' in r['name'].lower()], 'Pre-existing Reader document'
             for local, destination in [(source, remote), (image, image_path)]:
-                subprocess.run(c.SCP+[str(local), 'mpmb-test@127.0.0.1:MPMB-Testing/runs/'+
+                subprocess.run(c.SCP+[str(local), c.SCP_TARGET + ':MPMB-Testing/runs/'+
                                       destination.replace('\\', '/').split('/')[-1]],
                                check=True, capture_output=True)
             uploaded = c.powershell('(Get-FileHash -Algorithm SHA256 '+c.literal(image_path)+').Hash').lower()

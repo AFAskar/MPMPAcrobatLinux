@@ -14,7 +14,7 @@ def test(rule, run_id):
     path=c.remote_path('runs/file-import-'+rule+'-'+run_id+'.pdf')
     script_path=c.remote_path('runs/file-import-'+rule+'-'+run_id+'.js')
     c.powershell('Copy-Item '+c.literal(c.remote_path('fixtures/blank-'+rule+'.pdf'))+' '+c.literal(path)+';(Get-Item '+c.literal(path)+').IsReadOnly=$false')
-    subprocess.run(c.SCP+[str(c.REPO/'Testing/addons/readiness-sentinel.js'),'mpmb-test@127.0.0.1:MPMB-Testing/runs/file-import-'+rule+'-'+run_id+'.js'],check=True,capture_output=True)
+    subprocess.run(c.SCP+[str(c.REPO/'Testing/addons/readiness-sentinel.js'),c.SCP_TARGET+':MPMB-Testing/runs/file-import-'+rule+'-'+run_id+'.js'],check=True,capture_output=True)
     c.ensure_document(path)
     ident=c.script_submit('call',path=path,name='ImportUserScriptFile',args=[],file_picker=True,import_file=script_path)
     c.command('select_file',request_id=ident,path=script_path)

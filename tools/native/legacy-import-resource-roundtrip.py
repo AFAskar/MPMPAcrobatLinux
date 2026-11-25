@@ -78,7 +78,7 @@ def main():
             publish()
             with c.desktop_lock():
                 assert not [e for e in c.command('inspect') if e.get('class')=='AcrobatSDIWindow' and '.pdf' in e.get('name','').lower()], 'Pre-existing Reader document'
-                remote=c.remote_path('runs/legacy-resource-'+str(time.time_ns())+'.pdf');subprocess.run(c.SCP+[str(edited),'mpmb-test@127.0.0.1:MPMB-Testing/runs/'+remote.replace('\\','/').split('/')[-1]],check=True,capture_output=True)
+                remote=c.remote_path('runs/legacy-resource-'+str(time.time_ns())+'.pdf');subprocess.run(c.SCP+[str(edited),c.SCP_TARGET + ':MPMB-Testing/runs/'+remote.replace('\\','/').split('/')[-1]],check=True,capture_output=True)
                 opened=True;c.ensure_document(remote);case['reader_reopened']=c.script('read',path=remote,fields=list(expected))['fields'];assert case['reader_reopened']==expected
                 case['reader_phases']={}
                 for value,phase,rest in [('2','used-two','short rest'),('3','used-three','long rest'),('4','saved-four',None)]:

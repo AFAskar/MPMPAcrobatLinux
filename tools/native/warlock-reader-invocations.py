@@ -85,7 +85,7 @@ def main():
     try:
         with c.desktop_lock():
             assert not [e for e in c.command('inspect') if e.get('class')=='AcrobatSDIWindow' and '.pdf' in e.get('name','').lower()], 'Pre-existing Reader document'
-            subprocess.run(c.SCP+[reader['selected_pdf'],'mpmb-test@127.0.0.1:MPMB-Testing/runs/'+remote.replace('\\','/').split('/')[-1]],check=True,capture_output=True)
+            subprocess.run(c.SCP+[reader['selected_pdf'],c.SCP_TARGET + ':MPMB-Testing/runs/'+remote.replace('\\','/').split('/')[-1]],check=True,capture_output=True)
             opened=True;c.ensure_document(remote);capture('selected-spells')
             for phase,count in [('invocation',0),('removed',1),('readded',0)]:
                 phase_folder=folder/phase;phase_folder.mkdir()

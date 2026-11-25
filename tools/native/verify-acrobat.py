@@ -15,7 +15,7 @@ def main():
             local=Path(arg).resolve();remote='runs/native-'+stamp+'-'+local.name
             case={'input':str(local),'remote':remote,'passed':False};cases.append(case)
             try:
-                subprocess.run(c.SCP+[str(local),'mpmb-test@127.0.0.1:MPMB-Testing/'+remote],check=True,capture_output=True)
+                subprocess.run(c.SCP+[str(local),c.SCP_TARGET + ':MPMB-Testing/'+remote],check=True,capture_output=True)
                 state=c.script('read',path=c.remote_path(remote),fields=list(expected))
                 case['reader']=state
                 assert all(str(state['fields'].get(k))==v for k,v in expected.items()),state

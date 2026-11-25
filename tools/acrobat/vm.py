@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import xml.etree.ElementTree as ET
 import control as c
-NAME='mpmb-windows11'
+NAME=c.VM_NAME
 STORE=Path.home()/'VirtualMachines'/NAME/'checkpoints'
 def virsh(*args):return subprocess.check_output(['virsh','-c','qemu:///session',*args],text=True).strip()
 def cold():

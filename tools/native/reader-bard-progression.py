@@ -33,7 +33,7 @@ def main():
   result=c.script_result(pending,timeout=120);pending=None;c.ensure_document(remote);return result
  try:
   with c.desktop_lock():
-   assert not [e for e in c.command('inspect') if e.get('class')=='AcrobatSDIWindow' and '.pdf' in e.get('name','').lower()],'Pre-existing Reader document';subprocess.run(c.SCP+[str(source),'mpmb-test@127.0.0.1:MPMB-Testing/runs/'+remote.replace('\\','/').split('/')[-1]],check=True,capture_output=True);opened=True;c.ensure_document(remote)
+   assert not [e for e in c.command('inspect') if e.get('class')=='AcrobatSDIWindow' and '.pdf' in e.get('name','').lower()],'Pre-existing Reader document';subprocess.run(c.SCP+[str(source),c.SCP_TARGET + ':MPMB-Testing/runs/'+remote.replace('\\','/').split('/')[-1]],check=True,capture_output=True);opened=True;c.ensure_document(remote)
    c.script('set',path=remote,values={'Str':'10','Dex':'14','Con':'12','Int':'12','Wis':'13'});initial=capture('level1')
    report['level5_completion']=apply('Bard (College of Lore) 5');high=capture('lore5');matches=[int(n.rsplit(' ',1)[1]) for n,v in high.items() if re.fullmatch(r'Limited Feature \d+',n) and 'bardic inspiration' in v.lower()];assert len(matches)==1;row=matches[0];report['resource_row']=row;maximum='Limited Feature Max Usages '+str(row);used='Limited Feature Used '+str(row);recovery='Limited Feature Recovery '+str(row)
    assert high['Character Level']=='5' and high['Proficiency Bonus']=='3' and high[maximum]=='5' and 'd8' in high['Limited Feature '+str(row)];assert [high['SpellSlots.CheckboxesSet.lvl'+str(i)] for i in [1,2,3]]==['4','3','2'];assert high['Jack of All Trades']=='True'

@@ -1,6 +1,15 @@
 /* Local, scoped test adapter. Installed as a Reader application folder-level script. */
 var MPMBTesting = {
-    root: "/C/Users/mpmb-test/MPMB-Testing/",
+    root: (function() {
+        try {
+            if (typeof app !== "undefined" && typeof app.getPath === "function") {
+                var docs = String(app.getPath("user", "documents") || "").replace(/\\/g, "/").replace(/^([A-Za-z]):/, "/$1");
+                var match = docs.match(/^(\/[A-Za-z]\/Users\/[^\/]+)\//i);
+                if (match) return match[1] + "/MPMB-Testing/";
+            }
+        } catch (_) {}
+        return "/C/Users/mpmb-test/MPMB-Testing/";
+    })(),
     session: String(new Date().getTime()) + "-" + String(Math.random()).slice(2),
     lastId: null,
     busy: false,

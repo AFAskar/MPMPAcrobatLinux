@@ -20,7 +20,7 @@ report={'passed':False,'scope':'Actual Reader app.alert keyboard/window-close co
 try:
  with c.desktop_lock():
   assert not [w for w in c.command('inspect') if w.get('class')=='AcrobatSDIWindow' and '.pdf' in w.get('name','').lower()]
-  subprocess.run(c.SCP+[str(source),'mpmb-test@127.0.0.1:MPMB-Testing/runs/'+remote.replace('\\','/').split('/')[-1]],check=True,capture_output=True);opened=True;c.ensure_document(remote)
+  subprocess.run(c.SCP+[str(source),c.SCP_TARGET + ':MPMB-Testing/runs/'+remote.replace('\\','/').split('/')[-1]],check=True,capture_output=True);opened=True;c.ensure_document(remote)
   for kind in range(4):
    for method,key in ([('enter','{ENTER}')] if args.mode=='enter' else [('escape','{ESC}'),('window-close','%{F4}')]):
     title='Alert dismiss %s %s'%(kind,method);case={'type':kind,'method':method,'title':title};report['cases'].append(case)

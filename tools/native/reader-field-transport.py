@@ -22,7 +22,7 @@ def main():
  source=a.input.resolve();before=hashlib.sha256(source.read_bytes()).hexdigest();folder=ROOT/'output/testing'/('reader-field-transport-'+str(time.time_ns()));folder.mkdir();print(folder,flush=True);remote=c.remote_path('runs/field-transport-'+str(time.time_ns())+'.pdf');opened=False;report={'execution_completed':False,'read_transport_exact':False,'source':str(source),'source_sha256':before,'cases':[]}
  try:
   with c.desktop_lock():
-   assert not [e for e in c.command('inspect') if e.get('class')=='AcrobatSDIWindow' and '.pdf' in e.get('name','').lower()];subprocess.run(c.SCP+[str(source),'mpmb-test@127.0.0.1:MPMB-Testing/runs/'+remote.replace('\\','/').split('/')[-1]],check=True,capture_output=True);opened=True;c.ensure_document(remote)
+   assert not [e for e in c.command('inspect') if e.get('class')=='AcrobatSDIWindow' and '.pdf' in e.get('name','').lower()];subprocess.run(c.SCP+[str(source),c.SCP_TARGET + ':MPMB-Testing/runs/'+remote.replace('\\','/').split('/')[-1]],check=True,capture_output=True);opened=True;c.ensure_document(remote)
    for field,value in [('Class Features',None),('Player Name','Bridge A&B C&&D E&&&F &amp; <x> "quote" \\path')]:
     if value is not None:c.script('set',path=remote,values={field:value})
     actual_summary=c.script('field_summary',path=remote,fields=[field])['fields'][field];text=c.script('read',path=remote,fields=[field])['fields'][field];report['cases'].append({'field':field,'read':text,'reader_summary':actual_summary,'read_summary':summary(text),'exact':summary(text)==actual_summary,'unescape_ampersand_summary':summary(text.replace('&&','&'))})

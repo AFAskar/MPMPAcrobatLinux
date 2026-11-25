@@ -157,7 +157,7 @@ def main():
         with c.desktop_lock():
             assert not [r for r in c.command('inspect') if r['class'] == 'AcrobatSDIWindow'
                         and '.pdf' in r['name'].lower()], 'Pre-existing Reader document'
-            subprocess.run(c.SCP+[str(source), 'mpmb-test@127.0.0.1:MPMB-Testing/runs/'+
+            subprocess.run(c.SCP+[str(source), c.SCP_TARGET + ':MPMB-Testing/runs/'+
                                   remote.replace('\\', '/').split('/')[-1]], check=True, capture_output=True)
             opened = True
             c.ensure_document(remote)

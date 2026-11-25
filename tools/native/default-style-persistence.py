@@ -66,7 +66,7 @@ def reader_native_roundtrip(folder, source, binary, report):
     with c.desktop_lock():
         assert not [e for e in c.command('inspect') if e.get('class') == 'AcrobatSDIWindow' and '.pdf' in e.get('name', '').lower()], 'Pre-existing Reader document'
         remote = 'runs/native-default-style-' + str(time.time_ns()) + '.pdf'
-        subprocess.run(c.SCP + [str(output), 'mpmb-test@127.0.0.1:MPMB-Testing/' + remote], capture_output=True, check=True)
+        subprocess.run(c.SCP + [str(output), c.SCP_TARGET + ':MPMB-Testing/' + remote], capture_output=True, check=True)
         remote = c.remote_path(remote)
         report['native_reader_path'] = remote
         c.script('set', path=remote, values={'User Script': "var iFileName='Observe native default style.js';" + OBSERVER})

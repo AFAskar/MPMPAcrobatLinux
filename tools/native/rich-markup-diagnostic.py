@@ -32,7 +32,7 @@ report={'scope':'Diagnostic native inputs only; PDF library changes native input
 try:
  with c.desktop_lock():
   assert not [e for e in c.command('inspect') if e.get('class')=='AcrobatSDIWindow' and '.pdf' in e.get('name','').lower()]
-  remote='runs/rich-markup-variants-'+str(time.time_ns())+'.pdf';report['remote']=remote;subprocess.run(c.SCP+[str(local),'mpmb-test@127.0.0.1:MPMB-Testing/'+remote],check=True,capture_output=True);path=c.remote_path(remote)
+  remote='runs/rich-markup-variants-'+str(time.time_ns())+'.pdf';report['remote']=remote;subprocess.run(c.SCP+[str(local),c.SCP_TARGET + ':MPMB-Testing/'+remote],check=True,capture_output=True);path=c.remote_path(remote)
   c.script('set',path=path,values={'User Script':addon});c.script('call',path=path,name='RunUserScript',args=[False]);summary=c.script('field_summary',path=path,fields=['PC Name'])['fields']['PC Name'];c.script('set',path=path,values={'User Script':''});saved=path[:-4]+'-reader.pdf';c.script('save',path=path,output=saved);c.script('close',path=saved);output=c.fetch(saved,folder/'reader.pdf');text=canonical_fields(PdfReader(output))['PC Name']['/V'];a,b=1,0
   for ch in text:a=(a+ord(ch))%65521;b=(b+a)%65521
   assert summary=={'code_units':len(text),'adler32_utf16':str((b*65536+a)&0xffffffff)};data=json.loads(text);assert [ord(ch) for ch in data.pop('sentinel')]==[160,8232,128512];assert script_hashes(output)==script_hashes(base);report['reader']=data;report['summary']=summary;report['execution_completed']=True

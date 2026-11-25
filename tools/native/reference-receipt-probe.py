@@ -33,7 +33,7 @@ def main():
         with c.desktop_lock():
             assert not [e for e in c.command('inspect') if e.get('class') == 'AcrobatSDIWindow' and '.pdf' in e.get('name', '').lower()], 'No pre-existing reference document is allowed'
             remote = 'runs/receipt-control-' + str(time.time_ns()) + '.pdf'; path = c.remote_path(remote)
-            subprocess.run(c.SCP + [str(args.source.resolve()), 'mpmb-test@127.0.0.1:MPMB-Testing/' + remote], check=True, capture_output=True)
+            subprocess.run(c.SCP + [str(args.source.resolve()), c.SCP_TARGET + ':MPMB-Testing/' + remote], check=True, capture_output=True)
             c.ensure_document(path)
             if args.exercise_rich_events:
                 stress = "var iFileName='Receipt rendering stress.js';(function(d){var f=d.getField('Player Name'),value=f.valueAsString,rich=f.richText;try{for(var i=0;i<24;i++){f.richText=i%2===0;f.value='Receipt rendering cycle '+i;d.calculateNow();}}finally{f.richText=rich;f.value=value;}})(tDoc);"

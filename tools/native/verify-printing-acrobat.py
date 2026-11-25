@@ -26,7 +26,7 @@ def main():
         with c.desktop_lock():
             for case in native['cases']:
                 label = case['fixture']; source = Path(case['interactive_output']); remote_name = 'print-' + str(time.time_ns()) + '-' + label + '.pdf'; remote = c.remote_path('runs/' + remote_name)
-                subprocess.run(c.SCP + [str(source), 'mpmb-test@127.0.0.1:MPMB-Testing/runs/' + remote_name], check=True, capture_output=True)
+                subprocess.run(c.SCP + [str(source), c.SCP_TARGET + ':MPMB-Testing/runs/' + remote_name], check=True, capture_output=True)
                 expected = {'PC Name': 'PRINTVISIBLE', 'Attack.1.Description': 'PRINTVISIBLE', 'Attack.2.Description': 'PRINTHIDDEN', 'Attack.3.Description': 'PRINTSCREENONLY', 'Attack.4.Description': 'PRINTONLY'}
                 fields = c.script('read', path=remote, fields=list(expected))
                 assert fields['fields'] == expected, fields

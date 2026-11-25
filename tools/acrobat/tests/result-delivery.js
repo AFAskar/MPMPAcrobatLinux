@@ -64,4 +64,20 @@ bridge.execute = () => {calls++; return 'retained result';};
 const before = calls; bridge.run(request('5'.repeat(32)));
 assert.equal(calls, before+1); assert.equal(bridge.busy, false); assert.equal(bridge.pendingResult, null);
 assert.equal(depth, 0); assert.equal(timers.length, 0);
+// Verify root auto-detection from app.getPath("user", "documents") for arbitrary Windows accounts.
+const dynamicCtx = vm.createContext({
+  app: {
+    trustedFunction: fn => fn,
+    beginPriv() {},
+    endPriv() {},
+    addMenuItem() {},
+    getPath(category, folder) {
+      assert.equal(category, 'user');
+      assert.equal(folder, 'documents');
+      return '/C/Users/custom-user/Documents/';
+    }
+  }
+});
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../windows/mpmb-testing.js'), 'utf8'), dynamicCtx);
+assert.equal(dynamicCtx.MPMBTesting.root, '/C/Users/custom-user/MPMB-Testing/');
 console.log('Deferred result delivery, ownership, error/overflow and focus sequencing PASS');

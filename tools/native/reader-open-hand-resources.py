@@ -97,7 +97,7 @@ def main():
  try:
   with c.desktop_lock():
    assert not [r for r in c.command('inspect') if r['class']=='AcrobatSDIWindow' and '.pdf' in r['name'].lower()],'Pre-existing Reader document'
-   subprocess.run(c.SCP+[str(source),'mpmb-test@127.0.0.1:MPMB-Testing/runs/'+remote.replace('\\','/').rsplit('/',1)[-1]],check=True,capture_output=True);opened=True;c.ensure_document(remote);installed()
+   subprocess.run(c.SCP+[str(source),c.SCP_TARGET + ':MPMB-Testing/runs/'+remote.replace('\\','/').rsplit('/',1)[-1]],check=True,capture_output=True);opened=True;c.ensure_document(remote);installed()
    if args.removal_roundtrip:
     report['scope']='Real Reader cold removed5/readded6/cold6; original class callback, retained timer, complete captured state and canonical/AP checks. No class-dropdown or full Monk claim.'
     capture('cold-removed5');call('ApplyClasses',['Monk (Warrior of the Open Hand) 6',False]);capture('readded6')
