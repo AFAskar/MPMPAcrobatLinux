@@ -1,7 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 acrobat_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd -- "$acrobat_dir/../.." && pwd)"
+if [[ -z "${MPMB_PYTHON:-}" ]]; then
+  env_file="${MPMB_ENV_FILE-$repo_root/.env}"
+  if [[ -n "$env_file" && -f "$env_file" ]]; then
+    env_python="$(awk -F= '/^[[:space:]]*(export[[:space:]]+)?MPMB_PYTHON[[:space:]]*=/{sub(/^[^=]*=/,""); gsub(/^[[:space:]]+|[[:space:]]+$/,""); gsub(/^["'\'']|["'\'']$/,""); print; exit}' "$env_file")"
+    if [[ -n "$env_python" ]]; then
+      MPMB_PYTHON="${env_python/#\~/$HOME}"
+    fi
+  fi
+fi
 mpmb_python="${MPMB_PYTHON:-python3}"
+if ! "$mpmb_python" -c 'import pypdf' >/dev/null 2>&1 && [[ -x "$repo_root/.venv/bin/python3" ]]; then
+  mpmb_python="$repo_root/.venv/bin/python3"
+fi
 if ! "$mpmb_python" -c 'import pypdf' >/dev/null 2>&1; then
   mpmb_python="$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3"
 fi

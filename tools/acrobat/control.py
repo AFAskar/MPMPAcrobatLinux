@@ -15,14 +15,95 @@ import uuid
 
 REPO = Path(__file__).resolve().parents[2]
 STATE = REPO / 'output' / 'testing'
-WIN_USER = os.environ.get('MPMB_WIN_USER', 'mpmb-test')
-WIN_HOST = os.environ.get('MPMB_WIN_HOST', '127.0.0.1')
-WIN_PORT = os.environ.get('MPMB_WIN_PORT', '2222')
-SCP_TARGET = os.environ.get('MPMB_WIN_SCP_TARGET', f'{WIN_USER}@{WIN_HOST}')
-VM_NAME = os.environ.get('MPMB_VM_NAME', 'mpmb-windows11')
-WIN = os.environ.get('MPMB_WIN_ROOT', rf'C:\Users\{WIN_USER}\MPMB-Testing')
-KEY = Path(os.environ.get('MPMB_WIN_SSH_KEY', str(Path.home() / '.ssh' / 'mpmb_win_vm'))).expanduser()
-MUX = Path(os.environ.get('MPMB_MUX_DIR', str(Path.home() / '.cache' / 'mpmb-testing'))).expanduser()
+
+
+def _parse_env_file(path):
+    values = {}
+    try:
+        lines = path.read_text(encoding='utf-8').splitlines()
+    except OSError:
+        return values
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith('#'):
+            continue
+        if line.startswith('export '):
+            line = line[7:].strip()
+        if '=' not in line:
+            continue
+        key, val = line.split('=', 1)
+        key = key.strip()
+        val = val.strip()
+        if not key:
+            continue
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
+            val = val[1:-1]
+        values[key] = val
+    return values
+
+
+def _worktree_main_repo():
+    dot_git = REPO / '.git'
+    if not dot_git.is_file():
+        return None
+    try:
+        text = dot_git.read_text(encoding='utf-8').strip()
+    except OSError:
+        return None
+    if not text.startswith('gitdir:'):
+        return None
+    gitdir = Path(text.split(':', 1)[1].strip())
+    if not gitdir.is_absolute():
+        gitdir = (REPO / gitdir).resolve()
+    commondir_file = gitdir / 'commondir'
+    if commondir_file.is_file():
+        try:
+            return (gitdir / commondir_file.read_text(encoding='utf-8').strip()).resolve().parent
+        except OSError:
+            return None
+    if gitdir.parent.name == 'worktrees':
+        return gitdir.parent.parent.parent
+    return None
+
+
+def _load_dotenv():
+    explicit = os.environ.get('MPMB_ENV_FILE')
+    if explicit is not None:
+        candidates = [Path(explicit).expanduser()] if explicit.strip() else []
+    else:
+        candidates = [REPO / '.env']
+        main_repo = _worktree_main_repo()
+        if main_repo and main_repo != REPO:
+            candidates.append(main_repo / '.env')
+    loaded = {}
+    for candidate in candidates:
+        if candidate.is_file():
+            for key, val in _parse_env_file(candidate).items():
+                loaded.setdefault(key, val)
+    return loaded
+
+
+_DOTENV = _load_dotenv()
+
+
+def _env(key, default):
+    val = os.environ.get(key)
+    if val is not None and val != '':
+        return val
+    val = _DOTENV.get(key)
+    if val is not None and val != '':
+        return val
+    return default
+
+
+WIN_USER = _env('MPMB_WIN_USER', 'mpmb-test')
+WIN_HOST = _env('MPMB_WIN_HOST', '127.0.0.1')
+WIN_PORT = _env('MPMB_WIN_PORT', '2222')
+SCP_TARGET = _env('MPMB_WIN_SCP_TARGET', f'{WIN_USER}@{WIN_HOST}')
+VM_NAME = _env('MPMB_VM_NAME', 'mpmb-windows11')
+WIN = _env('MPMB_WIN_ROOT', rf'C:\Users\{WIN_USER}\MPMB-Testing')
+KEY = Path(_env('MPMB_WIN_SSH_KEY', str(Path.home() / '.ssh' / 'mpmb_win_vm'))).expanduser()
+MUX = Path(_env('MPMB_MUX_DIR', str(Path.home() / '.cache' / 'mpmb-testing'))).expanduser()
 MUX.mkdir(parents=True, exist_ok=True, mode=0o700)
 SSH = ['ssh', '-T', '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'ConnectTimeout=8',
        '-o', 'ControlMaster=auto', '-o', 'ControlPersist=300', '-o', f'ControlPath={MUX}/ssh',
