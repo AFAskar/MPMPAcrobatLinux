@@ -11,6 +11,7 @@
     pageWidgets: [],
     pageSize: [612, 792],
     pageLoadSeq: 0,
+    lastServerInstanceId: null,
     lastStateSeq: 0,
     selectedField: null,
     activeInteraction: null,
@@ -237,16 +238,8 @@
   async function refreshSession() {
     try {
       const state = await api('/api/session/state');
-      if (state && state.open) {
+      if (state) {
         applySessionState(state);
-      } else {
-        if (state && typeof state.stateSeq === 'number' && state.stateSeq < appState.lastStateSeq) {
-          return;
-        }
-        appState.lastStateSeq = state && typeof state.stateSeq === 'number' ? state.stateSeq : 0;
-        appState.sheet = null;
-        renderTopbar();
-        renderPlay();
       }
     } catch (err) {
       if (err.message !== 'Authentication required') showBanner(err.message, 'err');
@@ -255,6 +248,12 @@
 
   function applySessionState(state) {
     if (!state) return;
+    if (typeof state.serverInstanceId === 'string' && state.serverInstanceId) {
+      if (appState.lastServerInstanceId && appState.lastServerInstanceId !== state.serverInstanceId) {
+        appState.lastStateSeq = 0;
+      }
+      appState.lastServerInstanceId = state.serverInstanceId;
+    }
     if (state.busy && !state.path) {
       if (state.git) {
         appState.git = state.git;
@@ -267,7 +266,10 @@
       if (typeof state.stateSeq === 'number' && state.stateSeq < appState.lastStateSeq) {
         return;
       }
-      appState.lastStateSeq = typeof state.stateSeq === 'number' ? state.stateSeq : 0;
+      if (typeof state.stateSeq === 'number') {
+        appState.lastStateSeq = state.stateSeq;
+      }
+      closeFieldModal();
       appState.sheet = null;
       if (state.git) appState.git = state.git;
       renderTopbar();
@@ -277,12 +279,15 @@
     }
     const prevRev = appState.sheet ? appState.sheet.revision : -1;
     const prevPath = appState.sheet ? appState.sheet.path : null;
-    if (prevPath !== state.path) {
-      appState.lastStateSeq = 0;
-    } else if (typeof state.stateSeq === 'number' && state.stateSeq < appState.lastStateSeq) {
+    const prevSessionId = appState.sheet ? (appState.sheet.sessionId || '') : '';
+    const nextSessionId = state.sessionId || '';
+    if (typeof state.stateSeq === 'number' && state.stateSeq < appState.lastStateSeq) {
       return;
-    } else if (
+    }
+    if (
       typeof state.stateSeq !== 'number' &&
+      prevPath === state.path &&
+      prevSessionId === nextSessionId &&
       typeof state.revision === 'number' &&
       typeof prevRev === 'number' &&
       state.revision < prevRev
@@ -291,6 +296,10 @@
     }
     if (typeof state.stateSeq === 'number') {
       appState.lastStateSeq = state.stateSeq;
+    }
+    const sessionChanged = prevPath !== state.path || prevSessionId !== nextSessionId;
+    if (sessionChanged) {
+      closeFieldModal();
     }
     appState.sheet = state;
     if (state.git) appState.git = state.git;
@@ -314,7 +323,7 @@
       closeAcrobatModal();
     }
     const sheetTabActive = $('tab-sheet').classList.contains('active');
-    if (sheetTabActive && (prevRev !== state.revision || prevPath !== state.path)) {
+    if (sheetTabActive && (prevRev !== state.revision || sessionChanged)) {
       loadPdfPage();
     }
   }
@@ -467,20 +476,28 @@
       minus.type = 'button';
       minus.className = 'btn small';
       minus.textContent = '−';
-      minus.addEventListener('click', () => enqueueStep(() => {
-        const latest = (appState.sheet?.resources || []).find((x) => x.usedField === r.usedField);
-        const curUsed = parseInt((latest ? latest.used : r.used) || '0', 10) || 0;
-        return editField(r.usedField, String(Math.max(0, curUsed - 1)), 'user');
-      }));
+      minus.addEventListener('click', () => {
+        const target = currentSessionRef();
+        if (!target) return;
+        enqueueStep(target, (ref) => {
+          const latest = (appState.sheet?.resources || []).find((x) => x.usedField === r.usedField);
+          const curUsed = parseInt((latest ? latest.used : r.used) || '0', 10) || 0;
+          return editField(r.usedField, String(Math.max(0, curUsed - 1)), 'user', ref);
+        });
+      });
       const plus = document.createElement('button');
       plus.type = 'button';
       plus.className = 'btn small accent';
       plus.textContent = '+';
-      plus.addEventListener('click', () => enqueueStep(() => {
-        const latest = (appState.sheet?.resources || []).find((x) => x.usedField === r.usedField);
-        const curUsed = parseInt((latest ? latest.used : r.used) || '0', 10) || 0;
-        return editField(r.usedField, String(curUsed + 1), 'user');
-      }));
+      plus.addEventListener('click', () => {
+        const target = currentSessionRef();
+        if (!target) return;
+        enqueueStep(target, (ref) => {
+          const latest = (appState.sheet?.resources || []).find((x) => x.usedField === r.usedField);
+          const curUsed = parseInt((latest ? latest.used : r.used) || '0', 10) || 0;
+          return editField(r.usedField, String(curUsed + 1), 'user', ref);
+        });
+      });
       ctrls.appendChild(minus);
       ctrls.appendChild(plus);
       row.appendChild(ctrls);
@@ -510,8 +527,14 @@
     });
   }
 
-  function enqueueStep(fn) {
-    appState.stepChain = appState.stepChain.then(() => fn()).catch(() => {});
+  function enqueueStep(target, fn) {
+    if (!target) return appState.stepChain;
+    appState.stepChain = appState.stepChain
+      .then(() => {
+        if (!isCurrentSession(target)) return;
+        return fn(target);
+      })
+      .catch(() => {});
     return appState.stepChain;
   }
 
@@ -519,21 +542,25 @@
   document.querySelectorAll('[data-hp-delta]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const delta = parseInt(btn.dataset.hpDelta, 10);
-      enqueueStep(() => {
+      const target = currentSessionRef();
+      if (!target) return;
+      enqueueStep(target, (ref) => {
         if (!appState.sheet || !appState.sheet.open) return;
         const v = appState.sheet.vitals || {};
         const cur = parseInt(v.hpCurrent, 10);
         const max = parseInt(v.hpMax, 10);
         const base = isNaN(cur) ? (isNaN(max) ? 0 : max) : cur;
         const next = Math.max(0, base + delta);
-        return editField('HP Current', String(next), 'user');
+        return editField('HP Current', String(next), 'user', ref);
       });
     });
   });
   $('btn-hp-full').addEventListener('click', () => {
-    enqueueStep(() => {
+    const target = currentSessionRef();
+    if (!target) return;
+    enqueueStep(target, (ref) => {
       const max = appState.sheet?.vitals?.hpMax;
-      if (max) return editField('HP Current', String(max), 'user');
+      if (max) return editField('HP Current', String(max), 'user', ref);
     });
   });
   $('btn-hp-edit').addEventListener('click', () => openFieldEditorByName('HP Current'));
@@ -594,12 +621,14 @@
 
     const width = Math.min(1800, Math.max(900, Math.round(window.innerWidth * (window.devicePixelRatio || 2))));
     const tokenQs = appState.token ? `&token=${encodeURIComponent(appState.token)}` : '';
-    const sheetQs = `&sheet=${encodeURIComponent(sheetPath)}&rev=${encodeURIComponent(String(rev))}`;
+    const sessionId = appState.sheet.sessionId || '';
+    const sessionQs = sessionId ? `&session=${encodeURIComponent(sessionId)}` : '';
+    const sheetQs = `&sheet=${encodeURIComponent(sheetPath)}${sessionQs}&rev=${encodeURIComponent(String(rev))}`;
     const imgUrl = `/api/session/page/${page}/image?w=${width}${sheetQs}${tokenQs}`;
     $('pdf-img').src = imgUrl;
 
     try {
-      const wdata = await api(`/api/session/page/${page}/widgets?sheet=${encodeURIComponent(sheetPath)}&rev=${encodeURIComponent(String(rev))}`);
+      const wdata = await api(`/api/session/page/${page}/widgets?sheet=${encodeURIComponent(sheetPath)}${sessionQs}&rev=${encodeURIComponent(String(rev))}`);
       if (seq !== appState.pageLoadSeq) return;
       appState.pageWidgets = wdata.widgets || [];
       appState.pageSize = wdata.pageSize || [612, 792];
@@ -728,9 +757,14 @@
 
   // --- QUICK FIELD EDITOR MODAL ---
   async function openFieldEditorByName(name) {
-    if (!name || !appState.sheet?.open) return;
+    const target = currentSessionRef();
+    if (!name || !target) return;
     try {
-      const info = await api(`/api/session/field?name=${encodeURIComponent(name)}`);
+      const qs = new URLSearchParams({ name, sheet: target.sheet });
+      if (target.session) qs.set('session', target.session);
+      const info = await api(`/api/session/field?${qs.toString()}`);
+      if (!isCurrentSession(target)) return;
+      info._target = target;
       appState.selectedField = info;
       $('fm-title').textContent = info.name;
       $('fm-meta').textContent = `${info.type}${info.readonly ? ' • read-only' : ''}`;
@@ -794,9 +828,15 @@
     const info = appState.selectedField;
     const inp = $('fm-input');
     if (!info || !inp) return;
+    const target = info._target;
+    if (!isCurrentSession(target)) {
+      closeFieldModal();
+      showBanner('Active sheet changed; edit was cancelled to avoid modifying the wrong character', 'warn', 5000);
+      return;
+    }
     const mode = (info.type === 'combobox' || info.type === 'listbox') && !info.editable ? 'choice' : 'user';
     closeFieldModal();
-    await editField(info.name, inp.value, mode);
+    await editField(info.name, inp.value, mode, target);
   });
 
   // --- SESSION ACTIONS ---
@@ -810,15 +850,34 @@
     if (res.message) showBanner(res.message, 'ok', 3000);
   }
 
-  function currentSheetPath() {
-    return appState.sheet && appState.sheet.open ? appState.sheet.path : undefined;
+  function currentSessionRef() {
+    if (!appState.sheet || !appState.sheet.open) return null;
+    return {
+      sheet: appState.sheet.path || '',
+      session: appState.sheet.sessionId || '',
+    };
   }
 
-  async function editField(field, value, mode = 'user') {
+  function isCurrentSession(ref) {
+    if (!ref) return false;
+    const cur = currentSessionRef();
+    if (!cur) return false;
+    return cur.sheet === ref.sheet && cur.session === ref.session;
+  }
+
+  function targetPayload(target) {
+    const ref = target || currentSessionRef();
+    if (!ref) return {};
+    const out = { sheet: ref.sheet };
+    if (ref.session) out.session = ref.session;
+    return out;
+  }
+
+  async function editField(field, value, mode = 'user', target = null) {
     try {
       const res = await api('/api/session/edit', {
         method: 'POST',
-        json: { field, value, mode, sheet: currentSheetPath() },
+        json: Object.assign({ field, value, mode }, targetPayload(target)),
       });
       await handleActionResponse(res);
     } catch (err) {
@@ -826,11 +885,11 @@
     }
   }
 
-  async function activateField(field, index = 0, shift = false, modifier = false) {
+  async function activateField(field, index = 0, shift = false, modifier = false, target = null) {
     try {
       const res = await api('/api/session/activate', {
         method: 'POST',
-        json: { field, index, shift, modifier, sheet: currentSheetPath() },
+        json: Object.assign({ field, index, shift, modifier }, targetPayload(target)),
       });
       await handleActionResponse(res);
     } catch (err) {
@@ -838,11 +897,11 @@
     }
   }
 
-  async function invokeMenu(name) {
+  async function invokeMenu(name, target = null) {
     try {
       const res = await api('/api/session/menu', {
         method: 'POST',
-        json: { name, sheet: currentSheetPath() },
+        json: Object.assign({ name }, targetPayload(target)),
       });
       await handleActionResponse(res);
     } catch (err) {
@@ -850,11 +909,11 @@
     }
   }
 
-  async function runCommand(action) {
+  async function runCommand(action, target = null) {
     try {
       const res = await api('/api/session/command', {
         method: 'POST',
-        json: { action, sheet: currentSheetPath() },
+        json: Object.assign({ action }, targetPayload(target)),
       });
       await handleActionResponse(res);
     } catch (err) {
@@ -862,11 +921,11 @@
     }
   }
 
-  async function runBookmark(path) {
+  async function runBookmark(path, target = null) {
     try {
       const res = await api('/api/session/bookmark', {
         method: 'POST',
-        json: { path, sheet: currentSheetPath() },
+        json: Object.assign({ path }, targetPayload(target)),
       });
       await handleActionResponse(res);
     } catch (err) {
@@ -1469,7 +1528,7 @@
     try {
       const res = await api('/api/session/save', {
         method: 'POST',
-        json: { force, sheet: currentSheetPath() },
+        json: Object.assign({ force }, targetPayload(null)),
       });
       if (res.state) applySessionState(res.state);
       showBanner(res.message || 'Saved PDF to disk', 'ok', 3000);

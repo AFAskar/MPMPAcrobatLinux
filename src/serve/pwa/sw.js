@@ -1,5 +1,5 @@
-const CACHE_SHELL = 'mpmb-pwa-shell-v2';
-const CACHE_API_PREFIX = 'mpmb-pwa-api-v2-';
+const CACHE_SHELL = 'mpmb-pwa-shell-v3';
+const CACHE_API_PREFIX = 'mpmb-pwa-api-v3-';
 const MAX_CACHED_PAGE_ENTRIES = 30;
 const SHELL_ASSETS = ['/', '/style.css', '/app.js', '/manifest.webmanifest', '/icon.svg'];
 
@@ -76,12 +76,13 @@ self.addEventListener('fetch', (event) => {
   }
 
   // Network-first with credential-partitioned offline cache fallback.
-  // Page image/widget URLs must include sheet & rev query parameters so switching
-  // sheets never serves another sheet's cached page snapshot.
+  // Page image/widget URLs must include sheet, session, & rev query parameters so
+  // switching or reopening sheets never serves another session's cached page snapshot.
   const isStateOrSheets = url.pathname === '/api/session/state' || url.pathname === '/api/sheets';
   const isSheetKeyedPage =
     url.pathname.startsWith('/api/session/page/') &&
     url.searchParams.has('sheet') &&
+    url.searchParams.has('session') &&
     url.searchParams.has('rev');
 
   if (isStateOrSheets || isSheetKeyedPage) {
