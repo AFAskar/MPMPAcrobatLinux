@@ -7,9 +7,15 @@ use std::{
     io::Write,
     path::{Component, Path, PathBuf},
     process::Command,
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Mutex,
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
+
+static TEMP_SEQ: AtomicU64 = AtomicU64::new(1);
+static CONFLICT_SEQ: AtomicU64 = AtomicU64::new(1);
 
 pub const MAX_PDF_BYTES: usize = 64 * 1024 * 1024;
 
@@ -251,7 +257,13 @@ impl SheetStore {
         let _guard = self.lock.lock().unwrap();
         let (_normalized, abs) = self.resolve_safe_pdf_path(rel)?;
         if let Some(expected) = expected_sha256 {
-            if !force && abs.exists() {
+            if !force {
+                if !abs.exists() {
+                    return Ok(SaveResult::Conflict {
+                        expected_sha256: expected.to_owned(),
+                        current_sha256: "<deleted>".to_owned(),
+                    });
+                }
                 let current_bytes = fs::read(&abs)?;
                 let current_sha = sha256_hex(&current_bytes);
                 if current_sha != expected {
@@ -466,6 +478,7 @@ impl SheetStore {
         match self.run_git(cfg, &["push", &cfg.remote, &target_refspec]) {
             Ok(_) => {
                 guard.last_error = None;
+                guard.last_conflict_branch = None;
                 Ok(SyncResult {
                     status: if committed { "synced" } else { "up_to_date" }.into(),
                     committed,
@@ -488,11 +501,17 @@ impl SheetStore {
                     || err_text.contains("Updates were rejected");
                 if is_divergence {
                     let host = hostname_slug();
-                    let ts = SystemTime::now()
+                    let ts_ms = SystemTime::now()
                         .duration_since(UNIX_EPOCH)
-                        .map(|d| d.as_secs())
+                        .map(|d| d.as_millis())
                         .unwrap_or(0);
-                    let conflict_branch = format!("{}/{host}-{ts}", cfg.conflict_prefix);
+                    let short_sha = commit_sha
+                        .as_deref()
+                        .map(|s| &s[..s.len().min(7)])
+                        .unwrap_or("head");
+                    let seq = CONFLICT_SEQ.fetch_add(1, Ordering::Relaxed);
+                    let conflict_branch =
+                        format!("{}/{host}-{ts_ms}-{short_sha}-{seq}", cfg.conflict_prefix);
                     let conflict_refspec = format!("HEAD:refs/heads/{conflict_branch}");
                     self.run_git(cfg, &["push", &cfg.remote, &conflict_refspec])
                         .with_context(|| {
@@ -778,7 +797,8 @@ pub fn write_file_atomic_replace(path: &Path, bytes: &[u8]) -> Result<()> {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let tmp = parent.join(format!(".{stem}.mpmb-tmp-{pid}-{nanos}"));
+    let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp = parent.join(format!(".{stem}.mpmb-tmp-{pid}-{nanos}-{seq}"));
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -1166,6 +1186,299 @@ mod tests {
         assert_eq!(history[0].subject, "Desktop level 4");
         assert_eq!(history[1].subject, "Initial Lyra level 3");
 
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn external_deletion_triggers_conflict_until_forced() {
+        let root = temp_dir("deleted-conflict");
+        let store = SheetStore::open(StoreConfig {
+            root: root.clone(),
+            git: None,
+        })
+        .unwrap();
+        let v1 = b"%PDF-1.7\n%v1\n";
+        let up = store.upload_sheet("hero.pdf", v1, false).unwrap();
+
+        // Simulate external deletion (e.g. deleted on desktop before phone saves).
+        fs::remove_file(store.root().join("hero.pdf")).unwrap();
+
+        let conflict = store
+            .save_sheet_atomic(
+                "hero.pdf",
+                b"%PDF-1.7\n%v2\n",
+                Some(&up.sha256),
+                None,
+                false,
+            )
+            .unwrap();
+        assert_eq!(
+            conflict,
+            SaveResult::Conflict {
+                expected_sha256: up.sha256.clone(),
+                current_sha256: "<deleted>".into(),
+            }
+        );
+        assert!(!store.root().join("hero.pdf").exists());
+
+        // Explicit force=true recreates the sheet cleanly.
+        let forced = store
+            .save_sheet_atomic("hero.pdf", b"%PDF-1.7\n%v2\n", Some(&up.sha256), None, true)
+            .unwrap();
+        assert!(matches!(forced, SaveResult::Saved { .. }));
+        assert!(store.root().join("hero.pdf").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn special_mpmb_and_unicode_filenames_roundtrip_through_git_and_sidecar() {
+        let base = temp_dir("special-names");
+        let bare = base.join("remote.git");
+        let work = base.join("work");
+        init_bare_remote(&bare);
+        let store = SheetStore::open(StoreConfig {
+            root: work.clone(),
+            git: Some(GitConfig::new(bare.to_string_lossy().into_owned())),
+        })
+        .unwrap();
+
+        let tricky = "Campaign 2024/Élodie's Sheet (v24.2.0+261023) [Printer Friendly].pdf";
+        let bytes = b"%PDF-1.7\n%unicode-special\n";
+        store.upload_sheet(tricky, bytes, false).unwrap();
+        store
+            .save_sheet_atomic(
+                tricky,
+                bytes,
+                None,
+                Some(&json!({"character":{"name":"Élodie","level":"7"}})),
+                true,
+            )
+            .unwrap();
+        let sync = store.git_sync("Add Élodie's 2024 sheet").unwrap();
+        assert_eq!(sync.status, "synced");
+
+        let listed = store.list_sheets().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].path, tricky);
+        assert_eq!(listed[0].character_name.as_deref(), Some("Élodie"));
+
+        let history = store.git_history(Some(tricky), 5).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].subject, "Add Élodie's 2024 sheet");
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn rapid_back_to_back_diverged_pushes_create_distinct_conflict_branches() {
+        let base = temp_dir("rapid-conflicts");
+        let bare = base.join("remote.git");
+        let work_a = base.join("a");
+        let work_b = base.join("b");
+        init_bare_remote(&bare);
+        let url = bare.to_string_lossy().into_owned();
+
+        let store_a = SheetStore::open(StoreConfig {
+            root: work_a,
+            git: Some(GitConfig::new(url.clone())),
+        })
+        .unwrap();
+        store_a
+            .upload_sheet("s.pdf", b"%PDF-1.7\n%0\n", false)
+            .unwrap();
+        store_a.git_sync("base").unwrap();
+
+        let store_b = SheetStore::open(StoreConfig {
+            root: work_b,
+            git: Some(GitConfig::new(url)),
+        })
+        .unwrap();
+
+        // Advance remote main via A.
+        store_a
+            .save_sheet_atomic("s.pdf", b"%PDF-1.7\n%a1\n", None, None, true)
+            .unwrap();
+        store_a.git_sync("a1").unwrap();
+
+        // Two rapid diverged pushes from B within the same second must BOTH succeed
+        // on distinct remote conflict branches without colliding.
+        store_b
+            .save_sheet_atomic("s.pdf", b"%PDF-1.7\n%b1\n", None, None, true)
+            .unwrap();
+        let c1 = store_b.git_sync("b1").unwrap();
+        store_b
+            .save_sheet_atomic("s.pdf", b"%PDF-1.7\n%b2\n", None, None, true)
+            .unwrap();
+        let c2 = store_b.git_sync("b2").unwrap();
+
+        assert_eq!(c1.status, "conflict_branch");
+        assert_eq!(c2.status, "conflict_branch");
+        let b1 = c1.conflict_branch.unwrap();
+        let b2 = c2.conflict_branch.unwrap();
+        assert_ne!(b1, b2, "rapid conflict branches must be unique");
+
+        let b1_pdf = Command::new("git")
+            .current_dir(&bare)
+            .args(["show", &format!("{b1}:s.pdf")])
+            .output()
+            .unwrap();
+        let b2_pdf = Command::new("git")
+            .current_dir(&bare)
+            .args(["show", &format!("{b2}:s.pdf")])
+            .output()
+            .unwrap();
+        assert_eq!(b1_pdf.stdout, b"%PDF-1.7\n%b1\n");
+        assert_eq!(b2_pdf.stdout, b"%PDF-1.7\n%b2\n");
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn git_pull_refuses_dirty_tree_and_diverged_history_without_losing_edits() {
+        let base = temp_dir("pull-guards");
+        let bare = base.join("remote.git");
+        let work_a = base.join("a");
+        let work_b = base.join("b");
+        init_bare_remote(&bare);
+        let url = bare.to_string_lossy().into_owned();
+
+        let store_a = SheetStore::open(StoreConfig {
+            root: work_a,
+            git: Some(GitConfig::new(url.clone())),
+        })
+        .unwrap();
+        store_a
+            .upload_sheet("s.pdf", b"%PDF-1.7\n%v0\n", false)
+            .unwrap();
+        store_a.git_sync("v0").unwrap();
+
+        let store_b = SheetStore::open(StoreConfig {
+            root: work_b,
+            git: Some(GitConfig::new(url)),
+        })
+        .unwrap();
+
+        // Advance remote via A.
+        store_a
+            .save_sheet_atomic("s.pdf", b"%PDF-1.7\n%remote-v1\n", None, None, true)
+            .unwrap();
+        store_a.git_sync("remote-v1").unwrap();
+
+        // Dirty local edit on B: pull must refuse with dirty=true and preserve local bytes.
+        store_b
+            .save_sheet_atomic("s.pdf", b"%PDF-1.7\n%local-dirty\n", None, None, true)
+            .unwrap();
+        let pull_dirty = store_b.git_pull().unwrap();
+        assert!(pull_dirty.dirty);
+        assert!(!pull_dirty.updated);
+        assert_eq!(
+            store_b.read_sheet_bytes("s.pdf").unwrap().2,
+            b"%PDF-1.7\n%local-dirty\n"
+        );
+
+        // Commit locally on B (diverged from remote): ff-only pull must fail cleanly
+        // without corrupting or discarding B's local commit.
+        let _ = store_b.git_sync("local-commit").unwrap();
+        assert!(store_b.git_pull().is_err());
+        assert_eq!(
+            store_b.read_sheet_bytes("s.pdf").unwrap().2,
+            b"%PDF-1.7\n%local-dirty\n"
+        );
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn upload_rejects_empty_and_non_pdf_payloads() {
+        let root = temp_dir("upload-validation");
+        let store = SheetStore::open(StoreConfig {
+            root: root.clone(),
+            git: None,
+        })
+        .unwrap();
+        assert!(store.upload_sheet("empty.pdf", b"", false).is_err());
+        assert!(store.upload_sheet("fake.pdf", b"not a pdf", false).is_err());
+        assert!(store.list_sheets().unwrap().is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn concurrent_multithreaded_store_operations_never_corrupt_files_or_collide() {
+        use std::sync::{Arc, Barrier};
+
+        let base = temp_dir("mt-store");
+        let bare = base.join("remote.git");
+        let work = base.join("work");
+        init_bare_remote(&bare);
+        let store = Arc::new(
+            SheetStore::open(StoreConfig {
+                root: work,
+                git: Some(GitConfig::new(bare.to_string_lossy().into_owned())),
+            })
+            .unwrap(),
+        );
+        store
+            .upload_sheet("shared.pdf", b"%PDF-1.7\n%init\n", false)
+            .unwrap();
+
+        let threads = 8;
+        let barrier = Arc::new(Barrier::new(threads));
+        let mut handles = Vec::new();
+        for tid in 0..threads {
+            let st = Arc::clone(&store);
+            let bar = Arc::clone(&barrier);
+            handles.push(std::thread::spawn(move || {
+                bar.wait();
+                for iter in 0..10 {
+                    let payload = format!("%PDF-1.7\n%thread-{tid}-iter-{iter}\n");
+                    let sidecar = json!({"character":{"name":format!("Hero-{tid}-{iter}")}});
+                    // Mix forced writes, CAS conflict-checked writes, reads, listings, and syncs.
+                    if iter % 3 == 0 {
+                        let _ = st
+                            .save_sheet_atomic(
+                                "shared.pdf",
+                                payload.as_bytes(),
+                                Some("intentionally-stale-sha"),
+                                Some(&sidecar),
+                                false,
+                            )
+                            .unwrap();
+                    } else {
+                        let res = st
+                            .save_sheet_atomic(
+                                "shared.pdf",
+                                payload.as_bytes(),
+                                None,
+                                Some(&sidecar),
+                                true,
+                            )
+                            .unwrap();
+                        assert!(matches!(res, SaveResult::Saved { .. }));
+                    }
+                    let (_, _, bytes, _) = st.read_sheet_bytes("shared.pdf").unwrap();
+                    assert!(bytes.starts_with(b"%PDF-1.7\n"));
+                    let listed = st.list_sheets().unwrap();
+                    assert_eq!(listed.len(), 1);
+                }
+                if tid % 2 == 0 {
+                    let sync = st.git_sync(&format!("sync from thread {tid}")).unwrap();
+                    assert!(sync.pushed || sync.status == "clean");
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+        // Final sync must succeed cleanly with zero leftover .mpmb-tmp-* staging files.
+        let final_sync = store.git_sync("final").unwrap();
+        assert!(final_sync.pushed);
+        for entry in fs::read_dir(store.root()).unwrap() {
+            let name = entry.unwrap().file_name().to_string_lossy().into_owned();
+            assert!(
+                !name.contains(".mpmb-tmp-"),
+                "stray staging file leaked: {name}"
+            );
+        }
         let _ = fs::remove_dir_all(&base);
     }
 }
