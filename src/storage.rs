@@ -286,6 +286,10 @@ impl SheetStore {
         overwrite: bool,
     ) -> Result<SheetEntry> {
         staged.finish()?;
+        // Fully parse the staged PDF before acquiring the store lock or touching
+        // any existing PDF/sidecar so truncated or corrupted uploads can never
+        // overwrite a valid character sheet.
+        staged.validate_pdf()?;
         let _guard = self.lock.lock().unwrap();
         let (normalized, abs) = self.resolve_safe_pdf_path(rel)?;
         if let Some(parent) = abs.parent() {
@@ -565,6 +569,11 @@ impl SheetStore {
                 message: "Git storage is not enabled".into(),
             });
         };
+        let _pull_lock = acquire_store_lock(&self.root)?;
+        if let Err(err) = self.validate_checkout_state(cfg) {
+            guard.last_error = Some(format!("{err:#}"));
+            return Err(err);
+        }
         let old_head = self
             .run_git_allow_fail(cfg, &["rev-parse", "HEAD"])
             .ok()
@@ -598,6 +607,11 @@ impl SheetStore {
                 });
             }
             guard.last_error = Some(msg);
+            return Err(err);
+        }
+        // Revalidate checkout branch before mutating HEAD/working tree.
+        if let Err(err) = self.validate_checkout_state(cfg) {
+            guard.last_error = Some(format!("{err:#}"));
             return Err(err);
         }
         // Use the exact commit fetched into FETCH_HEAD rather than assuming the
@@ -651,9 +665,14 @@ impl SheetStore {
         let Some(cfg) = &self.git else {
             bail!("Git storage is not enabled");
         };
-        // Hold the cross-process store lock across pre-stage validation, staging,
-        // and commit so another instance cannot publish a PDF+sidecar pair mid-commit.
+        // Hold the cross-process store lock across branch validation, pre-stage
+        // validation, staging, commit, and immutable commit-SHA capture so another
+        // process cannot publish a mixed PDF/sidecar pair or switch branches mid-sync.
         let commit_lock = acquire_store_lock(&self.root)?;
+        if let Err(err) = self.validate_checkout_state(cfg) {
+            guard.last_error = Some(format!("{err:#}"));
+            return Err(err);
+        }
 
         // Refuse to sweep unrelated pre-staged non-sheet files (including the old
         // path of a staged rename) into a sheet sync commit.
@@ -707,16 +726,24 @@ impl SheetStore {
             self.run_git(cfg, &["commit", "-m", msg])?;
             committed = true;
         }
+
+        // Revalidate checkout state and capture the exact immutable commit SHA
+        // for `refs/heads/<cfg.branch>` WHILE still holding `commit_lock`.
+        if let Err(err) = self.validate_checkout_state(cfg) {
+            guard.last_error = Some(format!("{err:#}"));
+            return Err(err);
+        }
+        let branch_ref = format!("refs/heads/{}", cfg.branch);
+        let commit_sha = self
+            .run_git_allow_fail(cfg, &["rev-parse", "--verify", &branch_ref])
+            .ok()
+            .filter(|s| !s.is_empty());
+
         // Release the cross-process file lock before network push so saves on
         // another process are not blocked across slow remote pushes.
         drop(commit_lock);
 
-        let commit_sha = self
-            .run_git_allow_fail(cfg, &["rev-parse", "HEAD"])
-            .ok()
-            .filter(|s| !s.is_empty());
-
-        if commit_sha.is_none() {
+        let Some(sha) = commit_sha else {
             guard.last_error = None;
             return Ok(SyncResult {
                 status: "clean".into(),
@@ -727,9 +754,11 @@ impl SheetStore {
                 conflict_branch: None,
                 message: "No sheets to commit yet".into(),
             });
-        }
+        };
 
-        let target_refspec = format!("HEAD:refs/heads/{}", cfg.branch);
+        // Push the captured immutable commit SHA (never symbolic HEAD) so an
+        // external branch switch after commit cannot publish another branch.
+        let target_refspec = format!("{sha}:refs/heads/{}", cfg.branch);
         match self.run_git(cfg, &["push", &cfg.remote, &target_refspec]) {
             Ok(_) => {
                 guard.last_error = None;
@@ -738,7 +767,7 @@ impl SheetStore {
                     status: if committed { "synced" } else { "up_to_date" }.into(),
                     committed,
                     pushed: true,
-                    commit_sha,
+                    commit_sha: Some(sha),
                     branch: cfg.branch.clone(),
                     conflict_branch: None,
                     message: if committed {
@@ -760,14 +789,11 @@ impl SheetStore {
                         .duration_since(UNIX_EPOCH)
                         .map(|d| d.as_millis())
                         .unwrap_or(0);
-                    let short_sha = commit_sha
-                        .as_deref()
-                        .map(|s| &s[..s.len().min(7)])
-                        .unwrap_or("head");
+                    let short_sha = &sha[..sha.len().min(7)];
                     let seq = CONFLICT_SEQ.fetch_add(1, Ordering::Relaxed);
                     let conflict_branch =
                         format!("{}/{host}-{ts_ms}-{short_sha}-{seq}", cfg.conflict_prefix);
-                    let conflict_refspec = format!("HEAD:refs/heads/{conflict_branch}");
+                    let conflict_refspec = format!("{sha}:refs/heads/{conflict_branch}");
                     self.run_git(cfg, &["push", &cfg.remote, &conflict_refspec])
                         .with_context(|| {
                             format!(
@@ -783,7 +809,7 @@ impl SheetStore {
                         status: "conflict_branch".into(),
                         committed,
                         pushed: true,
-                        commit_sha,
+                        commit_sha: Some(sha),
                         branch: cfg.branch.clone(),
                         conflict_branch: Some(conflict_branch.clone()),
                         message: format!(
@@ -880,26 +906,7 @@ impl SheetStore {
             }
         } else {
             // Verify active branch matches configured branch on existing checkouts.
-            let active_branch = self
-                .run_git_allow_fail(cfg, &["symbolic-ref", "--short", "HEAD"])
-                .ok()
-                .filter(|s| !s.is_empty());
-            match active_branch.as_deref() {
-                Some(b) if b == cfg.branch => {}
-                Some(b) => {
-                    bail!(
-                        "existing Git checkout is on branch '{}' instead of configured branch '{}'",
-                        b,
-                        cfg.branch
-                    );
-                }
-                None => {
-                    bail!(
-                        "existing Git checkout has a detached HEAD instead of configured branch '{}'",
-                        cfg.branch
-                    );
-                }
-            }
+            self.validate_branch(cfg)?;
             let existing = self
                 .run_git_allow_fail(cfg, &["remote", "get-url", &cfg.remote])
                 .ok();
@@ -911,20 +918,7 @@ impl SheetStore {
                 }
             }
             // Fail closed if an explicit push URL still points to a different repository.
-            if let Ok(push_urls) =
-                self.run_git_allow_fail(cfg, &["remote", "get-url", "--push", "--all", &cfg.remote])
-            {
-                for push_url in push_urls.lines().map(str::trim).filter(|s| !s.is_empty()) {
-                    if push_url != cfg.repo_url {
-                        bail!(
-                            "remote '{}' has explicit push URL '{}' differing from configured repo '{}'",
-                            cfg.remote,
-                            redact_url(push_url),
-                            redact_url(&cfg.repo_url)
-                        );
-                    }
-                }
-            }
+            self.validate_remote_urls(cfg)?;
         }
         self.run_git(cfg, &["config", "user.name", &cfg.author_name])?;
         self.run_git(cfg, &["config", "user.email", &cfg.author_email])?;
@@ -951,6 +945,61 @@ impl SheetStore {
                 let _ = fs::write(&exclude, existing);
             }
         }
+        Ok(())
+    }
+
+    fn validate_branch(&self, cfg: &GitConfig) -> Result<()> {
+        let active_branch = self
+            .run_git_allow_fail(cfg, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+            .ok()
+            .filter(|s| !s.is_empty());
+        match active_branch.as_deref() {
+            Some(b) if b == cfg.branch => Ok(()),
+            Some(b) => bail!(
+                "Git checkout is on branch '{}' instead of configured branch '{}'",
+                b,
+                cfg.branch
+            ),
+            None => bail!(
+                "Git checkout has a detached HEAD instead of configured branch '{}'",
+                cfg.branch
+            ),
+        }
+    }
+
+    fn validate_remote_urls(&self, cfg: &GitConfig) -> Result<()> {
+        let fetch_url = self
+            .run_git_allow_fail(cfg, &["remote", "get-url", &cfg.remote])
+            .ok()
+            .filter(|s| !s.is_empty());
+        if fetch_url.as_deref() != Some(cfg.repo_url.as_str()) {
+            bail!(
+                "remote '{}' fetch URL '{}' differs from configured repo '{}'",
+                cfg.remote,
+                fetch_url.as_deref().map(redact_url).unwrap_or_default(),
+                redact_url(&cfg.repo_url)
+            );
+        }
+        if let Ok(push_urls) =
+            self.run_git_allow_fail(cfg, &["remote", "get-url", "--push", "--all", &cfg.remote])
+        {
+            for push_url in push_urls.lines().map(str::trim).filter(|s| !s.is_empty()) {
+                if push_url != cfg.repo_url {
+                    bail!(
+                        "remote '{}' has explicit push URL '{}' differing from configured repo '{}'",
+                        cfg.remote,
+                        redact_url(push_url),
+                        redact_url(&cfg.repo_url)
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_checkout_state(&self, cfg: &GitConfig) -> Result<()> {
+        self.validate_branch(cfg)?;
+        self.validate_remote_urls(cfg)?;
         Ok(())
     }
 
@@ -1434,6 +1483,16 @@ impl StagedUpload {
         Ok(())
     }
 
+    fn validate_pdf(&self) -> Result<()> {
+        let staged_path = self
+            .path
+            .as_deref()
+            .ok_or_else(|| anyhow!("staged upload path missing"))?;
+        crate::pdf::Pdf::open(staged_path)
+            .context("uploaded file is not a valid readable AcroForm PDF")?;
+        Ok(())
+    }
+
     fn publish_replace(mut self, dest: &Path) -> std::io::Result<()> {
         let src = self.path.take().expect("staged upload already consumed");
         match fs::rename(&src, dest) {
@@ -1800,6 +1859,46 @@ mod tests {
         assert!(status.success(), "git init --bare failed");
     }
 
+    fn valid_test_pdf(tag: &str) -> Vec<u8> {
+        use lopdf::{dictionary, Object, StringFormat};
+        let mut doc = lopdf::Document::with_version("1.7");
+        let pages_id = doc.new_object_id();
+        let field_id = doc.add_object(dictionary! {
+            "Type" => "Annot",
+            "Subtype" => "Widget",
+            "FT" => "Tx",
+            "T" => Object::String(b"PC Name".to_vec(), StringFormat::Literal),
+            "V" => Object::String(tag.as_bytes().to_vec(), StringFormat::Literal),
+            "Rect" => vec![10.into(), 10.into(), 200.into(), 40.into()],
+        });
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+            "Annots" => vec![field_id.into()],
+        });
+        doc.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => vec![page_id.into()],
+                "Count" => 1,
+            }),
+        );
+        let form_id = doc.add_object(dictionary! {
+            "Fields" => vec![field_id.into()],
+        });
+        let cat_id = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+            "AcroForm" => form_id,
+        });
+        doc.trailer.set("Root", cat_id);
+        let mut out = Vec::new();
+        doc.save_to(&mut out).unwrap();
+        out
+    }
+
     #[test]
     fn safe_path_validation_rejects_traversal_hidden_and_non_pdf() {
         let root = temp_dir("safe-paths");
@@ -1839,7 +1938,8 @@ mod tests {
         })
         .unwrap();
 
-        let v1 = b"%PDF-1.7\n%v1\n";
+        let v1_buf = valid_test_pdf("v1");
+        let v1 = v1_buf.as_slice();
         let uploaded = store.upload_sheet("hero.pdf", v1, false).unwrap();
         assert_eq!(uploaded.sha256, sha256_hex(v1));
         assert!(store.upload_sheet("hero.pdf", v1, false).is_err());
@@ -1912,14 +2012,14 @@ mod tests {
             git: Some(GitConfig::new(url.clone())),
         })
         .unwrap();
-        let v1 = b"%PDF-1.7\n%initial\n";
+        let v1 = valid_test_pdf("initial");
         store_a
-            .upload_sheet("campaign/hero.pdf", v1, false)
+            .upload_sheet("campaign/hero.pdf", &v1, false)
             .unwrap();
         store_a
             .save_sheet_atomic(
                 "campaign/hero.pdf",
-                v1,
+                &v1,
                 None,
                 Some(&json!({"character":{"name":"Lyra","level":"3"}})),
                 true,
@@ -2003,8 +2103,8 @@ mod tests {
             git: None,
         })
         .unwrap();
-        let v1 = b"%PDF-1.7\n%v1\n";
-        let up = store.upload_sheet("hero.pdf", v1, false).unwrap();
+        let v1 = valid_test_pdf("del-v1");
+        let up = store.upload_sheet("hero.pdf", &v1, false).unwrap();
 
         // Simulate external deletion (e.g. deleted on desktop before phone saves).
         fs::remove_file(store.root().join("hero.pdf")).unwrap();
@@ -2049,12 +2149,12 @@ mod tests {
         .unwrap();
 
         let tricky = "Campaign 2024/Élodie's Sheet (v24.2.0+261023) [Printer Friendly].pdf";
-        let bytes = b"%PDF-1.7\n%unicode-special\n";
-        store.upload_sheet(tricky, bytes, false).unwrap();
+        let bytes = valid_test_pdf("unicode-special");
+        store.upload_sheet(tricky, &bytes, false).unwrap();
         store
             .save_sheet_atomic(
                 tricky,
-                bytes,
+                &bytes,
                 None,
                 Some(&json!({"character":{"name":"Élodie","level":"7"}})),
                 true,
@@ -2090,7 +2190,7 @@ mod tests {
         })
         .unwrap();
         store_a
-            .upload_sheet("s.pdf", b"%PDF-1.7\n%0\n", false)
+            .upload_sheet("s.pdf", &valid_test_pdf("0"), false)
             .unwrap();
         store_a.git_sync("base").unwrap();
 
@@ -2152,7 +2252,7 @@ mod tests {
         })
         .unwrap();
         store_a
-            .upload_sheet("s.pdf", b"%PDF-1.7\n%v0\n", false)
+            .upload_sheet("s.pdf", &valid_test_pdf("v0"), false)
             .unwrap();
         store_a.git_sync("v0").unwrap();
 
@@ -2222,7 +2322,7 @@ mod tests {
             .unwrap(),
         );
         store
-            .upload_sheet("shared.pdf", b"%PDF-1.7\n%init\n", false)
+            .upload_sheet("shared.pdf", &valid_test_pdf("init"), false)
             .unwrap();
 
         let threads = 8;
@@ -2312,13 +2412,13 @@ mod tests {
             std::os::unix::fs::symlink(&outside, work.join("linked")).unwrap();
             assert!(store.read_sheet_bytes("linked/leak.pdf").is_err());
             assert!(store
-                .upload_sheet("linked/new.pdf", b"%PDF-1.7\n%x\n", true)
+                .upload_sheet("linked/new.pdf", &valid_test_pdf("x"), true)
                 .is_err());
         }
 
         // 2. Sidecar directory error leaves PDF untouched.
-        let orig = b"%PDF-1.7\n%orig\n";
-        let uploaded = store.upload_sheet("hero.pdf", orig, false).unwrap();
+        let orig = valid_test_pdf("orig");
+        let uploaded = store.upload_sheet("hero.pdf", &orig, false).unwrap();
         let sc = SheetStore::sidecar_path_for(&work.join("hero.pdf"));
         fs::create_dir_all(&sc).unwrap();
         let err = store.save_sheet_atomic(
@@ -2350,7 +2450,7 @@ mod tests {
             }
         ));
         let replaced = store
-            .upload_sheet("hero.pdf", b"%PDF-1.7\n%v3\n", true)
+            .upload_sheet("hero.pdf", &valid_test_pdf("v3"), true)
             .unwrap();
         assert!(!replaced.has_state_sidecar);
         assert_eq!(replaced.character_name, None);
@@ -2358,11 +2458,11 @@ mod tests {
         // 4. Ignored PDF does not block syncing other sheets, and unrelated tracked files stay unstaged.
         fs::write(work.join(".gitignore"), "drafts/\n").unwrap();
         store
-            .upload_sheet("drafts/local-only.pdf", b"%PDF-1.7\n%draft\n", false)
+            .upload_sheet("drafts/local-only.pdf", &valid_test_pdf("draft"), false)
             .unwrap();
         #[cfg(unix)]
         store
-            .upload_sheet(":colon.pdf", b"%PDF-1.7\n%colon\n", false)
+            .upload_sheet(":colon.pdf", &valid_test_pdf("colon"), false)
             .unwrap();
         fs::write(work.join("README.md"), "unrelated\n").unwrap();
         let sync = store.git_sync("sync sheets only").unwrap();
@@ -2450,8 +2550,8 @@ mod tests {
         fs::remove_file(work_a.join(" stray.pdf")).unwrap();
 
         // 2. Oversized serialized PDF is rejected before staging, leaving existing PDF untouched.
-        let v1 = b"%PDF-1.7\n%v1\n";
-        let up = store_a.upload_sheet("hero.pdf", v1, false).unwrap();
+        let v1 = valid_test_pdf("r2-v1");
+        let up = store_a.upload_sheet("hero.pdf", &v1, false).unwrap();
         let oversized = vec![b'x'; MAX_PDF_BYTES + 1];
         assert!(store_a
             .save_sheet_atomic(
@@ -2486,8 +2586,8 @@ mod tests {
         assert!(!listed[0].has_state_sidecar);
 
         // 4. Deleted PDF reports Conflict even when the sidecar path is a directory.
-        let v4 = b"%PDF-1.7\n%v4\n";
-        let up4 = store_a.upload_sheet("del.pdf", v4, false).unwrap();
+        let v4 = valid_test_pdf("r2-v4");
+        let up4 = store_a.upload_sheet("del.pdf", &v4, false).unwrap();
         fs::remove_file(work_a.join("del.pdf")).unwrap();
         let del_sc = SheetStore::sidecar_path_for(&work_a.join("del.pdf"));
         fs::create_dir_all(&del_sc).unwrap();
@@ -2517,7 +2617,7 @@ mod tests {
             .save_sheet_atomic("hero.pdf", b"%PDF-1.7\n%blocked\n", None, None, true)
             .is_err());
         assert!(store_a
-            .upload_sheet("hero.pdf", b"%PDF-1.7\n%blocked-up\n", true)
+            .upload_sheet("hero.pdf", &valid_test_pdf("blocked-up"), true)
             .is_err());
         fs::remove_dir(&lock_path).unwrap();
 
@@ -2525,7 +2625,7 @@ mod tests {
         #[cfg(unix)]
         {
             store_a
-                .upload_sheet(":(glob)hero.pdf", b"%PDF-1.7\n%glob\n", false)
+                .upload_sheet(":(glob)hero.pdf", &valid_test_pdf("glob"), false)
                 .unwrap();
         }
         let sync1 = store_a.git_sync("Initial with literal pathspec").unwrap();
@@ -2714,7 +2814,7 @@ mod tests {
         })
         .unwrap();
         writer_store
-            .upload_sheet("pair.pdf", b"%PDF-1.7\n%v0\n", false)
+            .upload_sheet("pair.pdf", &valid_test_pdf("pair-v0"), false)
             .unwrap();
         writer_store
             .save_sheet_atomic(
@@ -2784,6 +2884,155 @@ mod tests {
             checked_commits += 1;
         }
         assert!(checked_commits >= 2);
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn truncated_upload_is_rejected_and_preserves_pdf_and_sidecar_bytes() {
+        let root = temp_dir("truncated-upload");
+        let store = SheetStore::open(StoreConfig {
+            root: root.clone(),
+            git: None,
+        })
+        .unwrap();
+
+        let original_pdf = valid_test_pdf("GoodSheet");
+        let uploaded = store
+            .upload_sheet("Beta.pdf", &original_pdf, false)
+            .unwrap();
+        let saved = store
+            .save_sheet_atomic(
+                "Beta.pdf",
+                &original_pdf,
+                Some(&uploaded.sha256),
+                Some(&json!({"character": {"name": "BetaHero", "level": "6"}})),
+                false,
+            )
+            .unwrap();
+        assert!(matches!(
+            saved,
+            SaveResult::Saved {
+                sidecar_written: true,
+                ..
+            }
+        ));
+
+        let pdf_path = store.root().join("Beta.pdf");
+        let sidecar_path = SheetStore::sidecar_path_for(&pdf_path);
+        let before_pdf = fs::read(&pdf_path).unwrap();
+        let before_sidecar = fs::read(&sidecar_path).unwrap();
+
+        // Attempting to overwrite with a truncated copy (first 40 bytes) MUST fail
+        // and leave both Beta.pdf and Beta.pdf.state.json byte-identical.
+        let truncated = &original_pdf[..40.min(original_pdf.len())];
+        let err = store.upload_sheet("Beta.pdf", truncated, true).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("not a valid readable"),
+            "unexpected error for truncated upload: {err:#}"
+        );
+        assert_eq!(fs::read(&pdf_path).unwrap(), before_pdf);
+        assert_eq!(fs::read(&sidecar_path).unwrap(), before_sidecar);
+        // No stray staging files left behind.
+        for entry in fs::read_dir(store.root()).unwrap() {
+            let name = entry.unwrap().file_name().to_string_lossy().into_owned();
+            assert!(!name.contains(STAGING_PREFIX), "stray temp file: {name}");
+        }
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn git_sync_and_pull_fail_closed_after_external_branch_switch_or_detached_head() {
+        let base = temp_dir("cross-branch-guard");
+        let bare = base.join("remote.git");
+        let work = base.join("work");
+        init_bare_remote(&bare);
+        let url = bare.to_string_lossy().into_owned();
+
+        let store = SheetStore::open(StoreConfig {
+            root: work.clone(),
+            git: Some(GitConfig::new(url)),
+        })
+        .unwrap();
+        store
+            .upload_sheet("Alpha.pdf", &valid_test_pdf("Alpha"), false)
+            .unwrap();
+        let sync0 = store.git_sync("baseline").unwrap();
+        assert!(sync0.pushed);
+
+        let remote_main_before = String::from_utf8(
+            test_git_cmd(Some(&bare))
+                .args(["rev-parse", "refs/heads/main"])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_owned();
+
+        // Externally switch the working copy to a different branch and commit Draft.pdf.
+        assert!(test_git_cmd(Some(&work))
+            .args(["checkout", "-b", "draft"])
+            .status()
+            .unwrap()
+            .success());
+        fs::write(work.join("Draft.pdf"), valid_test_pdf("Draft")).unwrap();
+        assert!(test_git_cmd(Some(&work))
+            .args(["add", "Draft.pdf"])
+            .status()
+            .unwrap()
+            .success());
+        assert!(test_git_cmd(Some(&work))
+            .args([
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@local",
+                "commit",
+                "-m",
+                "draft-only commit",
+            ])
+            .status()
+            .unwrap()
+            .success());
+
+        // Both git_sync and git_pull MUST fail closed and leave remote main untouched.
+        let sync_err = store.git_sync("should fail on draft").unwrap_err();
+        assert!(
+            format!("{sync_err:#}").contains("branch 'draft'"),
+            "unexpected branch sync error: {sync_err:#}"
+        );
+        assert!(store.git_pull().is_err());
+
+        let remote_main_after = String::from_utf8(
+            test_git_cmd(Some(&bare))
+                .args(["rev-parse", "refs/heads/main"])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_owned();
+        assert_eq!(
+            remote_main_after, remote_main_before,
+            "remote main must not advance to draft branch commit"
+        );
+
+        // Detach HEAD and verify both git_sync and git_pull also fail closed.
+        assert!(test_git_cmd(Some(&work))
+            .args(["checkout", "--detach", "HEAD"])
+            .status()
+            .unwrap()
+            .success());
+        let detach_err = store.git_sync("should fail detached").unwrap_err();
+        assert!(
+            format!("{detach_err:#}").contains("detached HEAD"),
+            "unexpected detached HEAD error: {detach_err:#}"
+        );
+        assert!(store.git_pull().is_err());
 
         let _ = fs::remove_dir_all(&base);
     }
