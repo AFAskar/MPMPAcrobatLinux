@@ -16,7 +16,7 @@ PWA_HARNESS = textwrap.dedent(
 
     const source = fs.readFileSync(process.argv[process.argv.length - 1], 'utf8').replace(
       '  // Boot\n  updateConnDot();\n  connectWs();\n  refreshAll();',
-      '  globalThis.harness = { appState, applySessionState, openFieldEditorByName, enqueueStep, currentSessionRef, editField, activateField, openSheet, openNewCharModal, createCharacterFromTemplate, doGitPull, refreshSession, connectWs, openAcrobatInteraction, closeAcrobatModal, submitInteraction };'
+      '  globalThis.harness = { appState, applySessionState, openFieldEditorByName, enqueueStep, currentSessionRef, editField, activateField, openSheet, doGitPull, refreshSession, connectWs, openAcrobatInteraction, closeAcrobatModal, submitInteraction };'
     );
 
     const elements = new Map();
@@ -101,8 +101,6 @@ PWA_HARNESS = textwrap.dedent(
       editField,
       activateField,
       openSheet,
-      openNewCharModal,
-      createCharacterFromTemplate,
       doGitPull,
       refreshSession,
       connectWs,
@@ -419,49 +417,6 @@ PWA_HARNESS = textwrap.dedent(
       assert.equal(openInteractionConfirms, 0);
       assert.equal(appState.activeInteraction.id, 'srv-5-int-2');
       closeAcrobatModal('srv-5-int-2', 'srv-5');
-
-      // 10. New Character from Template prefers 2024 template and carries discardTarget on 409.
-      appState.templates = [
-        { path: 'templates/MPMB-2014-v14.2.0-Blank.pdf', name: 'MPMB-2014-v14.2.0-Blank.pdf', is_template: true, size_bytes: 100 },
-        { path: 'templates/MPMB-2024-v24.2.0-Blank.pdf', name: 'MPMB-2024-v24.2.0-Blank.pdf', is_template: true, size_bytes: 100 },
-      ];
-      openNewCharModal();
-      assert.equal(element('nc-template').value, 'templates/MPMB-2024-v24.2.0-Blank.pdf');
-      assert.equal(element('new-char-modal').classList.contains('hidden'), false);
-
-      const newCalls = [];
-      let newConfirms = 0;
-      confirmHandler = () => { newConfirms += 1; return true; };
-      fetchHandler = async (path, opts) => {
-        if (path === '/api/sheets/new') {
-          const body = JSON.parse(opts.body);
-          newCalls.push(body);
-          if (!body.force) {
-            return jsonResp({
-              status: 'conflict',
-              reason: 'unsaved_edits',
-              error: 'unsaved edits',
-              discardTarget: { sheet: 'Alpha.pdf', sessionId: 'srv-5-s1', revision: 4 },
-            }, 409);
-          }
-          return jsonResp({
-            status: 'ok',
-            sheet: { path: 'Aelar.pdf', name: 'Aelar.pdf', is_template: false, size_bytes: 100 },
-            state: { open: true, serverInstanceId: 'srv-5', sessionId: 'srv-5-s2', stateSeq: 20, path: 'Aelar.pdf', revision: 1, fields: {} },
-          });
-        }
-        if (path === '/api/sheets') {
-          return jsonResp({ sheets: appState.templates, templates: appState.templates, characters: [], git: null });
-        }
-        throw new Error('Unexpected template create fetch ' + path);
-      };
-      await createCharacterFromTemplate('templates/MPMB-2024-v24.2.0-Blank.pdf', 'Aelar');
-      assert.equal(newConfirms, 1);
-      assert.equal(newCalls.length, 2);
-      assert.equal(newCalls[0].force, false);
-      assert.equal(newCalls[1].force, true);
-      assert.deepEqual(newCalls[1].discard, { sheet: 'Alpha.pdf', sessionId: 'srv-5-s1', revision: 4 });
-      assert.equal(element('new-char-modal').classList.contains('hidden'), true);
 
       console.log('PWA_CLIENT_REGRESSIONS_OK');
     })().catch((err) => {

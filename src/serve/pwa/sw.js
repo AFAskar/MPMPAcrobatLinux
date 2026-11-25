@@ -1,5 +1,5 @@
-const CACHE_SHELL = 'mpmb-pwa-shell-v4';
-const CACHE_API_PREFIX = 'mpmb-pwa-api-v4-';
+const CACHE_SHELL = 'mpmb-pwa-shell-v3';
+const CACHE_API_PREFIX = 'mpmb-pwa-api-v3-';
 const MAX_CACHED_PAGE_ENTRIES = 30;
 const SHELL_ASSETS = ['/', '/style.css', '/app.js', '/manifest.webmanifest', '/icon.svg'];
 
