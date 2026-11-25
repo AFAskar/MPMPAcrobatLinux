@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    name: Linux (fmt, clippy, Rust & Python tests)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux desktop & font dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            fonts-dejavu-core \
+            fontconfig \
+            libgl1-mesa-dev \
+            libxkbcommon-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            pkg-config
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo registry & build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup pinned PDFium (Linux x64)
+        run: tools/native/setup-pdfium
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Run strict Clippy
+        run: cargo clippy --locked --all-targets -j 1 -- -D warnings
+
+      - name: Run Rust unit tests
+        run: cargo test --locked -j 1
+
+      - name: Verify CLI help output
+        run: cargo run --locked -- --help
+
+      - name: Setup Python test dependencies
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python verifier dependencies
+        run: pip install --no-cache-dir -r tools/acrobat/requirements.txt
+
+      - name: Run Python unit tests (normal and PYTHONOPTIMIZE=1 -O)
+        run: |
+          python3 -m unittest discover -s tools/native -p 'test_*.py' -v
+          PYTHONOPTIMIZE=1 python3 -O -m unittest discover -s tools/native -p 'test_*.py' -v
+
+  windows:
+    name: Windows x64 (clippy, Rust tests, release build)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Cargo registry & build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup pinned PDFium & DejaVu Sans (Windows x64)
+        shell: pwsh
+        run: .\packaging\windows\setup-deps.ps1
+
+      - name: Run strict Clippy (Windows)
+        run: cargo clippy --locked --all-targets -j 1 -- -D warnings
+
+      - name: Run Rust unit tests (Windows)
+        env:
+          MPMB_FONT_DIR: ${{ github.workspace }}\output\deps\fonts
+          MPMB_PDFIUM: ${{ github.workspace }}\output\deps\bin\pdfium.dll
+        run: cargo test --locked -j 1
+
+      - name: Build Windows release binary
+        run: cargo build --release --locked -j 1
+
+      - name: Verify Windows CLI help output
+        run: .\target\release\mpmb-reader.exe --help

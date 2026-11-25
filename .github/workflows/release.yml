@@ -1,0 +1,288 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version without leading v (e.g. 0.1.0). Defaults to Cargo.toml version."
+        required: false
+        default: ""
+      draft:
+        description: "Publish as draft GitHub Release"
+        type: boolean
+        default: false
+      prerelease:
+        description: "Mark as prerelease"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  prepare:
+    name: Resolve release version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      tag: ${{ steps.ver.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: ver
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            TAG="${GITHUB_REF_NAME}"
+            VERSION="${TAG#v}"
+          elif [[ -n "${{ inputs.version }}" ]]; then
+            VERSION="${{ inputs.version }}"
+            VERSION="${VERSION#v}"
+            TAG="v${VERSION}"
+          else
+            VERSION="$(awk -F'"' '/^version =/{print $2; exit}' Cargo.toml)"
+            TAG="v${VERSION}"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+  linux-build:
+    name: Build Linux x86_64 release binary
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            fonts-dejavu-core \
+            fontconfig \
+            libgl1-mesa-dev \
+            libxkbcommon-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Setup pinned PDFium (Linux x64)
+        run: tools/native/setup-pdfium
+
+      - name: Run Rust unit tests
+        run: cargo test --locked -j 1
+
+      - name: Build release binary
+        run: |
+          cargo build --release --locked -j 1
+          strip target/release/mpmb-reader
+
+      - name: Upload Linux release bundle inputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-release-inputs
+          path: |
+            target/release/mpmb-reader
+            output/deps/lib/libpdfium.so
+            output/deps/LICENSE
+          retention-days: 1
+
+  package-appimage:
+    name: Package Linux AppImage
+    needs: [prepare, linux-build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install font & packaging dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fonts-dejavu-core
+
+      - name: Download Linux release binary & PDFium
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-release-inputs
+
+      - name: Build AppImage
+        run: |
+          chmod +x target/release/mpmb-reader packaging/appimage/build-appimage.sh
+          packaging/appimage/build-appimage.sh \
+            "${{ needs.prepare.outputs.version }}" \
+            "$PWD/target/release/mpmb-reader" \
+            "$PWD/output/dist"
+
+      - name: Upload AppImage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-appimage
+          path: output/dist/*.AppImage
+          if-no-files-found: error
+
+  package-flatpak:
+    name: Package Linux Flatpak
+    needs: [prepare, linux-build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Flatpak & font dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder fonts-dejavu-core
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user -y flathub org.freedesktop.Platform//24.08 org.freedesktop.Sdk//24.08
+
+      - name: Download Linux release binary & PDFium
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-release-inputs
+
+      - name: Build Flatpak single-file bundle
+        run: |
+          chmod +x target/release/mpmb-reader packaging/flatpak/build-flatpak.sh
+          packaging/flatpak/build-flatpak.sh \
+            "${{ needs.prepare.outputs.version }}" \
+            "$PWD/target/release/mpmb-reader" \
+            "$PWD/output/dist"
+
+      - name: Upload Flatpak artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-flatpak
+          path: output/dist/*.flatpak
+          if-no-files-found: error
+
+  package-rpm:
+    name: Package Linux RPM (x86_64)
+    needs: [prepare, linux-build]
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:41
+    steps:
+      - name: Install RPM build tools
+        run: dnf install -y rpm-build findutils git-core tar
+
+      - uses: actions/checkout@v4
+
+      - name: Download Linux release binary & PDFium
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-release-inputs
+
+      - name: Build RPM package
+        run: |
+          chmod +x target/release/mpmb-reader packaging/rpm/build-rpm.sh
+          packaging/rpm/build-rpm.sh \
+            "${{ needs.prepare.outputs.version }}" \
+            "$PWD/target/release/mpmb-reader" \
+            "$PWD/output/dist"
+          rpm -qlp output/dist/*.rpm
+
+      - name: Upload RPM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-rpm
+          path: output/dist/*.rpm
+          if-no-files-found: error
+
+  package-windows:
+    name: Package Windows x64 (Portable ZIP + Installer EXE)
+    needs: prepare
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Setup pinned PDFium & DejaVu Sans (Windows x64)
+        shell: pwsh
+        run: .\packaging\windows\setup-deps.ps1
+
+      - name: Run Rust unit tests (Windows)
+        env:
+          MPMB_FONT_DIR: ${{ github.workspace }}\output\deps\fonts
+          MPMB_PDFIUM: ${{ github.workspace }}\output\deps\bin\pdfium.dll
+        run: cargo test --locked -j 1
+
+      - name: Build Windows release binary
+        run: cargo build --release --locked -j 1
+
+      - name: Build Windows Portable ZIP
+        shell: pwsh
+        run: |
+          .\packaging\windows\build-portable.ps1 `
+            -Version "${{ needs.prepare.outputs.version }}"
+
+      - name: Ensure Inno Setup 6 is available
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ISCC.exe -ErrorAction SilentlyContinue) -and -not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup -y --no-progress
+          }
+
+      - name: Build Windows Installer EXE
+        shell: pwsh
+        run: |
+          .\packaging\windows\build-installer.ps1 `
+            -Version "${{ needs.prepare.outputs.version }}"
+
+      - name: Upload Windows Portable & Installer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-windows
+          path: |
+            output/dist/*-windows-x64-portable.zip
+            output/dist/*-windows-x64-setup.exe
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [prepare, package-appimage, package-flatpak, package-rpm, package-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify all 5 release formats & generate SHA256SUMS.txt
+        run: |
+          cd release-assets
+          ls -lh
+          for ext in flatpak AppImage rpm zip exe; do
+            count=$(find . -maxdepth 1 -name "*.${ext}" | wc -l)
+            if [[ "$count" -lt 1 ]]; then
+              echo "Missing expected *.${ext} release artifact!" >&2
+              exit 1
+            fi
+          done
+          sha256sum *.flatpak *.AppImage *.rpm *.zip *.exe > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: MPMB Reader ${{ needs.prepare.outputs.tag }}
+          draft: ${{ inputs.draft || false }}
+          prerelease: ${{ inputs.prerelease || false }}
+          generate_release_notes: true
+          files: |
+            release-assets/*.flatpak
+            release-assets/*.AppImage
+            release-assets/*.rpm
+            release-assets/*.zip
+            release-assets/*.exe
+            release-assets/SHA256SUMS.txt
