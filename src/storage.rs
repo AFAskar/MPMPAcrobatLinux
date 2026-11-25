@@ -4,20 +4,32 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
     fs,
-    io::Write,
+    io::{Read, Write},
     path::{Component, Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     sync::{
         atomic::{AtomicU64, Ordering},
         Mutex,
     },
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 static TEMP_SEQ: AtomicU64 = AtomicU64::new(1);
 static CONFLICT_SEQ: AtomicU64 = AtomicU64::new(1);
 
 pub const MAX_PDF_BYTES: usize = 64 * 1024 * 1024;
+const MAX_SIDECAR_BYTES: usize = 4 * 1024 * 1024;
+const DEFAULT_GIT_TIMEOUT_SECS: u64 = 60;
+const STAGING_PREFIX: &str = ".mpmb-tmp-";
+const STAGING_SUFFIX: &str = ".tmp";
+const GIT_ENV_SCRUB_KEYS: &[&str] = &[
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+];
 
 #[derive(Clone, Debug)]
 pub struct GitConfig {
@@ -30,6 +42,7 @@ pub struct GitConfig {
     pub author_name: String,
     pub author_email: String,
     pub conflict_prefix: String,
+    pub timeout_secs: u64,
 }
 
 impl GitConfig {
@@ -44,6 +57,7 @@ impl GitConfig {
             author_name: "MPMB Reader".into(),
             author_email: "mpmb-reader@local".into(),
             conflict_prefix: "conflict".into(),
+            timeout_secs: DEFAULT_GIT_TIMEOUT_SECS,
         }
     }
 }
@@ -195,11 +209,45 @@ impl SheetStore {
         if !normalized.to_ascii_lowercase().ends_with(".pdf") {
             bail!("sheet path must end with .pdf");
         }
-        let abs = parts.iter().fold(self.root.clone(), |acc, p| acc.join(p));
+        let abs = self.ensure_within_store(&parts)?;
         Ok((normalized, abs))
     }
 
+    fn ensure_within_store(&self, parts: &[String]) -> Result<PathBuf> {
+        let mut cur = self.root.clone();
+        for seg in parts {
+            cur.push(seg);
+            match fs::symlink_metadata(&cur) {
+                Ok(meta) => {
+                    if meta.file_type().is_symlink() {
+                        bail!(
+                            "symlinks are not permitted inside the sheet store: {}",
+                            cur.display()
+                        );
+                    }
+                    let canon = cur.canonicalize().with_context(|| {
+                        format!("failed to canonicalize store path {}", cur.display())
+                    })?;
+                    if !canon.starts_with(&self.root) {
+                        bail!("resolved sheet path escapes store root");
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Ok(cur)
+    }
+
     pub fn sidecar_path_for(pdf_path: &Path) -> PathBuf {
+        let fname = pdf_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("sheet.pdf");
+        pdf_path.with_file_name(format!("{fname}.state.json"))
+    }
+
+    fn legacy_sidecar_path_for(pdf_path: &Path) -> PathBuf {
         let stem = pdf_path
             .file_stem()
             .and_then(|s| s.to_str())
@@ -218,11 +266,16 @@ impl SheetStore {
     pub fn read_sheet_bytes(&self, rel: &str) -> Result<(String, PathBuf, Vec<u8>, String)> {
         let _guard = self.lock.lock().unwrap();
         let (normalized, abs) = self.resolve_safe_pdf_path(rel)?;
-        let meta = fs::metadata(&abs).with_context(|| format!("sheet not found: {normalized}"))?;
+        let meta =
+            fs::symlink_metadata(&abs).with_context(|| format!("sheet not found: {normalized}"))?;
+        if meta.file_type().is_symlink() || !meta.is_file() {
+            bail!("sheet path must be a regular file: {normalized}");
+        }
         if meta.len() as usize > MAX_PDF_BYTES {
             bail!("sheet exceeds 64 MiB limit");
         }
-        let bytes = fs::read(&abs).with_context(|| format!("failed reading {normalized}"))?;
+        let bytes = read_bounded(&abs, MAX_PDF_BYTES)
+            .with_context(|| format!("failed reading {normalized}"))?;
         let sha = sha256_hex(&bytes);
         Ok((normalized, abs, bytes, sha))
     }
@@ -236,13 +289,39 @@ impl SheetStore {
             bail!("uploaded file does not start with %PDF- header");
         }
         let (normalized, abs) = self.resolve_safe_pdf_path(rel)?;
-        if abs.exists() && !overwrite {
-            bail!("sheet already exists: {normalized} (pass overwrite=true to replace)");
-        }
         if let Some(parent) = abs.parent() {
             fs::create_dir_all(parent)?;
         }
-        write_file_atomic_replace(&abs, bytes)?;
+        if overwrite {
+            if let Ok(meta) = fs::symlink_metadata(&abs) {
+                if meta.file_type().is_symlink() || !meta.is_file() {
+                    bail!("cannot overwrite non-regular file at {normalized}");
+                }
+            }
+            write_file_atomic_replace(&abs, bytes)?;
+            // Invalidate any previous sidecar metadata so stale character details are not advertised.
+            for sc in [
+                Self::sidecar_path_for(&abs),
+                Self::legacy_sidecar_path_for(&abs),
+            ] {
+                if let Ok(meta) = fs::symlink_metadata(&sc) {
+                    if meta.is_file() && !meta.file_type().is_symlink() {
+                        let _ = fs::remove_file(&sc);
+                    }
+                }
+            }
+        } else {
+            if let Err(err) = write_file_atomic_create_new(&abs, bytes) {
+                if err
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|io| io.kind() == std::io::ErrorKind::AlreadyExists)
+                    || abs.exists()
+                {
+                    bail!("sheet already exists: {normalized} (pass overwrite=true to replace)");
+                }
+                return Err(err);
+            }
+        }
         sheet_entry_from_path(&self.root, &abs)
     }
 
@@ -256,35 +335,109 @@ impl SheetStore {
     ) -> Result<SaveResult> {
         let _guard = self.lock.lock().unwrap();
         let (_normalized, abs) = self.resolve_safe_pdf_path(rel)?;
-        if let Some(expected) = expected_sha256 {
-            if !force {
-                if !abs.exists() {
-                    return Ok(SaveResult::Conflict {
-                        expected_sha256: expected.to_owned(),
-                        current_sha256: "<deleted>".to_owned(),
-                    });
-                }
-                let current_bytes = fs::read(&abs)?;
-                let current_sha = sha256_hex(&current_bytes);
-                if current_sha != expected {
-                    return Ok(SaveResult::Conflict {
-                        expected_sha256: expected.to_owned(),
-                        current_sha256: current_sha,
-                    });
-                }
-            }
-        }
         if let Some(parent) = abs.parent() {
             fs::create_dir_all(parent)?;
         }
-        write_file_atomic_replace(&abs, pdf_bytes)?;
-        let mut sidecar_written = false;
-        if let Some(sidecar) = state_sidecar {
+
+        // Validate and pre-stage sidecar BEFORE modifying the PDF so a sidecar
+        // path error (e.g., sidecar destination is a directory or symlink) cannot
+        // leave the PDF updated while returning an error.
+        let staged_sidecar = if let Some(sidecar) = state_sidecar {
             let sidecar_path = Self::sidecar_path_for(&abs);
+            if let Ok(meta) = fs::symlink_metadata(&sidecar_path) {
+                if meta.file_type().is_symlink() || !meta.is_file() {
+                    bail!(
+                        "sidecar destination is not a regular file: {}",
+                        sidecar_path.display()
+                    );
+                }
+            }
             let mut pretty = serde_json::to_vec_pretty(sidecar)?;
             pretty.push(b'\n');
-            write_file_atomic_replace(&sidecar_path, &pretty)?;
+            let tmp = stage_temp_file(&sidecar_path, &pretty)?;
+            Some((tmp, sidecar_path))
+        } else {
+            None
+        };
+
+        let check_expected = || -> Result<Option<SaveResult>> {
+            if let Some(expected) = expected_sha256 {
+                if !force {
+                    let meta = match fs::symlink_metadata(&abs) {
+                        Ok(m) => m,
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                            return Ok(Some(SaveResult::Conflict {
+                                expected_sha256: expected.to_owned(),
+                                current_sha256: "<deleted>".to_owned(),
+                            }));
+                        }
+                        Err(e) => return Err(e.into()),
+                    };
+                    if meta.file_type().is_symlink() || !meta.is_file() {
+                        bail!("target sheet is not a regular file");
+                    }
+                    let current_bytes = read_bounded(&abs, MAX_PDF_BYTES)?;
+                    let current_sha = sha256_hex(&current_bytes);
+                    if current_sha != expected {
+                        return Ok(Some(SaveResult::Conflict {
+                            expected_sha256: expected.to_owned(),
+                            current_sha256: current_sha,
+                        }));
+                    }
+                }
+            }
+            Ok(None)
+        };
+
+        if let Some(conflict) = check_expected()? {
+            if let Some((tmp, _)) = staged_sidecar {
+                let _ = fs::remove_file(tmp);
+            }
+            return Ok(conflict);
+        }
+
+        // Stage the PDF first, then re-verify expected SHA immediately before
+        // committing to narrow any cross-process race window as tightly as possible.
+        let staged_pdf = stage_temp_file(&abs, pdf_bytes)?;
+        if let Some(conflict) = check_expected()? {
+            let _ = fs::remove_file(staged_pdf);
+            if let Some((tmp, _)) = staged_sidecar {
+                let _ = fs::remove_file(tmp);
+            }
+            return Ok(conflict);
+        }
+
+        // Hold an advisory lock file during commit for cross-process coordination
+        // (multiple server/CLI instances writing to the same store).
+        let _commit_lock = acquire_store_lock(&self.root);
+        if let Some(conflict) = check_expected()? {
+            let _ = fs::remove_file(staged_pdf);
+            if let Some((tmp, _)) = staged_sidecar {
+                let _ = fs::remove_file(tmp);
+            }
+            return Ok(conflict);
+        }
+
+        if let Err(err) = fs::rename(&staged_pdf, &abs) {
+            let _ = fs::remove_file(&staged_pdf);
+            if let Some((tmp, _)) = staged_sidecar {
+                let _ = fs::remove_file(tmp);
+            }
+            return Err(err).with_context(|| format!("failed replacing {}", abs.display()));
+        }
+        let mut sidecar_written = false;
+        if let Some((tmp, sidecar_path)) = staged_sidecar {
+            if let Err(err) = fs::rename(&tmp, &sidecar_path) {
+                let _ = fs::remove_file(&tmp);
+                return Err(err)
+                    .with_context(|| format!("failed replacing {}", sidecar_path.display()));
+            }
             sidecar_written = true;
+        }
+        if let Some(parent) = abs.parent() {
+            if let Ok(dir) = fs::File::open(parent) {
+                let _ = dir.sync_all();
+            }
         }
         Ok(SaveResult::Saved {
             sha256: sha256_hex(pdf_bytes),
@@ -396,7 +549,10 @@ impl SheetStore {
         let pull_res = if old_head.is_none() {
             self.run_git(cfg, &["checkout", "-B", &cfg.branch, &remote_ref])
         } else {
-            self.run_git(cfg, &["merge", "--ff-only", &remote_ref])
+            self.run_git(
+                cfg,
+                &["merge", "--ff-only", "--no-overwrite-ignore", &remote_ref],
+            )
         };
         if let Err(err) = pull_res {
             let msg = format!("{err:#}");
@@ -427,26 +583,47 @@ impl SheetStore {
         let Some(cfg) = &self.git else {
             bail!("Git storage is not enabled");
         };
-        // Stage all PDF sheets, state sidecars, and deletions without staging temporary files.
+        // Refuse to sweep unrelated pre-staged non-sheet files into a sheet sync commit.
+        let pre_staged = self.run_git(cfg, &["diff", "--cached", "--name-only", "-z"])?;
+        let unrelated: Vec<&str> = pre_staged
+            .split('\0')
+            .filter(|p| !p.is_empty() && !is_sheet_or_sidecar_path(p))
+            .collect();
+        if !unrelated.is_empty() {
+            bail!(
+                "refusing to sync with unrelated staged files in Git index: {}",
+                unrelated.join(", ")
+            );
+        }
+
+        // Stage ONLY non-ignored PDF sheets, state sidecars, and deletions of tracked sheets/sidecars.
         let mut sheet_paths = Vec::new();
         collect_stageable_paths(&self.root, &self.root, &mut sheet_paths)?;
-        let mut add_args: Vec<&str> = vec!["add", "--all", "--"];
-        if sheet_paths.is_empty() {
-            // Still stage deletions if files were removed.
-            let _ = self.run_git_allow_fail(cfg, &["add", "-u"]);
-        } else {
-            for p in &sheet_paths {
+        let ignored_set = self.ignored_paths(cfg, &sheet_paths)?;
+        let mut stage_paths: Vec<String> = sheet_paths
+            .into_iter()
+            .filter(|p| !ignored_set.contains(p))
+            .collect();
+
+        // Include tracked deletions strictly for sheet PDFs and sidecars.
+        let deleted = self.run_git(cfg, &["ls-files", "-d", "-z"])?;
+        for p in deleted.split('\0') {
+            if !p.is_empty() && is_sheet_or_sidecar_path(p) && !stage_paths.iter().any(|s| s == p) {
+                stage_paths.push(p.to_owned());
+            }
+        }
+
+        if !stage_paths.is_empty() {
+            let mut add_args: Vec<&str> = vec!["add", "--all", "--"];
+            for p in &stage_paths {
                 add_args.push(p.as_str());
             }
             self.run_git(cfg, &add_args)?;
-            let _ = self.run_git_allow_fail(cfg, &["add", "-u"]);
         }
 
-        let staged = self
-            .run_git_allow_fail(cfg, &["diff", "--cached", "--name-only"])
-            .unwrap_or_default();
+        let staged = self.run_git(cfg, &["diff", "--cached", "--name-only", "-z"])?;
         let mut committed = false;
-        if !staged.trim().is_empty() {
+        if staged.split('\0').any(|p| !p.is_empty()) {
             let msg = if commit_message.trim().is_empty() {
                 "Update MPMB character sheet"
             } else {
@@ -592,6 +769,8 @@ impl SheetStore {
                     cfg,
                     &[
                         "clone",
+                        "--origin",
+                        &cfg.remote,
                         "--branch",
                         &cfg.branch,
                         &cfg.repo_url,
@@ -622,6 +801,27 @@ impl SheetStore {
                     self.run_git_allow_fail(cfg, &["remote", "add", &cfg.remote, &cfg.repo_url]);
             }
         } else {
+            // Verify active branch matches configured branch on existing checkouts.
+            let active_branch = self
+                .run_git_allow_fail(cfg, &["symbolic-ref", "--short", "HEAD"])
+                .ok()
+                .filter(|s| !s.is_empty());
+            match active_branch.as_deref() {
+                Some(b) if b == cfg.branch => {}
+                Some(b) => {
+                    bail!(
+                        "existing Git checkout is on branch '{}' instead of configured branch '{}'",
+                        b,
+                        cfg.branch
+                    );
+                }
+                None => {
+                    bail!(
+                        "existing Git checkout has a detached HEAD instead of configured branch '{}'",
+                        cfg.branch
+                    );
+                }
+            }
             let existing = self
                 .run_git_allow_fail(cfg, &["remote", "get-url", &cfg.remote])
                 .ok();
@@ -632,21 +832,85 @@ impl SheetStore {
                     self.run_git(cfg, &["remote", "add", &cfg.remote, &cfg.repo_url])?;
                 }
             }
+            // Fail closed if an explicit push URL still points to a different repository.
+            if let Ok(push_urls) =
+                self.run_git_allow_fail(cfg, &["remote", "get-url", "--push", "--all", &cfg.remote])
+            {
+                for push_url in push_urls.lines().map(str::trim).filter(|s| !s.is_empty()) {
+                    if push_url != cfg.repo_url {
+                        bail!(
+                            "remote '{}' has explicit push URL '{}' differing from configured repo '{}'",
+                            cfg.remote,
+                            redact_url(push_url),
+                            redact_url(&cfg.repo_url)
+                        );
+                    }
+                }
+            }
         }
         self.run_git(cfg, &["config", "user.name", &cfg.author_name])?;
         self.run_git(cfg, &["config", "user.email", &cfg.author_email])?;
-        // Keep temporary staging files untracked even if a crash ever left one behind.
+        // Keep hidden temporary staging/lock files untracked even if a crash ever left one behind.
         let exclude = self.root.join(".git/info/exclude");
         if let Ok(mut existing) = fs::read_to_string(&exclude) {
-            if !existing.contains("*.mpmb-tmp-*") {
-                if !existing.ends_with('\n') && !existing.is_empty() {
+            let mut changed = false;
+            for pattern in [
+                format!("{STAGING_PREFIX}*{STAGING_SUFFIX}"),
+                ".mpmb-store.lock".to_owned(),
+            ] {
+                if !existing.lines().any(|l| l.trim() == pattern) {
+                    if !existing.ends_with('\n') && !existing.is_empty() {
+                        existing.push('\n');
+                    }
+                    existing.push_str(&pattern);
                     existing.push('\n');
+                    changed = true;
                 }
-                existing.push_str("*.mpmb-tmp-*\n");
+            }
+            if changed {
                 let _ = fs::write(&exclude, existing);
             }
         }
         Ok(())
+    }
+
+    fn ignored_paths(
+        &self,
+        cfg: &GitConfig,
+        paths: &[String],
+    ) -> Result<std::collections::HashSet<String>> {
+        let mut ignored = std::collections::HashSet::new();
+        if paths.is_empty() {
+            return Ok(ignored);
+        }
+        let mut cmd =
+            self.prepare_git_cmd(Some(&self.root), cfg, &["check-ignore", "-z", "--stdin"])?;
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = cmd.spawn().context("failed to spawn git check-ignore")?;
+        if let Some(mut stdin) = child.stdin.take() {
+            for p in paths {
+                let _ = stdin.write_all(p.as_bytes());
+                let _ = stdin.write_all(b"\0");
+            }
+        }
+        let output = wait_child_with_timeout(
+            child,
+            Duration::from_secs(cfg.timeout_secs.max(1)),
+            "git check-ignore",
+        )?;
+        // Exit code 0 = some ignored; exit code 1 = none ignored; other = error.
+        if output.status.code() == Some(0) {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for p in stdout.split('\0').filter(|s| !s.is_empty()) {
+                ignored.insert(p.to_owned());
+            }
+        } else if output.status.code() != Some(1) {
+            let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            bail!("git check-ignore failed: {detail}");
+        }
+        Ok(ignored)
     }
 
     fn ahead_behind(&self, cfg: &GitConfig) -> (usize, usize) {
@@ -671,10 +935,23 @@ impl SheetStore {
         self.run_git_in(Some(&self.root), cfg, args)
     }
 
-    fn run_git_in(&self, cwd: Option<&Path>, cfg: &GitConfig, args: &[&str]) -> Result<String> {
+    fn prepare_git_cmd(
+        &self,
+        cwd: Option<&Path>,
+        cfg: &GitConfig,
+        args: &[&str],
+    ) -> Result<Command> {
         let mut cmd = Command::new("git");
+        for key in GIT_ENV_SCRUB_KEYS {
+            cmd.env_remove(key);
+        }
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
+        }
+        // Treat path arguments literally for commands that interpret pathspec magic
+        // (so filenames like `:hero.pdf` work reliably; `check-ignore` rejects it).
+        if matches!(args.first().copied(), Some("add" | "log")) {
+            cmd.arg("--literal-pathspecs");
         }
         // Kubernetes local-path PVCs are commonly owned by root:<fsGroup> while
         // the server runs non-root (uid 1000). Scope safe.directory explicitly
@@ -694,7 +971,7 @@ impl SheetStore {
 
         if let Some(ssh_key) = &cfg.ssh_key {
             let mut ssh_cmd = format!(
-                "ssh -i {} -o IdentitiesOnly=yes -o BatchMode=yes",
+                "ssh -i {} -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15",
                 shell_quote(ssh_key.to_string_lossy().as_ref())
             );
             if let Some(kh) = &cfg.ssh_known_hosts {
@@ -707,6 +984,11 @@ impl SheetStore {
             }
             cmd.env("GIT_SSH_COMMAND", ssh_cmd);
         }
+        Ok(cmd)
+    }
+
+    fn run_git_in(&self, cwd: Option<&Path>, cfg: &GitConfig, args: &[&str]) -> Result<String> {
+        let mut cmd = self.prepare_git_cmd(cwd, cfg, args)?;
 
         // For HTTPS tokens, pass credentials via a transient GIT_ASKPASS script
         // so the token is never written into .git/config or command arguments.
@@ -720,9 +1002,15 @@ impl SheetStore {
             }
         }
 
-        let output = cmd
-            .output()
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let child = cmd
+            .spawn()
             .with_context(|| format!("failed to execute git {}", args.join(" ")))?;
+        let label = format!("git {}", args.first().copied().unwrap_or(""));
+        let output =
+            wait_child_with_timeout(child, Duration::from_secs(cfg.timeout_secs.max(1)), &label)?;
         drop(askpass_guard);
 
         if !output.status.success() {
@@ -786,19 +1074,100 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
-pub fn write_file_atomic_replace(path: &Path, bytes: &[u8]) -> Result<()> {
+fn wait_child_with_timeout(
+    mut child: std::process::Child,
+    timeout: Duration,
+    label: &str,
+) -> Result<std::process::Output> {
+    let mut stdout_pipe = child.stdout.take();
+    let mut stderr_pipe = child.stderr.take();
+    let out_thread = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(ref mut s) = stdout_pipe {
+            let _ = s.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let err_thread = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(ref mut s) = stderr_pipe {
+            let _ = s.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait()? {
+            Some(status) => break status,
+            None => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = out_thread.join();
+                    let _ = err_thread.join();
+                    bail!("{label} timed out after {}s", timeout.as_secs());
+                }
+                std::thread::sleep(Duration::from_millis(15));
+            }
+        }
+    };
+    let stdout = out_thread.join().unwrap_or_default();
+    let stderr = err_thread.join().unwrap_or_default();
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn read_bounded(path: &Path, max_bytes: usize) -> Result<Vec<u8>> {
+    let mut file = fs::File::open(path)?;
+    let mut buf = Vec::new();
+    let mut limited = Read::by_ref(&mut file).take((max_bytes as u64).saturating_add(1));
+    limited.read_to_end(&mut buf)?;
+    if buf.len() > max_bytes {
+        bail!("file {} exceeds {} byte limit", path.display(), max_bytes);
+    }
+    Ok(buf)
+}
+
+fn is_sheet_or_sidecar_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".pdf") || lower.ends_with(".state.json")
+}
+
+struct StoreFileLock {
+    _file: fs::File,
+}
+
+fn acquire_store_lock(root: &Path) -> Option<StoreFileLock> {
+    let lock_path = root.join(".mpmb-store.lock");
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .ok()?;
+    let _ = file.lock();
+    Some(StoreFileLock { _file: file })
+}
+
+fn stage_temp_file(path: &Path, bytes: &[u8]) -> Result<PathBuf> {
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    let stem = path.file_name().and_then(|n| n.to_str()).unwrap_or("sheet");
     let pid = std::process::id();
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
-    let tmp = parent.join(format!(".{stem}.mpmb-tmp-{pid}-{nanos}-{seq}"));
+    // Short fixed-length staging basename independent of destination filename length.
+    let tmp = parent.join(format!(
+        "{STAGING_PREFIX}{pid}-{nanos}-{seq}{STAGING_SUFFIX}"
+    ));
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -810,12 +1179,46 @@ pub fn write_file_atomic_replace(path: &Path, bytes: &[u8]) -> Result<()> {
         return Err(err).with_context(|| format!("failed writing staging file {}", tmp.display()));
     }
     drop(file);
+    Ok(tmp)
+}
+
+pub fn write_file_atomic_replace(path: &Path, bytes: &[u8]) -> Result<()> {
+    let tmp = stage_temp_file(path, bytes)?;
     if let Err(err) = fs::rename(&tmp, path) {
         let _ = fs::remove_file(&tmp);
         return Err(err).with_context(|| format!("failed replacing {}", path.display()));
     }
-    if let Ok(dir) = fs::File::open(parent) {
-        let _ = dir.sync_all();
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        if let Ok(dir) = fs::File::open(parent) {
+            let _ = dir.sync_all();
+        }
+    }
+    Ok(())
+}
+
+fn write_file_atomic_create_new(path: &Path, bytes: &[u8]) -> Result<()> {
+    let tmp = stage_temp_file(path, bytes)?;
+    #[cfg(unix)]
+    {
+        let link_res = fs::hard_link(&tmp, path);
+        let _ = fs::remove_file(&tmp);
+        link_res.with_context(|| format!("failed creating {}", path.display()))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = fs::remove_file(&tmp);
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .with_context(|| format!("failed creating {}", path.display()))?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+    }
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        if let Ok(dir) = fs::File::open(parent) {
+            let _ = dir.sync_all();
+        }
     }
     Ok(())
 }
@@ -828,15 +1231,23 @@ fn collect_pdfs(root: &Path, dir: &Path, out: &mut Vec<SheetEntry>) -> Result<()
         let entry = entry?;
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
-        if name_str.starts_with('.') {
+        if name_str.starts_with('.') || name_str.contains('\\') {
             continue;
         }
         let path = entry.path();
         let ty = entry.file_type()?;
+        if ty.is_symlink() {
+            continue;
+        }
         if ty.is_dir() {
             collect_pdfs(root, &path, out)?;
         } else if ty.is_file() && name_str.to_ascii_lowercase().ends_with(".pdf") {
-            out.push(sheet_entry_from_path(root, &path)?);
+            match sheet_entry_from_path(root, &path) {
+                Ok(item) => out.push(item),
+                Err(err) => {
+                    eprintln!("WARN: skipping sheet {}: {err:#}", path.display());
+                }
+            }
         }
     }
     Ok(())
@@ -850,19 +1261,19 @@ fn collect_stageable_paths(root: &Path, dir: &Path, out: &mut Vec<String>) -> Re
         let entry = entry?;
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
-        if name_str.starts_with('.') || name_str.contains(".mpmb-tmp-") {
+        if name_str.starts_with('.') || name_str.contains('\\') {
             continue;
         }
         let path = entry.path();
         let ty = entry.file_type()?;
+        if ty.is_symlink() {
+            continue;
+        }
         if ty.is_dir() {
             collect_stageable_paths(root, &path, out)?;
-        } else if ty.is_file() {
-            let lower = name_str.to_ascii_lowercase();
-            if lower.ends_with(".pdf") || lower.ends_with(".state.json") {
-                if let Ok(rel) = path.strip_prefix(root) {
-                    out.push(rel.to_string_lossy().replace('\\', "/"));
-                }
+        } else if ty.is_file() && is_sheet_or_sidecar_path(&name_str) {
+            if let Ok(rel) = path.strip_prefix(root) {
+                out.push(rel.to_string_lossy().replace('\\', "/"));
             }
         }
     }
@@ -879,22 +1290,38 @@ fn sheet_entry_from_path(root: &Path, abs: &Path) -> Result<SheetEntry> {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| rel.clone());
-    let meta = fs::metadata(abs)?;
-    let bytes = fs::read(abs)?;
+    let meta = fs::symlink_metadata(abs)?;
+    if meta.file_type().is_symlink() || !meta.is_file() {
+        bail!("not a regular file");
+    }
+    if meta.len() as usize > MAX_PDF_BYTES {
+        bail!("sheet exceeds 64 MiB limit");
+    }
+    let bytes = read_bounded(abs, MAX_PDF_BYTES)?;
     let modified_unix = meta
         .modified()
         .ok()
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let sidecar_path = SheetStore::sidecar_path_for(abs);
-    let sidecar_json = if sidecar_path.is_file() {
-        fs::read(&sidecar_path)
-            .ok()
-            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+    let primary_sidecar = SheetStore::sidecar_path_for(abs);
+    let legacy_sidecar = SheetStore::legacy_sidecar_path_for(abs);
+    let sidecar_path = if primary_sidecar.is_file() {
+        Some(primary_sidecar)
+    } else if legacy_sidecar.is_file() {
+        Some(legacy_sidecar)
     } else {
         None
     };
+    let sidecar_json = sidecar_path.as_ref().and_then(|p| {
+        let sm = fs::symlink_metadata(p).ok()?;
+        if sm.file_type().is_symlink() || !sm.is_file() || sm.len() as usize > MAX_SIDECAR_BYTES {
+            return None;
+        }
+        read_bounded(p, MAX_SIDECAR_BYTES)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+    });
     let str_opt = |v: &Value| {
         v.as_str()
             .map(str::trim)
@@ -907,7 +1334,7 @@ fn sheet_entry_from_path(root: &Path, abs: &Path) -> Result<SheetEntry> {
         size_bytes: meta.len(),
         sha256: sha256_hex(&bytes),
         modified_unix,
-        has_state_sidecar: sidecar_path.is_file(),
+        has_state_sidecar: sidecar_path.is_some(),
         character_name: sidecar_json
             .as_ref()
             .and_then(|j| str_opt(&j["character"]["name"])),
@@ -1434,7 +1861,7 @@ mod tests {
                     let sidecar = json!({"character":{"name":format!("Hero-{tid}-{iter}")}});
                     // Mix forced writes, CAS conflict-checked writes, reads, listings, and syncs.
                     if iter % 3 == 0 {
-                        let _ = st
+                        let res = st
                             .save_sheet_atomic(
                                 "shared.pdf",
                                 payload.as_bytes(),
@@ -1443,6 +1870,7 @@ mod tests {
                                 false,
                             )
                             .unwrap();
+                        assert!(matches!(res, SaveResult::Conflict { .. }));
                     } else {
                         let res = st
                             .save_sheet_atomic(
@@ -1479,6 +1907,140 @@ mod tests {
                 "stray staging file leaked: {name}"
             );
         }
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn storage_hardening_symlinks_sidecars_pushurl_branch_and_ignored_files() {
+        let base = temp_dir("storage-hardening");
+        let outside = base.join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("leak.pdf"), b"%PDF-1.7\n%secret\n").unwrap();
+
+        let bare = base.join("remote.git");
+        let bare2 = base.join("remote2.git");
+        init_bare_remote(&bare);
+        init_bare_remote(&bare2);
+        let work = base.join("work");
+
+        let store = SheetStore::open(StoreConfig {
+            root: work.clone(),
+            git: Some(GitConfig::new(bare.to_string_lossy().into_owned())),
+        })
+        .unwrap();
+
+        // 1. Symlink escape is rejected on read/upload/save.
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&outside, work.join("linked")).unwrap();
+            assert!(store.read_sheet_bytes("linked/leak.pdf").is_err());
+            assert!(store
+                .upload_sheet("linked/new.pdf", b"%PDF-1.7\n%x\n", true)
+                .is_err());
+        }
+
+        // 2. Sidecar directory error leaves PDF untouched.
+        let orig = b"%PDF-1.7\n%orig\n";
+        let uploaded = store.upload_sheet("hero.pdf", orig, false).unwrap();
+        let sc = SheetStore::sidecar_path_for(&work.join("hero.pdf"));
+        fs::create_dir_all(&sc).unwrap();
+        let err = store.save_sheet_atomic(
+            "hero.pdf",
+            b"%PDF-1.7\n%updated\n",
+            Some(&uploaded.sha256),
+            Some(&json!({"character": {"name": "Hero"}})),
+            false,
+        );
+        assert!(err.is_err());
+        assert_eq!(store.read_sheet_bytes("hero.pdf").unwrap().2, orig);
+        fs::remove_dir(&sc).unwrap();
+
+        // 3. Overwrite upload invalidates stale sidecar metadata.
+        let saved = store
+            .save_sheet_atomic(
+                "hero.pdf",
+                b"%PDF-1.7\n%v2\n",
+                Some(&uploaded.sha256),
+                Some(&json!({"character": {"name": "OldHero"}})),
+                false,
+            )
+            .unwrap();
+        assert!(matches!(
+            saved,
+            SaveResult::Saved {
+                sidecar_written: true,
+                ..
+            }
+        ));
+        let replaced = store
+            .upload_sheet("hero.pdf", b"%PDF-1.7\n%v3\n", true)
+            .unwrap();
+        assert!(!replaced.has_state_sidecar);
+        assert_eq!(replaced.character_name, None);
+
+        // 4. Ignored PDF does not block syncing other sheets, and unrelated tracked files stay unstaged.
+        fs::write(work.join(".gitignore"), "drafts/\n").unwrap();
+        store
+            .upload_sheet("drafts/local-only.pdf", b"%PDF-1.7\n%draft\n", false)
+            .unwrap();
+        store
+            .upload_sheet(":colon.pdf", b"%PDF-1.7\n%colon\n", false)
+            .unwrap();
+        fs::write(work.join("README.md"), "unrelated\n").unwrap();
+        let sync = store.git_sync("sync sheets only").unwrap();
+        assert!(sync.committed && sync.pushed);
+        let history = store.git_history(Some(":colon.pdf"), 5).unwrap();
+        assert_eq!(history.len(), 1);
+        let committed_files = String::from_utf8(
+            Command::new("git")
+                .current_dir(&bare)
+                .args(["show", "--name-only", "--format=", "main"])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap();
+        assert!(committed_files.contains("hero.pdf"));
+        assert!(committed_files.contains(":colon.pdf"));
+        assert!(!committed_files.contains("drafts/local-only.pdf"));
+        assert!(!committed_files.contains("README.md"));
+
+        // 5. Explicit mismatched pushurl fails closed on re-open.
+        let status = Command::new("git")
+            .current_dir(&work)
+            .args([
+                "remote",
+                "set-url",
+                "--push",
+                "origin",
+                &bare2.to_string_lossy(),
+            ])
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let err = SheetStore::open(StoreConfig {
+            root: work.clone(),
+            git: Some(GitConfig::new(bare.to_string_lossy().into_owned())),
+        });
+        assert!(err.is_err());
+
+        // Clear explicit pushurl and test wrong active branch rejection.
+        let _ = Command::new("git")
+            .current_dir(&work)
+            .args(["config", "--unset", "remote.origin.pushurl"])
+            .status();
+        let status = Command::new("git")
+            .current_dir(&work)
+            .args(["checkout", "-b", "other-branch"])
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let err = SheetStore::open(StoreConfig {
+            root: work.clone(),
+            git: Some(GitConfig::new(bare.to_string_lossy().into_owned())),
+        });
+        assert!(err.is_err());
+
         let _ = fs::remove_dir_all(&base);
     }
 }
