@@ -1983,14 +1983,18 @@ mod tests {
         store
             .upload_sheet("drafts/local-only.pdf", b"%PDF-1.7\n%draft\n", false)
             .unwrap();
+        #[cfg(unix)]
         store
             .upload_sheet(":colon.pdf", b"%PDF-1.7\n%colon\n", false)
             .unwrap();
         fs::write(work.join("README.md"), "unrelated\n").unwrap();
         let sync = store.git_sync("sync sheets only").unwrap();
         assert!(sync.committed && sync.pushed);
-        let history = store.git_history(Some(":colon.pdf"), 5).unwrap();
-        assert_eq!(history.len(), 1);
+        #[cfg(unix)]
+        {
+            let history = store.git_history(Some(":colon.pdf"), 5).unwrap();
+            assert_eq!(history.len(), 1);
+        }
         let committed_files = String::from_utf8(
             Command::new("git")
                 .current_dir(&bare)
@@ -2001,6 +2005,7 @@ mod tests {
         )
         .unwrap();
         assert!(committed_files.contains("hero.pdf"));
+        #[cfg(unix)]
         assert!(committed_files.contains(":colon.pdf"));
         assert!(!committed_files.contains("drafts/local-only.pdf"));
         assert!(!committed_files.contains("README.md"));
