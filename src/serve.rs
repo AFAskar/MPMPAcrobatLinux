@@ -2,11 +2,11 @@ use crate::{
     pdf::Pdf,
     render::Renderer,
     runtime::{HostCapabilities, InteractionHandler, Runtime},
-    storage::{GitConfig, GitStatus, SaveResult, SheetStore, StoreConfig},
+    storage::{GitConfig, SaveResult, SheetStore, StoreConfig},
 };
 use anyhow::{anyhow, bail, Context, Result};
 use axum::{
-    body::Bytes,
+    body::Body,
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         DefaultBodyLimit, Path as AxumPath, Query, State,
@@ -25,7 +25,7 @@ use std::{
     net::SocketAddr,
     path::PathBuf,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU64, AtomicU8, Ordering},
         mpsc, Arc, Mutex,
     },
     time::{Duration, Instant},
@@ -238,6 +238,36 @@ pub struct PublicInteraction {
 
 type JobOutcome = std::result::Result<Value, (StatusCode, Value)>;
 
+const JOB_QUEUED: u8 = 0;
+const JOB_RUNNING: u8 = 1;
+const JOB_CANCELLED: u8 = 2;
+
+#[derive(Clone)]
+struct JobGate(Arc<AtomicU8>);
+
+impl JobGate {
+    fn new() -> Self {
+        Self(Arc::new(AtomicU8::new(JOB_QUEUED)))
+    }
+
+    fn try_start(&self) -> bool {
+        self.0
+            .compare_exchange(JOB_QUEUED, JOB_RUNNING, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    }
+
+    fn try_cancel(&self) -> bool {
+        self.0
+            .compare_exchange(
+                JOB_QUEUED,
+                JOB_CANCELLED,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
+    }
+}
+
 struct PendingInteraction {
     job_id: u64,
     public: PublicInteraction,
@@ -246,6 +276,7 @@ struct PendingInteraction {
 
 struct InteractionBridge {
     seq: AtomicU64,
+    state_seq: AtomicU64,
     current_job: AtomicU64,
     cancelling_job: AtomicU64,
     active: Mutex<Option<PendingInteraction>>,
@@ -261,6 +292,7 @@ impl InteractionBridge {
     ) -> Arc<Self> {
         Arc::new(Self {
             seq: AtomicU64::new(1),
+            state_seq: AtomicU64::new(1),
             current_job: AtomicU64::new(0),
             cancelling_job: AtomicU64::new(0),
             active: Mutex::new(None),
@@ -268,6 +300,10 @@ impl InteractionBridge {
             interaction_tx,
             events_tx,
         })
+    }
+
+    fn next_state_seq(&self) -> u64 {
+        self.state_seq.fetch_add(1, Ordering::SeqCst)
     }
 
     fn register_job(&self, job_id: u64, rx: watch::Receiver<Option<JobOutcome>>) {
@@ -312,11 +348,13 @@ impl InteractionBridge {
             // Mark this job as cancelling so any cascading follow-up modal/alert
             // fired while unwinding auto-cancels instead of re-blocking the worker.
             self.cancelling_job.store(pending.job_id, Ordering::SeqCst);
+            // Broadcast clear BEFORE waking the worker so `state_updated` never
+            // arrives ahead of `interaction_cleared`.
             let _ = self.interaction_tx.send(None);
+            let _ = self.events_tx.send(json!({"type": "interaction_cleared"}));
             let cancel_reply =
                 Self::cancel_reply_for(&pending.public.kind, &pending.public.request);
             let _ = pending.tx.send(cancel_reply);
-            let _ = self.events_tx.send(json!({"type": "interaction_cleared"}));
         }
     }
 
@@ -373,12 +411,14 @@ impl InteractionBridge {
                 public: public.clone(),
                 tx,
             });
+            // Publish both notifications while holding `active` so `respond()`
+            // cannot emit `interaction_cleared` before `interaction_requested`.
+            let _ = self.interaction_tx.send(Some((job_id, public.clone())));
+            let _ = self.events_tx.send(json!({
+                "type": "interaction_requested",
+                "interaction": public,
+            }));
         }
-        let _ = self.interaction_tx.send(Some((job_id, public.clone())));
-        let _ = self.events_tx.send(json!({
-            "type": "interaction_requested",
-            "interaction": public,
-        }));
         let reply = rx
             .recv()
             .map_err(|_| anyhow!("interaction channel closed before reply"))?;
@@ -411,6 +451,7 @@ impl InteractionHandler for InteractionBridge {
 enum WorkerCommand {
     Open {
         job_id: u64,
+        gate: JobGate,
         done: watch::Sender<Option<JobOutcome>>,
         rel_path: String,
         force: bool,
@@ -433,6 +474,7 @@ enum WorkerCommand {
     },
     Edit {
         job_id: u64,
+        gate: JobGate,
         done: watch::Sender<Option<JobOutcome>>,
         field: String,
         value: Value,
@@ -441,6 +483,7 @@ enum WorkerCommand {
     },
     Activate {
         job_id: u64,
+        gate: JobGate,
         done: watch::Sender<Option<JobOutcome>>,
         field: String,
         index: i64,
@@ -450,40 +493,47 @@ enum WorkerCommand {
     },
     InvokeMenu {
         job_id: u64,
+        gate: JobGate,
         done: watch::Sender<Option<JobOutcome>>,
         name: String,
         expected_sheet: Option<String>,
     },
     RunCommand {
         job_id: u64,
+        gate: JobGate,
         done: watch::Sender<Option<JobOutcome>>,
         action: String,
         expected_sheet: Option<String>,
     },
     RunBookmark {
         job_id: u64,
+        gate: JobGate,
         done: watch::Sender<Option<JobOutcome>>,
         path: String,
         expected_sheet: Option<String>,
     },
     SaveNow {
         job_id: u64,
+        gate: JobGate,
         done: watch::Sender<Option<JobOutcome>>,
         force: bool,
         expected_sheet: Option<String>,
     },
     GitSync {
         job_id: u64,
+        gate: JobGate,
         done: watch::Sender<Option<JobOutcome>>,
         message: String,
     },
     GitPull {
         job_id: u64,
+        gate: JobGate,
         done: watch::Sender<Option<JobOutcome>>,
         force: bool,
     },
     CheckIdleAutoSync {
         job_id: u64,
+        gate: JobGate,
         done: watch::Sender<Option<JobOutcome>>,
         idle_secs: u64,
     },
@@ -496,6 +546,7 @@ struct ActiveSheet {
     disk_sha256: String,
     revision: u64,
     dirty_since_save: bool,
+    sidecar_dirty: bool,
     dirty_since_sync: bool,
     last_edit_at: Option<Instant>,
     projected: Option<(u64, Vec<u8>)>,
@@ -530,6 +581,7 @@ impl SheetWorker {
                 }
                 WorkerCommand::CheckIdleAutoSync {
                     job_id,
+                    gate,
                     done,
                     idle_secs,
                 } => {
@@ -542,7 +594,9 @@ impl SheetWorker {
                                     .is_some_and(|t| t.elapsed() >= Duration::from_secs(idle_secs))
                         });
                     if should_sync {
-                        self.run_job(job_id, done, |w| w.do_git_sync("Auto-sync MPMB session"));
+                        self.run_job(job_id, gate, done, |w| {
+                            w.do_git_sync("Auto-sync MPMB session")
+                        });
                     } else {
                         let _ = done.send(Some(Ok(json!({"status": "skipped"}))));
                         self.bridge.finish_job(job_id);
@@ -550,27 +604,30 @@ impl SheetWorker {
                 }
                 WorkerCommand::Open {
                     job_id,
+                    gate,
                     done,
                     rel_path,
                     force,
                 } => {
-                    self.run_job(job_id, done, |w| w.open_sheet(&rel_path, force));
+                    self.run_job(job_id, gate, done, |w| w.open_sheet(&rel_path, force));
                 }
                 WorkerCommand::Edit {
                     job_id,
+                    gate,
                     done,
                     field,
                     value,
                     mode,
                     expected_sheet,
                 } => {
-                    self.run_job(job_id, done, |w| {
+                    self.run_job(job_id, gate, done, |w| {
                         w.verify_expected_sheet(expected_sheet.as_deref())?;
                         w.edit_field(&field, &value, &mode)
                     });
                 }
                 WorkerCommand::Activate {
                     job_id,
+                    gate,
                     done,
                     field,
                     index,
@@ -578,77 +635,94 @@ impl SheetWorker {
                     modifier,
                     expected_sheet,
                 } => {
-                    self.run_job(job_id, done, |w| {
+                    self.run_job(job_id, gate, done, |w| {
                         w.verify_expected_sheet(expected_sheet.as_deref())?;
                         w.activate_field(&field, index, shift, modifier)
                     });
                 }
                 WorkerCommand::InvokeMenu {
                     job_id,
+                    gate,
                     done,
                     name,
                     expected_sheet,
                 } => {
-                    self.run_job(job_id, done, |w| {
+                    self.run_job(job_id, gate, done, |w| {
                         w.verify_expected_sheet(expected_sheet.as_deref())?;
                         w.invoke_menu(&name)
                     });
                 }
                 WorkerCommand::RunCommand {
                     job_id,
+                    gate,
                     done,
                     action,
                     expected_sheet,
                 } => {
-                    self.run_job(job_id, done, |w| {
+                    self.run_job(job_id, gate, done, |w| {
                         w.verify_expected_sheet(expected_sheet.as_deref())?;
                         w.run_command(&action)
                     });
                 }
                 WorkerCommand::RunBookmark {
                     job_id,
+                    gate,
                     done,
                     path,
                     expected_sheet,
                 } => {
-                    self.run_job(job_id, done, |w| {
+                    self.run_job(job_id, gate, done, |w| {
                         w.verify_expected_sheet(expected_sheet.as_deref())?;
                         w.run_bookmark(&path)
                     });
                 }
                 WorkerCommand::SaveNow {
                     job_id,
+                    gate,
                     done,
                     force,
                     expected_sheet,
                 } => {
-                    self.run_job(job_id, done, |w| {
+                    self.run_job(job_id, gate, done, |w| {
                         w.verify_expected_sheet(expected_sheet.as_deref())?;
                         w.save_active(force)
                     });
                 }
                 WorkerCommand::GitSync {
                     job_id,
+                    gate,
                     done,
                     message,
                 } => {
-                    self.run_job(job_id, done, |w| w.do_git_sync(&message));
+                    self.run_job(job_id, gate, done, |w| w.do_git_sync(&message));
                 }
                 WorkerCommand::GitPull {
                     job_id,
+                    gate,
                     done,
                     force,
                 } => {
-                    self.run_job(job_id, done, |w| w.do_git_pull(force));
+                    self.run_job(job_id, gate, done, |w| w.do_git_pull(force));
                 }
             }
         }
     }
 
-    fn run_job<F>(&mut self, job_id: u64, done: watch::Sender<Option<JobOutcome>>, f: F)
-    where
+    fn run_job<F>(
+        &mut self,
+        job_id: u64,
+        gate: JobGate,
+        done: watch::Sender<Option<JobOutcome>>,
+        f: F,
+    ) where
         F: FnOnce(&mut Self) -> Result<Value>,
     {
+        if !gate.try_start() {
+            // Cancelled before execution (e.g. rejected with 409 because an earlier
+            // job opened a modal interaction while this job was queued).
+            self.bridge.finish_job(job_id);
+            return;
+        }
         self.bridge.set_current_job(job_id);
         let outcome = f(self);
         let job_result: JobOutcome = match outcome {
@@ -735,7 +809,9 @@ impl SheetWorker {
             Some(self.bridge.clone()),
             HostCapabilities::server_restricted(),
         )?;
-        let _ = rt.ready();
+        // Reject sheets that fail their startup readiness check BEFORE replacing
+        // the currently active session.
+        rt.ready()?;
         let revision = rt
             .eval("__host.revision")
             .ok()
@@ -748,6 +824,7 @@ impl SheetWorker {
             disk_sha256: sha,
             revision,
             dirty_since_save: false,
+            sidecar_dirty: false,
             dirty_since_sync: false,
             last_edit_at: None,
             projected: None,
@@ -762,9 +839,11 @@ impl SheetWorker {
     fn build_state_payload(&self) -> Result<Value> {
         let git = self.store.git_status()?;
         let active_interaction = self.bridge.active_public();
+        let state_seq = self.bridge.next_state_seq();
         let Some(sh) = &self.active else {
             return Ok(json!({
                 "open": false,
+                "stateSeq": state_seq,
                 "git": git,
                 "pdfium": self.renderer.is_some(),
                 "activeInteraction": active_interaction,
@@ -776,6 +855,7 @@ impl SheetWorker {
             .as_object_mut()
             .ok_or_else(|| anyhow!("state extraction did not return an object"))?;
         obj.insert("open".into(), json!(true));
+        obj.insert("stateSeq".into(), json!(state_seq));
         obj.insert("path".into(), json!(sh.rel_path));
         obj.insert("diskSha256".into(), json!(sh.disk_sha256));
         obj.insert("dirtySinceSave".into(), json!(sh.dirty_since_save));
@@ -814,7 +894,11 @@ impl SheetWorker {
             .ok()
             .and_then(|v| v.as_u64())
             .unwrap_or(sh.revision);
-        sh.revision = rev;
+        if rev != sh.revision {
+            sh.revision = rev;
+            sh.page_pngs.clear();
+            sh.page_sizes.retain(|&(_, r), _| r == rev);
+        }
         if let Some((cached_rev, bytes)) = &sh.projected {
             if *cached_rev == rev {
                 return Ok((rev, bytes.clone()));
@@ -898,6 +982,7 @@ impl SheetWorker {
                 sh.revision = next_rev;
                 sh.projected = None;
                 sh.page_pngs.clear();
+                sh.page_sizes.clear();
                 sh.dirty_since_save = true;
                 sh.dirty_since_sync = true;
                 sh.last_edit_at = Some(Instant::now());
@@ -952,12 +1037,16 @@ impl SheetWorker {
     }
 
     fn invoke_menu(&mut self, name: &str) -> Result<Value> {
-        {
+        let eval_result = {
             let sh = self.active.as_ref().context("no sheet is open")?;
             let qname = serde_json::to_string(name)?;
-            sh.rt.eval(&format!("__host.invokeMenu({qname})"))?;
-        }
-        self.after_mutation()
+            sh.rt.eval(&format!("__host.invokeMenu({qname})"))
+        };
+        // Reconcile sheet revision/dirty state even if the menu script threw
+        // after mutating fields, then propagate the original evaluation error.
+        let mutation = self.after_mutation();
+        eval_result?;
+        mutation
     }
 
     fn run_command(&mut self, action: &str) -> Result<Value> {
@@ -1006,16 +1095,57 @@ impl SheetWorker {
     fn persist_active(&mut self, force: bool) -> Result<SaveResult> {
         let sh = self.active.as_mut().context("no sheet is open")?;
         sh.rt.ready()?;
-        let snap = sh.rt.snapshot()?;
-        let pdf_bytes = sh.pdf.project(&snap)?;
         let rev = sh
             .rt
             .eval("__host.revision")
             .ok()
             .and_then(|v| v.as_u64())
             .unwrap_or(sh.revision);
-        sh.revision = rev;
-        sh.projected = Some((rev, pdf_bytes.clone()));
+        if rev != sh.revision {
+            sh.revision = rev;
+            sh.projected = None;
+            sh.page_pngs.clear();
+            sh.page_sizes.clear();
+            sh.dirty_since_save = true;
+        }
+
+        // If a prior save already replaced the PDF on disk and only sidecar
+        // publication failed, retry ONLY the sidecar write without overwriting
+        // the PDF (unless the sheet has new edits or `force` was requested).
+        if !force && !sh.dirty_since_save && sh.sidecar_dirty {
+            let extracted = sh.rt.eval(EXTRACT_STATE_JS).unwrap_or(Value::Null);
+            let sidecar = build_state_sidecar(&sh.rel_path, &extracted, &sh.disk_sha256);
+            self.store
+                .write_sidecar_atomic(&sh.rel_path, &sh.disk_sha256, &sidecar)?;
+            sh.sidecar_dirty = false;
+            sh.dirty_since_sync = true;
+            self.last_save_conflict = None;
+            let size_bytes = sh
+                .projected
+                .as_ref()
+                .map(|(_, b)| b.len() as u64)
+                .unwrap_or(0);
+            return Ok(SaveResult::Saved {
+                sha256: sh.disk_sha256.clone(),
+                size_bytes,
+                sidecar_written: true,
+            });
+        }
+
+        let snap = sh.rt.snapshot()?;
+        let pdf_bytes = sh.pdf.project(&snap)?;
+        let post_rev = sh
+            .rt
+            .eval("__host.revision")
+            .ok()
+            .and_then(|v| v.as_u64())
+            .unwrap_or(sh.revision);
+        if post_rev != sh.revision {
+            sh.revision = post_rev;
+            sh.page_pngs.clear();
+            sh.page_sizes.clear();
+        }
+        sh.projected = Some((sh.revision, pdf_bytes.clone()));
 
         let extracted = sh.rt.eval(EXTRACT_STATE_JS).unwrap_or(Value::Null);
         let sidecar = build_state_sidecar(
@@ -1034,8 +1164,23 @@ impl SheetWorker {
             SaveResult::Saved { sha256, .. } => {
                 sh.disk_sha256 = sha256.clone();
                 sh.dirty_since_save = false;
+                sh.sidecar_dirty = false;
                 sh.dirty_since_sync = true;
                 self.last_save_conflict = None;
+            }
+            SaveResult::PartialSidecarFailed {
+                sha256,
+                sidecar_error,
+                ..
+            } => {
+                // Record the new PDF hash so a follow-up retry writes only the
+                // unfinished sidecar instead of conflicting with our own PDF write.
+                sh.disk_sha256 = sha256.clone();
+                sh.dirty_since_save = false;
+                sh.sidecar_dirty = true;
+                sh.dirty_since_sync = true;
+                self.last_save_conflict = None;
+                bail!("PDF saved, but sidecar publication failed: {sidecar_error}");
             }
             SaveResult::Conflict { .. } => {
                 self.last_save_conflict = Some(save_res.clone());
@@ -1049,6 +1194,10 @@ impl SheetWorker {
         let state = self.build_state_payload()?;
         let (status, message) = match &res {
             SaveResult::Saved { .. } => ("ok", "Saved PDF & state sidecar to disk"),
+            SaveResult::PartialSidecarFailed { .. } => (
+                "partial",
+                "Saved PDF to disk, but failed updating state sidecar",
+            ),
             SaveResult::Conflict { .. } => (
                 "conflict",
                 "File changed externally on disk; pass force=true or pull before overwriting",
@@ -1116,20 +1265,31 @@ impl SheetWorker {
         let pull = self.store.git_pull()?;
         if pull.updated {
             if let Some(rel) = self.active.as_ref().map(|s| s.rel_path.clone()) {
-                if self.store.read_sheet_bytes(&rel).is_ok() {
-                    let _ = self.open_sheet(&rel, true)?;
-                } else {
-                    self.active = None;
-                    self.last_save_conflict = None;
-                    let git = self.store.git_status()?;
-                    let state = self.build_state_payload()?;
-                    return Ok(json!({
-                        "status": "conflict",
-                        "error": format!("Active sheet '{rel}' was removed by upstream Git pull"),
-                        "pull": pull,
-                        "git": git,
-                        "state": state,
-                    }));
+                match self.store.read_sheet_bytes(&rel) {
+                    Ok(_) => {
+                        let _ = self.open_sheet(&rel, true)?;
+                    }
+                    Err(err) => {
+                        let is_missing = err.chain().any(|cause| {
+                            cause
+                                .downcast_ref::<std::io::Error>()
+                                .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+                        });
+                        if is_missing {
+                            self.active = None;
+                            self.last_save_conflict = None;
+                            let git = self.store.git_status()?;
+                            let state = self.build_state_payload()?;
+                            return Ok(json!({
+                                "status": "conflict",
+                                "error": format!("Active sheet '{rel}' was removed by upstream Git pull"),
+                                "pull": pull,
+                                "git": git,
+                                "state": state,
+                            }));
+                        }
+                        return Err(err);
+                    }
                 }
             }
         }
@@ -1249,10 +1409,12 @@ impl AppState {
 
         if let Some(default_sheet) = &config.default_sheet {
             let job_id = state.job_seq.fetch_add(1, Ordering::SeqCst);
+            let gate = JobGate::new();
             let (done_tx, done_rx) = watch::channel(None);
             state.bridge.register_job(job_id, done_rx);
             let _ = state.cmd_tx.send(WorkerCommand::Open {
                 job_id,
+                gate,
                 done: done_tx,
                 rel_path: default_sheet.clone(),
                 force: true,
@@ -1299,20 +1461,25 @@ impl AppState {
 
     async fn dispatch_job(
         &self,
-        make_cmd: impl FnOnce(u64, watch::Sender<Option<JobOutcome>>) -> WorkerCommand,
+        make_cmd: impl FnOnce(u64, JobGate, watch::Sender<Option<JobOutcome>>) -> WorkerCommand,
     ) -> Response {
         if let Some(conflict) = self.interaction_conflict_response() {
             return conflict;
         }
         let job_id = self.job_seq.fetch_add(1, Ordering::SeqCst);
+        let gate = JobGate::new();
         let (done_tx, done_rx) = watch::channel(None);
         self.bridge.register_job(job_id, done_rx.clone());
         let mut int_rx = self.interaction_rx.clone();
-        if self.cmd_tx.send(make_cmd(job_id, done_tx)).is_err() {
+        if self
+            .cmd_tx
+            .send(make_cmd(job_id, gate.clone(), done_tx))
+            .is_err()
+        {
             self.bridge.finish_job(job_id);
             return err_response(StatusCode::INTERNAL_SERVER_ERROR, "sheet worker stopped");
         }
-        self.await_job_or_interaction(done_rx, &mut int_rx, job_id, None)
+        self.await_job_or_interaction(done_rx, &mut int_rx, job_id, Some(&gate), None)
             .await
     }
 
@@ -1321,6 +1488,7 @@ impl AppState {
         mut done_rx: watch::Receiver<Option<JobOutcome>>,
         int_rx: &mut watch::Receiver<Option<(u64, PublicInteraction)>>,
         target_job_id: u64,
+        gate: Option<&JobGate>,
         previous_interaction_id: Option<&str>,
     ) -> Response {
         loop {
@@ -1342,15 +1510,21 @@ impl AppState {
                     )
                         .into_response();
                 } else if jid != target_job_id {
-                    return (
-                        StatusCode::CONFLICT,
-                        Json(json!({
-                            "status": "interaction_required",
-                            "error": "Another operation opened a dialog or alert waiting for a response",
-                            "interaction": interaction,
-                        })),
-                    )
-                        .into_response();
+                    // Only return 409 Conflict if we atomically cancel our queued
+                    // job before the worker starts executing it. If our job has
+                    // already started running, keep waiting for its own result.
+                    if gate.is_some_and(|g| g.try_cancel()) {
+                        self.bridge.finish_job(target_job_id);
+                        return (
+                            StatusCode::CONFLICT,
+                            Json(json!({
+                                "status": "interaction_required",
+                                "error": "Another operation opened a dialog or alert waiting for a response",
+                                "interaction": interaction,
+                            })),
+                        )
+                            .into_response();
+                    }
                 }
             }
             tokio::select! {
@@ -1551,6 +1725,7 @@ struct HistoryQuery {
 
 fn build_router(state: AppState) -> Router {
     Router::new()
+        .route("/livez", get(handle_livez))
         .route("/healthz", get(handle_healthz))
         .route("/", get(handle_index))
         .route("/style.css", get(handle_css))
@@ -1587,18 +1762,22 @@ fn build_router(state: AppState) -> Router {
         .with_state(state)
 }
 
+async fn handle_livez() -> impl IntoResponse {
+    Json(json!({
+        "ok": true,
+        "version": env!("CARGO_PKG_VERSION"),
+    }))
+}
+
 async fn handle_healthz(State(state): State<AppState>) -> impl IntoResponse {
-    let store = Arc::clone(&state.store);
-    let git: Option<GitStatus> = tokio::task::spawn_blocking(move || store.git_status().ok())
-        .await
-        .ok()
-        .flatten();
+    // Never acquire the store mutex or shell out to Git in health/readiness
+    // handlers so slow Git sync pushes cannot trigger probe failures.
     Json(json!({
         "ok": true,
         "version": env!("CARGO_PKG_VERSION"),
         "pdfium": state.pdfium_available,
         "gitEnabled": state.store.git_enabled(),
-        "gitBranch": git.and_then(|g| g.branch),
+        "gitBranch": state.store.git_branch(),
     }))
 }
 
@@ -1740,19 +1919,70 @@ async fn handle_upload_sheet(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(q): Query<UploadQuery>,
-    body: Bytes,
+    body: Body,
 ) -> Response {
+    // Authenticate BEFORE reading or buffering any request body bytes.
     if !state.check_auth(&headers, q.token.as_deref()) {
         return err_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
     let store = Arc::clone(&state.store);
-    match tokio::task::spawn_blocking(move || store.upload_sheet(&q.name, &body, q.overwrite)).await
+    let name = q.name.clone();
+    let (norm, mut staged) =
+        match tokio::task::spawn_blocking(move || store.start_staged_upload(&name)).await {
+            Ok(Ok(pair)) => pair,
+            Ok(Err(e)) => return err_response(StatusCode::BAD_REQUEST, format!("{e:#}")),
+            Err(e) => return err_response(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        };
+
+    let mut stream = body.into_data_stream();
+    while let Some(chunk_res) = stream.next().await {
+        let chunk = match chunk_res {
+            Ok(c) => c,
+            Err(e) => {
+                let msg = e.to_string();
+                let status = if msg.contains("length limit exceeded") {
+                    StatusCode::PAYLOAD_TOO_LARGE
+                } else {
+                    StatusCode::BAD_REQUEST
+                };
+                return err_response(status, msg);
+            }
+        };
+        if chunk.is_empty() {
+            continue;
+        }
+        staged = match tokio::task::spawn_blocking(move || -> Result<_> {
+            staged.write_chunk(&chunk)?;
+            Ok(staged)
+        })
+        .await
+        {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => {
+                let msg = format!("{e:#}");
+                let status = if msg.contains("exceeds 64 MiB") {
+                    StatusCode::PAYLOAD_TOO_LARGE
+                } else {
+                    StatusCode::BAD_REQUEST
+                };
+                return err_response(status, msg);
+            }
+            Err(e) => return err_response(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        };
+    }
+
+    let store = Arc::clone(&state.store);
+    let overwrite = q.overwrite;
+    match tokio::task::spawn_blocking(move || store.commit_staged_upload(&norm, staged, overwrite))
+        .await
     {
         Ok(Ok(entry)) => (StatusCode::CREATED, Json(json!({"sheet": entry}))).into_response(),
         Ok(Err(e)) => {
             let msg = format!("{e:#}");
             let status = if msg.contains("already exists") {
                 StatusCode::CONFLICT
+            } else if msg.contains("exceeds 64 MiB") {
+                StatusCode::PAYLOAD_TOO_LARGE
             } else {
                 StatusCode::BAD_REQUEST
             };
@@ -1807,8 +2037,9 @@ async fn handle_open_session(
     // Switching sheets cancels any lingering modal (including cascading dialogs) on the previous sheet.
     state.bridge.cancel_active();
     state
-        .dispatch_job(|job_id, done| WorkerCommand::Open {
+        .dispatch_job(|job_id, gate, done| WorkerCommand::Open {
             job_id,
+            gate,
             done,
             rel_path: req.path,
             force: req.force,
@@ -1916,8 +2147,9 @@ async fn handle_edit_field(
         return err_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
     state
-        .dispatch_job(|job_id, done| WorkerCommand::Edit {
+        .dispatch_job(|job_id, gate, done| WorkerCommand::Edit {
             job_id,
+            gate,
             done,
             field: req.field,
             value: req.value,
@@ -1936,8 +2168,9 @@ async fn handle_activate_field(
         return err_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
     state
-        .dispatch_job(|job_id, done| WorkerCommand::Activate {
+        .dispatch_job(|job_id, gate, done| WorkerCommand::Activate {
             job_id,
+            gate,
             done,
             field: req.field,
             index: req.index,
@@ -1957,8 +2190,9 @@ async fn handle_invoke_menu(
         return err_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
     state
-        .dispatch_job(|job_id, done| WorkerCommand::InvokeMenu {
+        .dispatch_job(|job_id, gate, done| WorkerCommand::InvokeMenu {
             job_id,
+            gate,
             done,
             name: req.name,
             expected_sheet: req.sheet,
@@ -1975,8 +2209,9 @@ async fn handle_run_command(
         return err_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
     state
-        .dispatch_job(|job_id, done| WorkerCommand::RunCommand {
+        .dispatch_job(|job_id, gate, done| WorkerCommand::RunCommand {
             job_id,
+            gate,
             done,
             action: req.action,
             expected_sheet: req.sheet,
@@ -1993,8 +2228,9 @@ async fn handle_run_bookmark(
         return err_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
     state
-        .dispatch_job(|job_id, done| WorkerCommand::RunBookmark {
+        .dispatch_job(|job_id, gate, done| WorkerCommand::RunBookmark {
             job_id,
+            gate,
             done,
             path: req.path,
             expected_sheet: req.sheet,
@@ -2011,8 +2247,9 @@ async fn handle_save_session(
         return err_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
     state
-        .dispatch_job(|job_id, done| WorkerCommand::SaveNow {
+        .dispatch_job(|job_id, gate, done| WorkerCommand::SaveNow {
             job_id,
+            gate,
             done,
             force: req.force,
             expected_sheet: req.sheet,
@@ -2110,7 +2347,7 @@ async fn handle_interaction_reply(
         Err(e) => return err_response(StatusCode::CONFLICT, format!("{e:#}")),
     };
     state
-        .await_job_or_interaction(done_rx, &mut int_rx, job_id, Some(&id))
+        .await_job_or_interaction(done_rx, &mut int_rx, job_id, None, Some(&id))
         .await
 }
 
@@ -2139,8 +2376,9 @@ async fn handle_git_sync(
         return err_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
     state
-        .dispatch_job(|job_id, done| WorkerCommand::GitSync {
+        .dispatch_job(|job_id, gate, done| WorkerCommand::GitSync {
             job_id,
+            gate,
             done,
             message: req.message,
         })
@@ -2157,8 +2395,9 @@ async fn handle_git_pull(
     }
     let force = req.map(|Json(r)| r.force).unwrap_or(false);
     state
-        .dispatch_job(|job_id, done| WorkerCommand::GitPull {
+        .dispatch_job(|job_id, gate, done| WorkerCommand::GitPull {
             job_id,
+            gate,
             done,
             force,
         })
@@ -2323,11 +2562,13 @@ async fn run_server(config: ServeConfig) -> Result<()> {
                     continue;
                 }
                 let job_id = job_seq.fetch_add(1, Ordering::SeqCst);
+                let gate = JobGate::new();
                 let (done_tx, done_rx) = watch::channel(None);
                 bridge.register_job(job_id, done_rx);
                 if tx
                     .send(WorkerCommand::CheckIdleAutoSync {
                         job_id,
+                        gate,
                         done: done_tx,
                         idle_secs: idle,
                     })
@@ -3532,6 +3773,277 @@ mod tests {
         .await;
         assert_eq!(st, StatusCode::OK);
         assert_eq!(switched["state"]["path"], "other.pdf");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn server_round2_livez_auth_upload_readiness_menu_throw_and_cancelled_queued_job() {
+        let base = std::env::temp_dir().join(format!("mpmb-serve-round2-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let store_dir = base.join("store");
+        std::fs::create_dir_all(&store_dir).unwrap();
+
+        // Build a PDF with:
+        // - PC Name field
+        // - a menu item "MutateThenThrow" that mutates PC Name and throws
+        // - a menu item "SlowPrompt" that spins briefly before opening an alert
+        let build_scripted_pdf = |out_path: &std::path::Path, js: &str| {
+            use lopdf::{dictionary, Object, StringFormat};
+            let mut doc = lopdf::Document::with_version("1.7");
+            let pages_id = doc.new_object_id();
+            let field_id = doc.add_object(dictionary! {
+                "Type" => "Annot",
+                "Subtype" => "Widget",
+                "FT" => "Tx",
+                "T" => Object::String(b"PC Name".to_vec(), StringFormat::Literal),
+                "V" => Object::String(b"Initial".to_vec(), StringFormat::Literal),
+                "Rect" => vec![10.into(), 10.into(), 200.into(), 40.into()],
+            });
+            let page_id = doc.add_object(dictionary! {
+                "Type" => "Page",
+                "Parent" => pages_id,
+                "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+                "Annots" => vec![field_id.into()],
+            });
+            doc.objects.insert(
+                pages_id,
+                Object::Dictionary(dictionary! {
+                    "Type" => "Pages",
+                    "Kids" => vec![page_id.into()],
+                    "Count" => 1,
+                }),
+            );
+            let form_id = doc.add_object(dictionary! {
+                "Fields" => vec![field_id.into()],
+            });
+            let js_action = doc.add_object(dictionary! {
+                "S" => "JavaScript",
+                "JS" => Object::String(js.as_bytes().to_vec(), StringFormat::Literal),
+            });
+            let js_tree = doc.add_object(dictionary! {
+                "Names" => vec![
+                    Object::String(b"Init".to_vec(), StringFormat::Literal),
+                    js_action.into(),
+                ],
+            });
+            let names_id = doc.add_object(dictionary! {
+                "JavaScript" => js_tree,
+            });
+            let cat_id = doc.add_object(dictionary! {
+                "Type" => "Catalog",
+                "Pages" => pages_id,
+                "AcroForm" => form_id,
+                "Names" => names_id,
+            });
+            doc.trailer.set("Root", cat_id);
+            let mut bytes = Vec::new();
+            doc.save_to(&mut bytes).unwrap();
+            std::fs::write(out_path, bytes).unwrap();
+        };
+
+        build_scripted_pdf(
+            &store_dir.join("good.pdf"),
+            r#"
+                app.addMenuItem({
+                    cName: "MutateThenThrow",
+                    cUser: "Mutate Then Throw",
+                    cParent: "Edit",
+                    cExec: "getField('PC Name').value = 'MutatedBeforeThrow'; throw new Error('boom');"
+                });
+                app.addMenuItem({
+                    cName: "DelayedAlert",
+                    cUser: "Delayed Alert",
+                    cParent: "Edit",
+                    cExec: "var t = Date.now(); while (Date.now() - t < 300) {} app.alert({cTitle:'Pause', cMsg:'Wait', nType:0, nIcon:0}); getField('PC Name').value = 'AfterAlert';"
+                });
+            "#,
+        );
+        // Startup leaves `delay = true` with no resumable timer -> Runtime::ready() fails!
+        build_scripted_pdf(&store_dir.join("stuck-ready.pdf"), "this.delay = true;");
+        make_interactive_test_pdf(&store_dir.join("second.pdf"));
+
+        let state = AppState::start(&ServeConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            store: StoreConfig {
+                root: store_dir.clone(),
+                git: None,
+            },
+            default_sheet: None,
+            auth_token: Some("tok-r2".into()),
+            autosave: false,
+            git_auto_sync_secs: 0,
+        })
+        .unwrap();
+        let app = build_router(state);
+
+        // 1. /livez and /healthz respond 200 OK without auth.
+        for path in ["/livez", "/healthz"] {
+            let resp = app
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK, "{path} should return 200");
+        }
+
+        // 2. Unauthenticated upload returns 401 BEFORE reading/staging body.
+        let unauth_up = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sheets/upload?name=unauth.pdf")
+                    .body(Body::from(b"%PDF-1.7\n%should-not-write\n".to_vec()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauth_up.status(), StatusCode::UNAUTHORIZED);
+        assert!(!store_dir.join("unauth.pdf").exists());
+
+        // Helper with auth header.
+        let authed_post = |app: Router, uri: &'static str, body: Value| async move {
+            let resp = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .header("authorization", "Bearer tok-r2")
+                        .header("content-type", "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = resp.status();
+            let bytes = axum::body::to_bytes(resp.into_body(), 4 * 1024 * 1024)
+                .await
+                .unwrap();
+            let json: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+            (status, json)
+        };
+
+        // 3. Open good.pdf, then attempt to open stuck-ready.pdf -> rejected, keeping good.pdf active!
+        let (st, opened) = authed_post(
+            app.clone(),
+            "/api/session/open",
+            json!({"path": "good.pdf"}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        let seq1 = opened["state"]["stateSeq"].as_u64().unwrap();
+        let (st, _) = authed_post(
+            app.clone(),
+            "/api/session/open",
+            json!({"path": "stuck-ready.pdf"}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        let state_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/session/state")
+                    .header("authorization", "Bearer tok-r2")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let state_json: Value = serde_json::from_slice(
+            &axum::body::to_bytes(state_resp.into_body(), 1024 * 1024)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(state_json["path"], "good.pdf");
+        assert!(state_json["stateSeq"].as_u64().unwrap() > seq1);
+
+        // 4. Menu item that mutates PC Name and then throws STILL marks dirty_since_save=true,
+        //    so a non-force switch returns 409 Conflict instead of silently losing the edit!
+        let (st, _) = authed_post(
+            app.clone(),
+            "/api/session/menu",
+            json!({"name": "MutateThenThrow", "sheet": "good.pdf"}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        let (st, _) = authed_post(
+            app.clone(),
+            "/api/session/open",
+            json!({"path": "second.pdf"}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::CONFLICT);
+
+        // Save to clear dirty flag before testing queued-job cancellation.
+        let (st, _) = authed_post(
+            app.clone(),
+            "/api/session/save",
+            json!({"sheet": "good.pdf"}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+
+        // 5. Queue Job B (edit PC Name -> 'GhostQueuedEdit') right BEFORE Job A opens its alert.
+        //    Job B must receive 409 Conflict AND must NOT execute after Job A's alert is answered!
+        let app_a = app.clone();
+        let job_a = tokio::spawn(async move {
+            authed_post(
+                app_a,
+                "/api/session/menu",
+                json!({"name": "DelayedAlert", "sheet": "good.pdf"}),
+            )
+            .await
+        });
+        // Give Job A ~40ms to enter the worker loop and start its 300ms spin BEFORE opening alert.
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        let app_b = app.clone();
+        let job_b = tokio::spawn(async move {
+            authed_post(
+                app_b,
+                "/api/session/edit",
+                json!({"field": "PC Name", "value": "GhostQueuedEdit", "sheet": "good.pdf"}),
+            )
+            .await
+        });
+
+        let (st_a, body_a) = job_a.await.unwrap();
+        assert_eq!(st_a, StatusCode::ACCEPTED);
+        let inter_id = body_a["interaction"]["id"].as_str().unwrap().to_owned();
+
+        let (st_b, _) = job_b.await.unwrap();
+        assert_eq!(st_b, StatusCode::CONFLICT);
+
+        // Answer Job A's alert; verify Job A completes and Job B NEVER ran!
+        let reply_uri = format!("/api/session/interaction/{inter_id}");
+        let reply_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(&reply_uri)
+                    .header("authorization", "Bearer tok-r2")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({"button": 1, "checked": false}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(reply_resp.status(), StatusCode::OK);
+        let reply_json: Value = serde_json::from_slice(
+            &axum::body::to_bytes(reply_resp.into_body(), 1024 * 1024)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            reply_json["state"]["character"]["name"], "AfterAlert",
+            "cancelled queued Job B must never execute after Job A finishes"
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }

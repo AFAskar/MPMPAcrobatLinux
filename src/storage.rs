@@ -3,13 +3,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashSet,
     fs,
     io::{Read, Write},
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
     sync::{
         atomic::{AtomicU64, Ordering},
-        Mutex,
+        mpsc, Mutex,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -88,6 +89,11 @@ pub enum SaveResult {
         sha256: String,
         size_bytes: u64,
         sidecar_written: bool,
+    },
+    PartialSidecarFailed {
+        sha256: String,
+        size_bytes: u64,
+        sidecar_error: String,
     },
     Conflict {
         expected_sha256: String,
@@ -175,15 +181,19 @@ impl SheetStore {
         self.git.is_some()
     }
 
+    pub fn git_branch(&self) -> Option<&str> {
+        self.git.as_ref().map(|g| g.branch.as_str())
+    }
+
     pub fn resolve_safe_pdf_path(&self, rel: &str) -> Result<(String, PathBuf)> {
-        let trimmed = rel.trim().replace('\\', "/");
-        if trimmed.is_empty() || trimmed.len() > 240 {
+        let raw = rel.replace('\\', "/");
+        if raw.is_empty() || raw.len() > 240 {
             bail!("invalid sheet path");
         }
-        if trimmed.bytes().any(|b| b < 0x20 || b == 0x7f) {
+        if raw.bytes().any(|b| b < 0x20 || b == 0x7f) {
             bail!("sheet path contains control characters");
         }
-        let path = Path::new(&trimmed);
+        let path = Path::new(&raw);
         let mut parts = Vec::new();
         for comp in path.components() {
             match comp {
@@ -193,6 +203,9 @@ impl SheetStore {
                         .ok_or_else(|| anyhow!("sheet path must be valid UTF-8"))?;
                     if s.is_empty() || s.starts_with('.') || s == ".git" {
                         bail!("sheet path cannot contain hidden or .git segments");
+                    }
+                    if s != s.trim() {
+                        bail!("sheet path segments cannot have leading or trailing whitespace");
                     }
                     parts.push(s.to_owned());
                 }
@@ -266,8 +279,17 @@ impl SheetStore {
     pub fn read_sheet_bytes(&self, rel: &str) -> Result<(String, PathBuf, Vec<u8>, String)> {
         let _guard = self.lock.lock().unwrap();
         let (normalized, abs) = self.resolve_safe_pdf_path(rel)?;
-        let meta =
-            fs::symlink_metadata(&abs).with_context(|| format!("sheet not found: {normalized}"))?;
+        let meta = match fs::symlink_metadata(&abs) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(anyhow::Error::new(e).context(format!("sheet not found: {normalized}")));
+            }
+            Err(e) => {
+                return Err(
+                    anyhow::Error::new(e).context(format!("failed to stat sheet: {normalized}"))
+                );
+            }
+        };
         if meta.file_type().is_symlink() || !meta.is_file() {
             bail!("sheet path must be a regular file: {normalized}");
         }
@@ -280,25 +302,38 @@ impl SheetStore {
         Ok((normalized, abs, bytes, sha))
     }
 
-    pub fn upload_sheet(&self, rel: &str, bytes: &[u8], overwrite: bool) -> Result<SheetEntry> {
+    pub fn start_staged_upload(&self, rel: &str) -> Result<(String, StagedUpload)> {
         let _guard = self.lock.lock().unwrap();
-        if bytes.is_empty() || bytes.len() > MAX_PDF_BYTES {
-            bail!("PDF upload must be between 1 byte and 64 MiB");
+        let (normalized, abs) = self.resolve_safe_pdf_path(rel)?;
+        if let Some(parent) = abs.parent() {
+            fs::create_dir_all(parent)?;
         }
-        if !bytes.starts_with(b"%PDF-") {
-            bail!("uploaded file does not start with %PDF- header");
-        }
+        let staged = StagedUpload::create(&abs)?;
+        Ok((normalized, staged))
+    }
+
+    pub fn commit_staged_upload(
+        &self,
+        rel: &str,
+        mut staged: StagedUpload,
+        overwrite: bool,
+    ) -> Result<SheetEntry> {
+        staged.finish()?;
+        let _guard = self.lock.lock().unwrap();
         let (normalized, abs) = self.resolve_safe_pdf_path(rel)?;
         if let Some(parent) = abs.parent() {
             fs::create_dir_all(parent)?;
         }
         if overwrite {
+            let _commit_lock = acquire_store_lock(&self.root)?;
             if let Ok(meta) = fs::symlink_metadata(&abs) {
                 if meta.file_type().is_symlink() || !meta.is_file() {
                     bail!("cannot overwrite non-regular file at {normalized}");
                 }
             }
-            write_file_atomic_replace(&abs, bytes)?;
+            staged
+                .publish_replace(&abs)
+                .with_context(|| format!("failed replacing {}", abs.display()))?;
             // Invalidate any previous sidecar metadata so stale character details are not advertised.
             for sc in [
                 Self::sidecar_path_for(&abs),
@@ -310,8 +345,10 @@ impl SheetStore {
                     }
                 }
             }
+            sync_parent_dir(&abs);
         } else {
-            if let Err(err) = write_file_atomic_create_new(&abs, bytes) {
+            let _commit_lock = acquire_store_lock(&self.root)?;
+            if let Err(err) = staged.publish_create_new(&abs) {
                 if err
                     .downcast_ref::<std::io::Error>()
                     .is_some_and(|io| io.kind() == std::io::ErrorKind::AlreadyExists)
@@ -321,8 +358,67 @@ impl SheetStore {
                 }
                 return Err(err);
             }
+            sync_parent_dir(&abs);
         }
         sheet_entry_from_path(&self.root, &abs)
+    }
+
+    #[cfg(test)]
+    pub fn upload_sheet(&self, rel: &str, bytes: &[u8], overwrite: bool) -> Result<SheetEntry> {
+        if bytes.is_empty() || bytes.len() > MAX_PDF_BYTES {
+            bail!("PDF upload must be between 1 byte and 64 MiB");
+        }
+        if !bytes.starts_with(b"%PDF-") {
+            bail!("uploaded file does not start with %PDF- header");
+        }
+        let (normalized, mut staged) = self.start_staged_upload(rel)?;
+        staged.write_chunk(bytes)?;
+        self.commit_staged_upload(&normalized, staged, overwrite)
+    }
+
+    pub fn write_sidecar_atomic(
+        &self,
+        rel: &str,
+        expected_pdf_sha256: &str,
+        state_sidecar: &Value,
+    ) -> Result<()> {
+        let _guard = self.lock.lock().unwrap();
+        let (_normalized, abs) = self.resolve_safe_pdf_path(rel)?;
+        let sidecar_path = Self::sidecar_path_for(&abs);
+        if let Ok(meta) = fs::symlink_metadata(&sidecar_path) {
+            if meta.file_type().is_symlink() || !meta.is_file() {
+                bail!(
+                    "sidecar destination is not a regular file: {}",
+                    sidecar_path.display()
+                );
+            }
+        }
+        let stamped = stamp_sidecar_sha(state_sidecar, expected_pdf_sha256);
+        let mut pretty = serde_json::to_vec_pretty(&stamped)?;
+        pretty.push(b'\n');
+        let staged_sidecar = StagedFile::create(&sidecar_path, &pretty)?;
+
+        let _commit_lock = acquire_store_lock(&self.root)?;
+        let meta = match fs::symlink_metadata(&abs) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                bail!("conflict: sheet was deleted before sidecar retry");
+            }
+            Err(e) => return Err(e.into()),
+        };
+        if meta.file_type().is_symlink() || !meta.is_file() {
+            bail!("target sheet is not a regular file");
+        }
+        let current_bytes = read_bounded(&abs, MAX_PDF_BYTES)?;
+        let current_sha = sha256_hex(&current_bytes);
+        if current_sha != expected_pdf_sha256 {
+            bail!("conflict: sheet changed externally on disk before sidecar retry");
+        }
+        staged_sidecar
+            .publish(&sidecar_path)
+            .with_context(|| format!("failed replacing {}", sidecar_path.display()))?;
+        sync_parent_dir(&abs);
+        Ok(())
     }
 
     pub fn save_sheet_atomic(
@@ -334,31 +430,11 @@ impl SheetStore {
         force: bool,
     ) -> Result<SaveResult> {
         let _guard = self.lock.lock().unwrap();
-        let (_normalized, abs) = self.resolve_safe_pdf_path(rel)?;
-        if let Some(parent) = abs.parent() {
-            fs::create_dir_all(parent)?;
+        if pdf_bytes.len() > MAX_PDF_BYTES {
+            bail!("serialized PDF exceeds {} bytes", MAX_PDF_BYTES);
         }
-
-        // Validate and pre-stage sidecar BEFORE modifying the PDF so a sidecar
-        // path error (e.g., sidecar destination is a directory or symlink) cannot
-        // leave the PDF updated while returning an error.
-        let staged_sidecar = if let Some(sidecar) = state_sidecar {
-            let sidecar_path = Self::sidecar_path_for(&abs);
-            if let Ok(meta) = fs::symlink_metadata(&sidecar_path) {
-                if meta.file_type().is_symlink() || !meta.is_file() {
-                    bail!(
-                        "sidecar destination is not a regular file: {}",
-                        sidecar_path.display()
-                    );
-                }
-            }
-            let mut pretty = serde_json::to_vec_pretty(sidecar)?;
-            pretty.push(b'\n');
-            let tmp = stage_temp_file(&sidecar_path, &pretty)?;
-            Some((tmp, sidecar_path))
-        } else {
-            None
-        };
+        let (_normalized, abs) = self.resolve_safe_pdf_path(rel)?;
+        let new_sha = sha256_hex(pdf_bytes);
 
         let check_expected = || -> Result<Option<SaveResult>> {
             if let Some(expected) = expected_sha256 {
@@ -389,58 +465,66 @@ impl SheetStore {
             Ok(None)
         };
 
+        // Run initial expected-hash check BEFORE sidecar preflight so a deleted
+        // or externally modified PDF reports Conflict instead of a sidecar error.
         if let Some(conflict) = check_expected()? {
-            if let Some((tmp, _)) = staged_sidecar {
-                let _ = fs::remove_file(tmp);
-            }
             return Ok(conflict);
         }
 
-        // Stage the PDF first, then re-verify expected SHA immediately before
-        // committing to narrow any cross-process race window as tightly as possible.
-        let staged_pdf = stage_temp_file(&abs, pdf_bytes)?;
-        if let Some(conflict) = check_expected()? {
-            let _ = fs::remove_file(staged_pdf);
-            if let Some((tmp, _)) = staged_sidecar {
-                let _ = fs::remove_file(tmp);
-            }
-            return Ok(conflict);
+        if let Some(parent) = abs.parent() {
+            fs::create_dir_all(parent)?;
         }
+
+        // Validate and pre-stage sidecar BEFORE modifying the PDF; RAII guards
+        // ensure staged files are always removed on any early return or error.
+        let staged_sidecar = if let Some(sidecar) = state_sidecar {
+            let sidecar_path = Self::sidecar_path_for(&abs);
+            if let Ok(meta) = fs::symlink_metadata(&sidecar_path) {
+                if meta.file_type().is_symlink() || !meta.is_file() {
+                    bail!(
+                        "sidecar destination is not a regular file: {}",
+                        sidecar_path.display()
+                    );
+                }
+            }
+            let stamped = stamp_sidecar_sha(sidecar, &new_sha);
+            let mut pretty = serde_json::to_vec_pretty(&stamped)?;
+            pretty.push(b'\n');
+            let tmp = StagedFile::create(&sidecar_path, &pretty)?;
+            Some((tmp, sidecar_path))
+        } else {
+            None
+        };
+
+        let staged_pdf = StagedFile::create(&abs, pdf_bytes)?;
 
         // Hold an advisory lock file during commit for cross-process coordination
-        // (multiple server/CLI instances writing to the same store).
-        let _commit_lock = acquire_store_lock(&self.root);
+        // (multiple server/CLI instances writing to the same store). Fail closed
+        // if the lock cannot be acquired.
+        let _commit_lock = acquire_store_lock(&self.root)?;
         if let Some(conflict) = check_expected()? {
-            let _ = fs::remove_file(staged_pdf);
-            if let Some((tmp, _)) = staged_sidecar {
-                let _ = fs::remove_file(tmp);
-            }
             return Ok(conflict);
         }
 
-        if let Err(err) = fs::rename(&staged_pdf, &abs) {
-            let _ = fs::remove_file(&staged_pdf);
-            if let Some((tmp, _)) = staged_sidecar {
-                let _ = fs::remove_file(tmp);
-            }
-            return Err(err).with_context(|| format!("failed replacing {}", abs.display()));
-        }
+        staged_pdf
+            .publish(&abs)
+            .with_context(|| format!("failed replacing {}", abs.display()))?;
+
         let mut sidecar_written = false;
         if let Some((tmp, sidecar_path)) = staged_sidecar {
-            if let Err(err) = fs::rename(&tmp, &sidecar_path) {
-                let _ = fs::remove_file(&tmp);
-                return Err(err)
-                    .with_context(|| format!("failed replacing {}", sidecar_path.display()));
+            if let Err(err) = tmp.publish(&sidecar_path) {
+                sync_parent_dir(&abs);
+                return Ok(SaveResult::PartialSidecarFailed {
+                    sha256: new_sha,
+                    size_bytes: pdf_bytes.len() as u64,
+                    sidecar_error: format!("failed replacing {}: {err}", sidecar_path.display()),
+                });
             }
             sidecar_written = true;
         }
-        if let Some(parent) = abs.parent() {
-            if let Ok(dir) = fs::File::open(parent) {
-                let _ = dir.sync_all();
-            }
-        }
+        sync_parent_dir(&abs);
         Ok(SaveResult::Saved {
-            sha256: sha256_hex(pdf_bytes),
+            sha256: new_sha,
             size_bytes: pdf_bytes.len() as u64,
             sidecar_written,
         })
@@ -480,8 +564,8 @@ impl SheetStore {
             .filter(|s| !s.is_empty() && s != "HEAD")
             .or_else(|| Some(cfg.branch.clone()));
         let porcelain = self
-            .run_git_allow_fail(cfg, &["status", "--porcelain"])
-            .unwrap_or_default();
+            .run_git(cfg, &["status", "--porcelain"])
+            .context("failed checking Git working tree status")?;
         let changed_files: Vec<String> = porcelain
             .lines()
             .filter(|l| !l.trim().is_empty())
@@ -518,9 +602,13 @@ impl SheetStore {
             .run_git_allow_fail(cfg, &["rev-parse", "HEAD"])
             .ok()
             .filter(|s| !s.is_empty());
-        let porcelain = self
-            .run_git_allow_fail(cfg, &["status", "--porcelain"])
-            .unwrap_or_default();
+        let porcelain = match self.run_git(cfg, &["status", "--porcelain"]) {
+            Ok(out) => out,
+            Err(err) => {
+                guard.last_error = Some(format!("{err:#}"));
+                return Err(err).context("failed checking Git working tree status before pull");
+            }
+        };
         if !porcelain.trim().is_empty() {
             return Ok(PullResult {
                 updated: false,
@@ -530,7 +618,7 @@ impl SheetStore {
                 message: "Working tree has uncommitted local changes; sync before pulling".into(),
             });
         }
-        if let Err(err) = self.run_git(cfg, &["fetch", &cfg.remote, &cfg.branch]) {
+        if let Err(err) = self.run_git(cfg, &["fetch", "--", &cfg.remote, &cfg.branch]) {
             let msg = format!("{err:#}");
             if msg.contains("couldn't find remote ref") {
                 guard.last_error = None;
@@ -545,13 +633,26 @@ impl SheetStore {
             guard.last_error = Some(msg);
             return Err(err);
         }
-        let remote_ref = format!("{}/{}", cfg.remote, cfg.branch);
+        // Use the exact commit fetched into FETCH_HEAD rather than assuming the
+        // remote refspec wrote to `<remote>/<branch>`.
+        let fetched_ref = match self.run_git(cfg, &["rev-parse", "--verify", "FETCH_HEAD"]) {
+            Ok(sha) if !sha.is_empty() => sha,
+            Ok(_) => {
+                let err = anyhow!("FETCH_HEAD was empty after fetching {}", cfg.branch);
+                guard.last_error = Some(format!("{err:#}"));
+                return Err(err);
+            }
+            Err(err) => {
+                guard.last_error = Some(format!("{err:#}"));
+                return Err(err);
+            }
+        };
         let pull_res = if old_head.is_none() {
-            self.run_git(cfg, &["checkout", "-B", &cfg.branch, &remote_ref])
+            self.run_git(cfg, &["checkout", "-B", &cfg.branch, &fetched_ref])
         } else {
             self.run_git(
                 cfg,
-                &["merge", "--ff-only", "--no-overwrite-ignore", &remote_ref],
+                &["merge", "--ff-only", "--no-overwrite-ignore", &fetched_ref],
             )
         };
         if let Err(err) = pull_res {
@@ -583,8 +684,16 @@ impl SheetStore {
         let Some(cfg) = &self.git else {
             bail!("Git storage is not enabled");
         };
-        // Refuse to sweep unrelated pre-staged non-sheet files into a sheet sync commit.
-        let pre_staged = self.run_git(cfg, &["diff", "--cached", "--name-only", "-z"])?;
+        // Hold the cross-process store lock across pre-stage validation, staging,
+        // and commit so another instance cannot publish a PDF+sidecar pair mid-commit.
+        let commit_lock = acquire_store_lock(&self.root)?;
+
+        // Refuse to sweep unrelated pre-staged non-sheet files (including the old
+        // path of a staged rename) into a sheet sync commit.
+        let pre_staged = self.run_git_raw(
+            cfg,
+            &["diff", "--cached", "--name-only", "-z", "--no-renames"],
+        )?;
         let unrelated: Vec<&str> = pre_staged
             .split('\0')
             .filter(|p| !p.is_empty() && !is_sheet_or_sidecar_path(p))
@@ -599,14 +708,10 @@ impl SheetStore {
         // Stage ONLY non-ignored PDF sheets, state sidecars, and deletions of tracked sheets/sidecars.
         let mut sheet_paths = Vec::new();
         collect_stageable_paths(&self.root, &self.root, &mut sheet_paths)?;
-        let ignored_set = self.ignored_paths(cfg, &sheet_paths)?;
-        let mut stage_paths: Vec<String> = sheet_paths
-            .into_iter()
-            .filter(|p| !ignored_set.contains(p))
-            .collect();
+        let mut stage_paths = self.filter_non_ignored_paths(cfg, sheet_paths)?;
 
         // Include tracked deletions strictly for sheet PDFs and sidecars.
-        let deleted = self.run_git(cfg, &["ls-files", "-d", "-z"])?;
+        let deleted = self.run_git_raw(cfg, &["ls-files", "-d", "-z"])?;
         for p in deleted.split('\0') {
             if !p.is_empty() && is_sheet_or_sidecar_path(p) && !stage_paths.iter().any(|s| s == p) {
                 stage_paths.push(p.to_owned());
@@ -621,7 +726,10 @@ impl SheetStore {
             self.run_git(cfg, &add_args)?;
         }
 
-        let staged = self.run_git(cfg, &["diff", "--cached", "--name-only", "-z"])?;
+        let staged = self.run_git_raw(
+            cfg,
+            &["diff", "--cached", "--name-only", "-z", "--no-renames"],
+        )?;
         let mut committed = false;
         if staged.split('\0').any(|p| !p.is_empty()) {
             let msg = if commit_message.trim().is_empty() {
@@ -632,6 +740,9 @@ impl SheetStore {
             self.run_git(cfg, &["commit", "-m", msg])?;
             committed = true;
         }
+        // Release the cross-process file lock before network push so saves on
+        // another process are not blocked across slow remote pushes.
+        drop(commit_lock);
 
         let commit_sha = self
             .run_git_allow_fail(cfg, &["rev-parse", "HEAD"])
@@ -874,43 +985,28 @@ impl SheetStore {
         Ok(())
     }
 
-    fn ignored_paths(
-        &self,
-        cfg: &GitConfig,
-        paths: &[String],
-    ) -> Result<std::collections::HashSet<String>> {
-        let mut ignored = std::collections::HashSet::new();
+    fn filter_non_ignored_paths(&self, cfg: &GitConfig, paths: Vec<String>) -> Result<Vec<String>> {
         if paths.is_empty() {
-            return Ok(ignored);
+            return Ok(Vec::new());
         }
-        let mut cmd =
-            self.prepare_git_cmd(Some(&self.root), cfg, &["check-ignore", "-z", "--stdin"])?;
-        cmd.stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let mut child = cmd.spawn().context("failed to spawn git check-ignore")?;
-        if let Some(mut stdin) = child.stdin.take() {
-            for p in paths {
-                let _ = stdin.write_all(p.as_bytes());
-                let _ = stdin.write_all(b"\0");
-            }
-        }
-        let output = wait_child_with_timeout(
-            child,
-            Duration::from_secs(cfg.timeout_secs.max(1)),
-            "git check-ignore",
+        // Query tracked and non-ignored untracked files via NUL-delimited ls-files.
+        // This avoids both stdin/stdout pipe deadlocks and Git pathspec-magic parsing
+        // on literal filenames such as `:(glob)hero.pdf`.
+        let listed = self.run_git_raw(
+            cfg,
+            &[
+                "ls-files",
+                "-z",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+            ],
         )?;
-        // Exit code 0 = some ignored; exit code 1 = none ignored; other = error.
-        if output.status.code() == Some(0) {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            for p in stdout.split('\0').filter(|s| !s.is_empty()) {
-                ignored.insert(p.to_owned());
-            }
-        } else if output.status.code() != Some(1) {
-            let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-            bail!("git check-ignore failed: {detail}");
-        }
-        Ok(ignored)
+        let eligible: HashSet<&str> = listed.split('\0').filter(|s| !s.is_empty()).collect();
+        Ok(paths
+            .into_iter()
+            .filter(|p| eligible.contains(p.as_str()))
+            .collect())
     }
 
     fn ahead_behind(&self, cfg: &GitConfig) -> (usize, usize) {
@@ -931,6 +1027,10 @@ impl SheetStore {
         self.run_git_in(Some(&self.root), cfg, args)
     }
 
+    fn run_git_raw(&self, cfg: &GitConfig, args: &[&str]) -> Result<String> {
+        self.run_git_in_raw(Some(&self.root), cfg, args)
+    }
+
     fn run_git_allow_fail(&self, cfg: &GitConfig, args: &[&str]) -> Result<String> {
         self.run_git_in(Some(&self.root), cfg, args)
     }
@@ -945,11 +1045,18 @@ impl SheetStore {
         for key in GIT_ENV_SCRUB_KEYS {
             cmd.env_remove(key);
         }
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            // Put each Git invocation in its own process group so timeout
+            // teardown can terminate transport grandchildren holding pipes open.
+            cmd.process_group(0);
+        }
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
         }
         // Treat path arguments literally for commands that interpret pathspec magic
-        // (so filenames like `:hero.pdf` work reliably; `check-ignore` rejects it).
+        // (so filenames like `:hero.pdf` or `:(glob)hero.pdf` work reliably).
         if matches!(args.first().copied(), Some("add" | "log")) {
             cmd.arg("--literal-pathspecs");
         }
@@ -988,6 +1095,10 @@ impl SheetStore {
     }
 
     fn run_git_in(&self, cwd: Option<&Path>, cfg: &GitConfig, args: &[&str]) -> Result<String> {
+        Ok(self.run_git_in_raw(cwd, cfg, args)?.trim().to_owned())
+    }
+
+    fn run_git_in_raw(&self, cwd: Option<&Path>, cfg: &GitConfig, args: &[&str]) -> Result<String> {
         let mut cmd = self.prepare_git_cmd(cwd, cfg, args)?;
 
         // For HTTPS tokens, pass credentials via a transient GIT_ASKPASS script
@@ -1024,7 +1135,7 @@ impl SheetStore {
                 redact_secrets(&detail, cfg.https_token.as_deref())
             );
         }
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
 }
 
@@ -1074,6 +1185,23 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
+fn kill_process_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let pid = child.id();
+        // Best-effort process-group SIGKILL so transport grandchildren that
+        // inherited stdout/stderr pipes are terminated alongside git.
+        let _ = Command::new("kill")
+            .args(["-KILL", &format!("-{pid}")])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 fn wait_child_with_timeout(
     mut child: std::process::Child,
     timeout: Duration,
@@ -1081,19 +1209,21 @@ fn wait_child_with_timeout(
 ) -> Result<std::process::Output> {
     let mut stdout_pipe = child.stdout.take();
     let mut stderr_pipe = child.stderr.take();
-    let out_thread = std::thread::spawn(move || {
+    let (out_tx, out_rx) = mpsc::channel();
+    let (err_tx, err_rx) = mpsc::channel();
+    std::thread::spawn(move || {
         let mut buf = Vec::new();
         if let Some(ref mut s) = stdout_pipe {
             let _ = s.read_to_end(&mut buf);
         }
-        buf
+        let _ = out_tx.send(buf);
     });
-    let err_thread = std::thread::spawn(move || {
+    std::thread::spawn(move || {
         let mut buf = Vec::new();
         if let Some(ref mut s) = stderr_pipe {
             let _ = s.read_to_end(&mut buf);
         }
-        buf
+        let _ = err_tx.send(buf);
     });
     let deadline = Instant::now() + timeout;
     let status = loop {
@@ -1101,18 +1231,35 @@ fn wait_child_with_timeout(
             Some(status) => break status,
             None => {
                 if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    let _ = out_thread.join();
-                    let _ = err_thread.join();
+                    kill_process_tree(&mut child);
                     bail!("{label} timed out after {}s", timeout.as_secs());
                 }
                 std::thread::sleep(Duration::from_millis(15));
             }
         }
     };
-    let stdout = out_thread.join().unwrap_or_default();
-    let stderr = err_thread.join().unwrap_or_default();
+    let rem_out = deadline.saturating_duration_since(Instant::now());
+    let stdout = match out_rx.recv_timeout(rem_out) {
+        Ok(buf) => buf,
+        Err(_) => {
+            kill_process_tree(&mut child);
+            bail!(
+                "{label} stdout collection timed out after {}s",
+                timeout.as_secs()
+            );
+        }
+    };
+    let rem_err = deadline.saturating_duration_since(Instant::now());
+    let stderr = match err_rx.recv_timeout(rem_err) {
+        Ok(buf) => buf,
+        Err(_) => {
+            kill_process_tree(&mut child);
+            bail!(
+                "{label} stderr collection timed out after {}s",
+                timeout.as_secs()
+            );
+        }
+    };
     Ok(std::process::Output {
         status,
         stdout,
@@ -1136,11 +1283,27 @@ fn is_sheet_or_sidecar_path(path: &str) -> bool {
     lower.ends_with(".pdf") || lower.ends_with(".state.json")
 }
 
+fn stamp_sidecar_sha(sidecar: &Value, pdf_sha256: &str) -> Value {
+    let mut stamped = sidecar.clone();
+    if let Some(obj) = stamped.as_object_mut() {
+        obj.insert("pdfSha256".to_owned(), Value::String(pdf_sha256.to_owned()));
+    }
+    stamped
+}
+
+fn sync_parent_dir(path: &Path) {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        if let Ok(dir) = fs::File::open(parent) {
+            let _ = dir.sync_all();
+        }
+    }
+}
+
 struct StoreFileLock {
     _file: fs::File,
 }
 
-fn acquire_store_lock(root: &Path) -> Option<StoreFileLock> {
+fn acquire_store_lock(root: &Path) -> Result<StoreFileLock> {
     let lock_path = root.join(".mpmb-store.lock");
     let file = fs::OpenOptions::new()
         .create(true)
@@ -1148,9 +1311,164 @@ fn acquire_store_lock(root: &Path) -> Option<StoreFileLock> {
         .read(true)
         .write(true)
         .open(&lock_path)
-        .ok()?;
-    let _ = file.lock();
-    Some(StoreFileLock { _file: file })
+        .with_context(|| format!("failed to open store lock {}", lock_path.display()))?;
+    file.lock()
+        .with_context(|| format!("failed to acquire store lock {}", lock_path.display()))?;
+    Ok(StoreFileLock { _file: file })
+}
+
+struct StagedFile {
+    path: Option<PathBuf>,
+}
+
+impl StagedFile {
+    fn create(target: &Path, bytes: &[u8]) -> Result<Self> {
+        Ok(Self {
+            path: Some(stage_temp_file(target, bytes)?),
+        })
+    }
+
+    fn publish(mut self, dest: &Path) -> std::io::Result<()> {
+        let src = self.path.take().expect("staged file already consumed");
+        match fs::rename(&src, dest) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                let _ = fs::remove_file(&src);
+                Err(err)
+            }
+        }
+    }
+}
+
+impl Drop for StagedFile {
+    fn drop(&mut self) {
+        if let Some(p) = self.path.take() {
+            let _ = fs::remove_file(p);
+        }
+    }
+}
+
+/// Bounded streaming staging file for HTTP PDF uploads so concurrent uploads
+/// do not buffer entire 64 MiB payloads in server RAM.
+pub struct StagedUpload {
+    path: Option<PathBuf>,
+    file: Option<fs::File>,
+    size: usize,
+    header: Vec<u8>,
+}
+
+impl StagedUpload {
+    fn create(target: &Path) -> Result<Self> {
+        let parent = target
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let pid = std::process::id();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+        let tmp = parent.join(format!(
+            "{STAGING_PREFIX}{pid}-{nanos}-{seq}{STAGING_SUFFIX}"
+        ));
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+            .with_context(|| format!("failed to create staging file {}", tmp.display()))?;
+        Ok(Self {
+            path: Some(tmp),
+            file: Some(file),
+            size: 0,
+            header: Vec::with_capacity(5),
+        })
+    }
+
+    pub fn write_chunk(&mut self, chunk: &[u8]) -> Result<()> {
+        if chunk.is_empty() {
+            return Ok(());
+        }
+        let next_size = self.size.saturating_add(chunk.len());
+        if next_size > MAX_PDF_BYTES {
+            bail!("PDF upload exceeds 64 MiB limit");
+        }
+        if self.header.len() < 5 {
+            let need = 5 - self.header.len();
+            let take = need.min(chunk.len());
+            self.header.extend_from_slice(&chunk[..take]);
+            if self.header.len() == 5 && !self.header.starts_with(b"%PDF-") {
+                bail!("uploaded file does not start with %PDF- header");
+            }
+        }
+        let file = self
+            .file
+            .as_mut()
+            .ok_or_else(|| anyhow!("upload staging file already finalized"))?;
+        file.write_all(chunk)?;
+        self.size = next_size;
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<()> {
+        if let Some(file) = self.file.take() {
+            file.sync_all()?;
+        }
+        if self.size == 0 || self.size > MAX_PDF_BYTES {
+            bail!("PDF upload must be between 1 byte and 64 MiB");
+        }
+        if !self.header.starts_with(b"%PDF-") {
+            bail!("uploaded file does not start with %PDF- header");
+        }
+        Ok(())
+    }
+
+    fn publish_replace(mut self, dest: &Path) -> std::io::Result<()> {
+        let src = self.path.take().expect("staged upload already consumed");
+        match fs::rename(&src, dest) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                let _ = fs::remove_file(&src);
+                Err(err)
+            }
+        }
+    }
+
+    fn publish_create_new(mut self, dest: &Path) -> Result<()> {
+        let src = self.path.take().expect("staged upload already consumed");
+        #[cfg(unix)]
+        {
+            let link_res = fs::hard_link(&src, dest);
+            let _ = fs::remove_file(&src);
+            link_res.with_context(|| format!("failed creating {}", dest.display()))?;
+            Ok(())
+        }
+        #[cfg(not(unix))]
+        {
+            let res = (|| -> std::io::Result<()> {
+                let mut reader = fs::File::open(&src)?;
+                let mut dst = fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(dest)?;
+                std::io::copy(&mut reader, &mut dst)?;
+                dst.sync_all()?;
+                Ok(())
+            })();
+            let _ = fs::remove_file(&src);
+            res.with_context(|| format!("failed creating {}", dest.display()))?;
+            Ok(())
+        }
+    }
+}
+
+impl Drop for StagedUpload {
+    fn drop(&mut self) {
+        drop(self.file.take());
+        if let Some(p) = self.path.take() {
+            let _ = fs::remove_file(p);
+        }
+    }
 }
 
 fn stage_temp_file(path: &Path, bytes: &[u8]) -> Result<PathBuf> {
@@ -1182,44 +1500,12 @@ fn stage_temp_file(path: &Path, bytes: &[u8]) -> Result<PathBuf> {
     Ok(tmp)
 }
 
+#[allow(dead_code)]
 pub fn write_file_atomic_replace(path: &Path, bytes: &[u8]) -> Result<()> {
-    let tmp = stage_temp_file(path, bytes)?;
-    if let Err(err) = fs::rename(&tmp, path) {
-        let _ = fs::remove_file(&tmp);
-        return Err(err).with_context(|| format!("failed replacing {}", path.display()));
-    }
-    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        if let Ok(dir) = fs::File::open(parent) {
-            let _ = dir.sync_all();
-        }
-    }
-    Ok(())
-}
-
-fn write_file_atomic_create_new(path: &Path, bytes: &[u8]) -> Result<()> {
-    let tmp = stage_temp_file(path, bytes)?;
-    #[cfg(unix)]
-    {
-        let link_res = fs::hard_link(&tmp, path);
-        let _ = fs::remove_file(&tmp);
-        link_res.with_context(|| format!("failed creating {}", path.display()))?;
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = fs::remove_file(&tmp);
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
-            .with_context(|| format!("failed creating {}", path.display()))?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-    }
-    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        if let Ok(dir) = fs::File::open(parent) {
-            let _ = dir.sync_all();
-        }
-    }
+    let tmp = StagedFile::create(path, bytes)?;
+    tmp.publish(path)
+        .with_context(|| format!("failed replacing {}", path.display()))?;
+    sync_parent_dir(path);
     Ok(())
 }
 
@@ -1231,7 +1517,7 @@ fn collect_pdfs(root: &Path, dir: &Path, out: &mut Vec<SheetEntry>) -> Result<()
         let entry = entry?;
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
-        if name_str.starts_with('.') || name_str.contains('\\') {
+        if name_str.starts_with('.') || name_str.contains('\\') || name_str != name_str.trim() {
             continue;
         }
         let path = entry.path();
@@ -1261,7 +1547,7 @@ fn collect_stageable_paths(root: &Path, dir: &Path, out: &mut Vec<String>) -> Re
         let entry = entry?;
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
-        if name_str.starts_with('.') || name_str.contains('\\') {
+        if name_str.starts_with('.') || name_str.contains('\\') || name_str != name_str.trim() {
             continue;
         }
         let path = entry.path();
@@ -1298,29 +1584,49 @@ fn sheet_entry_from_path(root: &Path, abs: &Path) -> Result<SheetEntry> {
         bail!("sheet exceeds 64 MiB limit");
     }
     let bytes = read_bounded(abs, MAX_PDF_BYTES)?;
-    let modified_unix = meta
-        .modified()
-        .ok()
+    let pdf_sha = sha256_hex(&bytes);
+    let pdf_modified = meta.modified().ok();
+    let modified_unix = pdf_modified
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let primary_sidecar = SheetStore::sidecar_path_for(abs);
     let legacy_sidecar = SheetStore::legacy_sidecar_path_for(abs);
-    let sidecar_path = if primary_sidecar.is_file() {
-        Some(primary_sidecar)
+    let sidecar_candidate = if primary_sidecar.is_file() {
+        Some((primary_sidecar, false))
     } else if legacy_sidecar.is_file() {
-        Some(legacy_sidecar)
+        Some((legacy_sidecar, true))
     } else {
         None
     };
-    let sidecar_json = sidecar_path.as_ref().and_then(|p| {
+    let sidecar_json = sidecar_candidate.as_ref().and_then(|(p, is_legacy)| {
         let sm = fs::symlink_metadata(p).ok()?;
         if sm.file_type().is_symlink() || !sm.is_file() || sm.len() as usize > MAX_SIDECAR_BYTES {
             return None;
         }
-        read_bounded(p, MAX_SIDECAR_BYTES)
+        let parsed = read_bounded(p, MAX_SIDECAR_BYTES)
             .ok()
-            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())?;
+        // Use sidecar metadata only when its recorded PDF SHA-256 matches the
+        // current PDF bytes. Legacy pre-hash sidecars (without `pdfSha256` and
+        // without the v1 schema tag) are accepted only if they are at least as
+        // recent as the PDF file.
+        match parsed.get("pdfSha256").and_then(Value::as_str) {
+            Some(recorded) if recorded.eq_ignore_ascii_case(&pdf_sha) => Some(parsed),
+            Some(_) => None,
+            None => {
+                let has_v1_schema = parsed.get("schema").is_some();
+                let sidecar_fresh = match (sm.modified().ok(), pdf_modified) {
+                    (Some(sc_t), Some(pdf_t)) => sc_t >= pdf_t,
+                    _ => false,
+                };
+                if *is_legacy && !has_v1_schema && sidecar_fresh {
+                    Some(parsed)
+                } else {
+                    None
+                }
+            }
+        }
     });
     let str_opt = |v: &Value| {
         v.as_str()
@@ -1332,9 +1638,9 @@ fn sheet_entry_from_path(root: &Path, abs: &Path) -> Result<SheetEntry> {
         path: rel,
         name,
         size_bytes: meta.len(),
-        sha256: sha256_hex(&bytes),
+        sha256: pdf_sha,
         modified_unix,
-        has_state_sidecar: sidecar_path.is_some(),
+        has_state_sidecar: sidecar_json.is_some(),
         character_name: sidecar_json
             .as_ref()
             .and_then(|j| str_opt(&j["character"]["name"])),
@@ -1411,8 +1717,19 @@ mod tests {
         dir
     }
 
+    fn test_git_cmd(cwd: Option<&Path>) -> Command {
+        let mut cmd = Command::new("git");
+        for key in GIT_ENV_SCRUB_KEYS {
+            cmd.env_remove(key);
+        }
+        if let Some(dir) = cwd {
+            cmd.current_dir(dir);
+        }
+        cmd
+    }
+
     fn init_bare_remote(path: &Path) {
-        let status = Command::new("git")
+        let status = test_git_cmd(None)
             .args(["init", "--bare", "-b", "main"])
             .arg(path)
             .status()
@@ -1598,8 +1915,7 @@ mod tests {
         assert!(conflict_branch.starts_with("conflict/"));
 
         // Independently verify the bare remote actually contains BOTH main and the conflict branch.
-        let refs_out = Command::new("git")
-            .current_dir(&bare)
+        let refs_out = test_git_cmd(Some(&bare))
             .args(["for-each-ref", "--format=%(refname:short)"])
             .output()
             .unwrap();
@@ -1744,13 +2060,11 @@ mod tests {
         let b2 = c2.conflict_branch.unwrap();
         assert_ne!(b1, b2, "rapid conflict branches must be unique");
 
-        let b1_pdf = Command::new("git")
-            .current_dir(&bare)
+        let b1_pdf = test_git_cmd(Some(&bare))
             .args(["show", &format!("{b1}:s.pdf")])
             .output()
             .unwrap();
-        let b2_pdf = Command::new("git")
-            .current_dir(&bare)
+        let b2_pdf = test_git_cmd(Some(&bare))
             .args(["show", &format!("{b2}:s.pdf")])
             .output()
             .unwrap();
@@ -1996,8 +2310,7 @@ mod tests {
             assert_eq!(history.len(), 1);
         }
         let committed_files = String::from_utf8(
-            Command::new("git")
-                .current_dir(&bare)
+            test_git_cmd(Some(&bare))
                 .args(["show", "--name-only", "--format=", "main"])
                 .output()
                 .unwrap()
@@ -2011,8 +2324,7 @@ mod tests {
         assert!(!committed_files.contains("README.md"));
 
         // 5. Explicit mismatched pushurl fails closed on re-open.
-        let status = Command::new("git")
-            .current_dir(&work)
+        let status = test_git_cmd(Some(&work))
             .args([
                 "remote",
                 "set-url",
@@ -2030,12 +2342,10 @@ mod tests {
         assert!(err.is_err());
 
         // Clear explicit pushurl and test wrong active branch rejection.
-        let _ = Command::new("git")
-            .current_dir(&work)
+        let _ = test_git_cmd(Some(&work))
             .args(["config", "--unset", "remote.origin.pushurl"])
             .status();
-        let status = Command::new("git")
-            .current_dir(&work)
+        let status = test_git_cmd(Some(&work))
             .args(["checkout", "-b", "other-branch"])
             .status()
             .unwrap();
@@ -2045,6 +2355,203 @@ mod tests {
             git: Some(GitConfig::new(bare.to_string_lossy().into_owned())),
         });
         assert!(err.is_err());
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn storage_round2_hardening_paths_locks_sidecars_fetch_head_and_renames() {
+        let base = temp_dir("storage-round2");
+        let bare = base.join("remote.git");
+        let work_a = base.join("a");
+        let work_b = base.join("b");
+        init_bare_remote(&bare);
+        let url = bare.to_string_lossy().into_owned();
+
+        let store_a = SheetStore::open(StoreConfig {
+            root: work_a.clone(),
+            git: Some(GitConfig::new(url.clone())),
+        })
+        .unwrap();
+
+        // 1. Whitespace-padded sheet paths are rejected so returned paths always reopen the same file.
+        for bad in ["./ hero.pdf", " hero.pdf", "sub/ hero.pdf", "hero.pdf "] {
+            assert!(
+                store_a.resolve_safe_pdf_path(bad).is_err(),
+                "expected whitespace path rejection for {bad:?}"
+            );
+        }
+        // Discovery also skips any leading-space PDF checked into the directory.
+        fs::write(work_a.join(" stray.pdf"), b"%PDF-1.7\n%stray\n").unwrap();
+        assert!(store_a.list_sheets().unwrap().is_empty());
+        fs::remove_file(work_a.join(" stray.pdf")).unwrap();
+
+        // 2. Oversized serialized PDF is rejected before staging, leaving existing PDF untouched.
+        let v1 = b"%PDF-1.7\n%v1\n";
+        let up = store_a.upload_sheet("hero.pdf", v1, false).unwrap();
+        let oversized = vec![b'x'; MAX_PDF_BYTES + 1];
+        assert!(store_a
+            .save_sheet_atomic(
+                "hero.pdf",
+                &oversized,
+                Some(&up.sha256),
+                Some(&json!({"character": {"name": "TooBig"}})),
+                false,
+            )
+            .is_err());
+        assert_eq!(store_a.read_sheet_bytes("hero.pdf").unwrap().2, v1);
+
+        // 3. Stale sidecar metadata (mismatched pdfSha256) is ignored by listing.
+        let saved = store_a
+            .save_sheet_atomic(
+                "hero.pdf",
+                b"%PDF-1.7\n%v2\n",
+                Some(&up.sha256),
+                Some(&json!({"character": {"name": "V2Name"}})),
+                false,
+            )
+            .unwrap();
+        assert!(matches!(saved, SaveResult::Saved { .. }));
+        assert_eq!(
+            store_a.list_sheets().unwrap()[0].character_name.as_deref(),
+            Some("V2Name")
+        );
+        // Externally replace PDF without touching sidecar.
+        fs::write(work_a.join("hero.pdf"), b"%PDF-1.7\n%external-v3\n").unwrap();
+        let listed = store_a.list_sheets().unwrap();
+        assert_eq!(listed[0].character_name, None);
+        assert!(!listed[0].has_state_sidecar);
+
+        // 4. Deleted PDF reports Conflict even when the sidecar path is a directory.
+        let v4 = b"%PDF-1.7\n%v4\n";
+        let up4 = store_a.upload_sheet("del.pdf", v4, false).unwrap();
+        fs::remove_file(work_a.join("del.pdf")).unwrap();
+        let del_sc = SheetStore::sidecar_path_for(&work_a.join("del.pdf"));
+        fs::create_dir_all(&del_sc).unwrap();
+        let conflict = store_a
+            .save_sheet_atomic(
+                "del.pdf",
+                b"%PDF-1.7\n%v5\n",
+                Some(&up4.sha256),
+                Some(&json!({"character": {"name": "Ghost"}})),
+                false,
+            )
+            .unwrap();
+        assert_eq!(
+            conflict,
+            SaveResult::Conflict {
+                expected_sha256: up4.sha256,
+                current_sha256: "<deleted>".into(),
+            }
+        );
+        fs::remove_dir(&del_sc).unwrap();
+
+        // 5. Unacquirable store lock (.mpmb-store.lock as a directory) fails closed on save & overwrite.
+        let lock_path = work_a.join(".mpmb-store.lock");
+        let _ = fs::remove_file(&lock_path);
+        fs::create_dir_all(&lock_path).unwrap();
+        assert!(store_a
+            .save_sheet_atomic("hero.pdf", b"%PDF-1.7\n%blocked\n", None, None, true)
+            .is_err());
+        assert!(store_a
+            .upload_sheet("hero.pdf", b"%PDF-1.7\n%blocked-up\n", true)
+            .is_err());
+        fs::remove_dir(&lock_path).unwrap();
+
+        // 6. Literal pathspec-magic filename `:(glob)hero.pdf` syncs cleanly on Unix.
+        #[cfg(unix)]
+        {
+            store_a
+                .upload_sheet(":(glob)hero.pdf", b"%PDF-1.7\n%glob\n", false)
+                .unwrap();
+        }
+        let sync1 = store_a.git_sync("Initial with literal pathspec").unwrap();
+        assert!(sync1.pushed);
+
+        // 7. Staged rename from unrelated file (`notes.txt` -> `renamed.pdf`) is rejected.
+        fs::write(work_a.join("notes.txt"), "%PDF-1.7\n%notes\n").unwrap();
+        assert!(test_git_cmd(Some(&work_a))
+            .args(["add", "notes.txt"])
+            .status()
+            .unwrap()
+            .success());
+        assert!(test_git_cmd(Some(&work_a))
+            .args([
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@local",
+                "commit",
+                "-m",
+                "track notes",
+            ])
+            .status()
+            .unwrap()
+            .success());
+        assert!(test_git_cmd(Some(&work_a))
+            .args(["mv", "notes.txt", "renamed.pdf"])
+            .status()
+            .unwrap()
+            .success());
+        assert!(
+            store_a.git_sync("should reject rename").is_err(),
+            "staged rename deleting unrelated notes.txt must be rejected"
+        );
+        // Undo staged rename cleanly.
+        assert!(test_git_cmd(Some(&work_a))
+            .args(["reset", "--hard", "HEAD"])
+            .status()
+            .unwrap()
+            .success());
+
+        // 8. git_pull merges FETCH_HEAD even when remote fetch refspec maps to a custom ref.
+        let store_b = SheetStore::open(StoreConfig {
+            root: work_b.clone(),
+            git: Some(GitConfig::new(url)),
+        })
+        .unwrap();
+        assert!(test_git_cmd(Some(&work_b))
+            .args([
+                "config",
+                "remote.origin.fetch",
+                "+refs/heads/main:refs/remotes/origin/mirror-main",
+            ])
+            .status()
+            .unwrap()
+            .success());
+        store_a
+            .save_sheet_atomic("hero.pdf", b"%PDF-1.7\n%v-fetch-head\n", None, None, true)
+            .unwrap();
+        store_a
+            .git_sync("advance main for FETCH_HEAD test")
+            .unwrap();
+        let pulled = store_b.git_pull().unwrap();
+        assert!(pulled.updated, "pull should fast-forward via FETCH_HEAD");
+        assert_eq!(
+            store_b.read_sheet_bytes("hero.pdf").unwrap().2,
+            b"%PDF-1.7\n%v-fetch-head\n"
+        );
+
+        // 9. wait_child_with_timeout bounds collection even when a grandchild keeps stderr open.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            let mut cmd = Command::new("sh");
+            cmd.process_group(0)
+                .args(["-c", "(sleep 30 >&2) & exit 0"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let child = cmd.spawn().unwrap();
+            let started = Instant::now();
+            let res = wait_child_with_timeout(child, Duration::from_millis(250), "pipe-holder");
+            assert!(res.is_err(), "grandchild holding stderr should time out");
+            assert!(
+                started.elapsed() < Duration::from_secs(3),
+                "wait_child_with_timeout hung past deadline: {:?}",
+                started.elapsed()
+            );
+        }
 
         let _ = fs::remove_dir_all(&base);
     }
