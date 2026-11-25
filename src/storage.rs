@@ -961,6 +961,8 @@ impl SheetStore {
         }
         self.run_git(cfg, &["config", "user.name", &cfg.author_name])?;
         self.run_git(cfg, &["config", "user.email", &cfg.author_email])?;
+        // Disable CRLF line-ending conversion so Git on Windows never corrupts binary PDF bytes.
+        self.run_git(cfg, &["config", "core.autocrlf", "false"])?;
         // Keep hidden temporary staging/lock files untracked even if a crash ever left one behind.
         let exclude = self.root.join(".git/info/exclude");
         if let Ok(mut existing) = fs::read_to_string(&exclude) {
@@ -1060,6 +1062,9 @@ impl SheetStore {
         if matches!(args.first().copied(), Some("add" | "log")) {
             cmd.arg("--literal-pathspecs");
         }
+        // Disable CRLF conversion on every Git invocation (including initial clone)
+        // so Windows Git checkouts preserve exact binary PDF bytes and SHA-256 hashes.
+        cmd.arg("-c").arg("core.autocrlf=false");
         // Kubernetes local-path PVCs are commonly owned by root:<fsGroup> while
         // the server runs non-root (uid 1000). Scope safe.directory explicitly
         // to the configured store root (and local repo path if applicable).
