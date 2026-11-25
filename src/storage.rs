@@ -657,6 +657,15 @@ impl SheetStore {
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
         }
+        // Kubernetes local-path PVCs are commonly owned by root:<fsGroup> while
+        // the server runs non-root (uid 1000). Scope safe.directory explicitly
+        // to the configured store root (and local repo path if applicable).
+        cmd.arg("-c")
+            .arg(format!("safe.directory={}", self.root.display()));
+        if Path::new(&cfg.repo_url).is_absolute() {
+            cmd.arg("-c")
+                .arg(format!("safe.directory={}", cfg.repo_url));
+        }
         cmd.args(args);
         cmd.env("GIT_TERMINAL_PROMPT", "0");
         cmd.env("GIT_AUTHOR_NAME", &cfg.author_name);
