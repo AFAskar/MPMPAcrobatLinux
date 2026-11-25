@@ -30,10 +30,15 @@ impl Documents {
         pdf: Arc<Pdf>,
         services: DocumentServices,
     ) -> Result<Rc<Self>> {
+        let root_path = if services.capabilities.allow_host_fs {
+            pdf.path.canonicalize()?
+        } else {
+            pdf.path.clone()
+        };
         Ok(Rc::new(Self {
             services,
             open: RefCell::new(vec![Document {
-                path: pdf.path.canonicalize()?,
+                path: root_path,
                 context,
                 root: true,
             }]),
@@ -66,7 +71,11 @@ impl Documents {
     }
 
     pub(super) fn install<'js>(self: &Rc<Self>, ctx: Ctx<'js>, pdf: &Arc<Pdf>) -> Result<()> {
-        let path = pdf.path.canonicalize()?;
+        let path = if self.services.capabilities.allow_host_fs {
+            pdf.path.canonicalize()?
+        } else {
+            pdf.path.clone()
+        };
         let root = self.open.borrow()[0].context.clone();
         let root_ctx = document_context::enter(&ctx, &root)?;
         for key in ["__nativeApplicationGlobal", "__nativeApplicationState"] {

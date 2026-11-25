@@ -8,6 +8,7 @@ use std::{
     path::PathBuf,
     rc::Rc,
     sync::{Arc, LazyLock, Mutex},
+    time::{Duration, Instant},
 };
 mod document_context;
 mod documents;
@@ -23,21 +24,27 @@ pub trait InteractionHandler: Send + Sync {
     }
 }
 
-/// Capability policy governing host filesystem and native desktop operations.
+/// Capability policy governing host filesystem, native desktop operations,
+/// and per-evaluation QuickJS execution time budgets.
 /// Desktop/probe mode defaults to `HostCapabilities::desktop()`; web/server mode
 /// uses `HostCapabilities::server_restricted()` so uploaded PDF scripts cannot
-/// read arbitrary server files or open native desktop pickers/dialogs.
+/// read arbitrary server files, open native desktop pickers/dialogs, or wedge
+/// the worker thread with infinite loops.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HostCapabilities {
     pub allow_host_fs: bool,
     pub allow_native_dialogs: bool,
+    pub script_timeout: Option<Duration>,
 }
+
+const DEFAULT_SERVER_SCRIPT_TIMEOUT: Duration = Duration::from_secs(15);
 
 impl HostCapabilities {
     pub const fn desktop() -> Self {
         Self {
             allow_host_fs: true,
             allow_native_dialogs: true,
+            script_timeout: None,
         }
     }
 
@@ -45,6 +52,125 @@ impl HostCapabilities {
         Self {
             allow_host_fs: false,
             allow_native_dialogs: false,
+            script_timeout: Some(DEFAULT_SERVER_SCRIPT_TIMEOUT),
+        }
+    }
+
+    #[cfg(test)]
+    pub const fn with_script_timeout(mut self, script_timeout: Option<Duration>) -> Self {
+        self.script_timeout = script_timeout;
+        self
+    }
+}
+
+#[derive(Clone)]
+struct ExecutionBudget {
+    limit: Duration,
+    state: Arc<Mutex<BudgetState>>,
+}
+
+struct BudgetState {
+    depth: usize,
+    deadline: Option<Instant>,
+    timed_out: bool,
+}
+
+struct BudgetGuard {
+    budget: Option<ExecutionBudget>,
+}
+
+struct BudgetPauseGuard {
+    budget: Option<ExecutionBudget>,
+    remaining: Option<Duration>,
+}
+
+impl ExecutionBudget {
+    fn new(limit: Duration) -> Self {
+        Self {
+            limit,
+            state: Arc::new(Mutex::new(BudgetState {
+                depth: 0,
+                deadline: None,
+                timed_out: false,
+            })),
+        }
+    }
+
+    fn install(&self, engine: &Engine) {
+        let state = Arc::clone(&self.state);
+        engine.set_interrupt_handler(Some(Box::new(move || {
+            let mut guard = state.lock().unwrap();
+            if guard.deadline.is_some_and(|d| Instant::now() >= d) {
+                guard.timed_out = true;
+                true
+            } else {
+                false
+            }
+        })));
+    }
+
+    fn enter(budget: Option<&Self>) -> BudgetGuard {
+        if let Some(b) = budget {
+            let mut guard = b.state.lock().unwrap();
+            if guard.depth == 0 {
+                guard.timed_out = false;
+                guard.deadline = Some(Instant::now() + b.limit);
+            }
+            guard.depth += 1;
+            BudgetGuard {
+                budget: Some(b.clone()),
+            }
+        } else {
+            BudgetGuard { budget: None }
+        }
+    }
+
+    fn pause(budget: Option<&Self>) -> BudgetPauseGuard {
+        if let Some(b) = budget {
+            let mut guard = b.state.lock().unwrap();
+            let remaining = guard
+                .deadline
+                .take()
+                .map(|d| d.saturating_duration_since(Instant::now()));
+            BudgetPauseGuard {
+                budget: Some(b.clone()),
+                remaining,
+            }
+        } else {
+            BudgetPauseGuard {
+                budget: None,
+                remaining: None,
+            }
+        }
+    }
+
+    fn take_timed_out(&self) -> bool {
+        let mut guard = self.state.lock().unwrap();
+        let was = guard.timed_out;
+        guard.timed_out = false;
+        was
+    }
+}
+
+impl Drop for BudgetGuard {
+    fn drop(&mut self) {
+        if let Some(b) = &self.budget {
+            let mut guard = b.state.lock().unwrap();
+            guard.depth = guard.depth.saturating_sub(1);
+            if guard.depth == 0 {
+                guard.deadline = None;
+            }
+        }
+    }
+}
+
+impl Drop for BudgetPauseGuard {
+    fn drop(&mut self) {
+        if let (Some(b), Some(rem)) = (&self.budget, self.remaining) {
+            let mut guard = b.state.lock().unwrap();
+            if guard.depth > 0 {
+                guard.deadline = Some(Instant::now() + rem);
+            }
         }
     }
 }
@@ -55,6 +181,7 @@ struct DocumentServices {
     interactive: bool,
     interaction: Option<Arc<dyn InteractionHandler>>,
     capabilities: HostCapabilities,
+    budget: Option<ExecutionBudget>,
     print_output_dir: Option<PathBuf>,
     attachment_output_dir: Option<PathBuf>,
     trace_dir: Option<PathBuf>,
@@ -69,6 +196,7 @@ pub struct Runtime {
     engine: Engine,
     pub loaded: usize,
     documents: Rc<documents::Documents>,
+    budget: Option<ExecutionBudget>,
 }
 // Reader's span metrics use one decimal with ties-to-even, applied to the
 // actual binary value (8.05 rounds up; 7.25 rounds down). Multiplication by ten
@@ -313,6 +441,10 @@ impl Runtime {
         let engine = Engine::new()?;
         engine.set_memory_limit(512 * 1024 * 1024);
         engine.set_max_stack_size(2 * 1024 * 1024);
+        let budget = capabilities.script_timeout.map(ExecutionBudget::new);
+        if let Some(b) = &budget {
+            b.install(&engine);
+        }
         let js = Context::full(&engine)?;
         let services = DocumentServices {
             dialogs: Arc::new(Mutex::new(VecDeque::from(dialogs))),
@@ -320,6 +452,7 @@ impl Runtime {
             interactive,
             interaction,
             capabilities,
+            budget: budget.clone(),
             print_output_dir,
             attachment_output_dir,
             trace_dir: std::env::var_os("MPMB_DIALOG_TRACE_DIR").map(PathBuf::from),
@@ -328,12 +461,25 @@ impl Runtime {
             control_errors: Arc::new(Mutex::new(Vec::new())),
         };
         let documents = documents::Documents::new(js.clone(), Arc::clone(pdf), services)?;
-        let loaded = js.with(|ctx| Self::initialize_document(ctx, pdf, &documents))?;
+        let loaded = {
+            let _guard = ExecutionBudget::enter(budget.as_ref());
+            let init_res = js.with(|ctx| Self::initialize_document(ctx, pdf, &documents));
+            if let Some(b) = &budget {
+                if b.take_timed_out() {
+                    bail!(
+                        "JavaScript execution timed out during document startup after {}ms",
+                        b.limit.as_millis()
+                    );
+                }
+            }
+            init_res?
+        };
         Ok(Self {
             js,
             engine,
             loaded,
             documents,
+            budget,
         })
     }
     // Initialization can run inside an already-held QuickJS runtime guard.
@@ -529,6 +675,7 @@ impl Runtime {
         let control_errors = Arc::clone(&services.control_errors);
         let dialog_document = pdf.path.clone();
         let dialog_interaction = services.interaction.clone();
+        let dialog_budget = services.budget.clone();
         ctx.globals().set(
             "__dialog",
             Function::new(
@@ -584,11 +731,16 @@ impl Runtime {
                             ));
                         }
                         if let Some(handler) = &dialog_interaction {
+                            let _pause = ExecutionBudget::pause(dialog_budget.as_ref());
                             return handler
                                 .modal(&request)
                                 .map(|v| v.to_string())
                                 .map_err(|e| e.to_string());
                         }
+                        if !capabilities.allow_native_dialogs {
+                            return Err("Native dialogs are disabled in server mode".into());
+                        }
+                        let _pause = ExecutionBudget::pause(dialog_budget.as_ref());
                         crate::ui::modal(&request)
                             .map(|v| v.to_string())
                             .map_err(|e| e.to_string())
@@ -612,6 +764,7 @@ impl Runtime {
         let alert_control_errors = Arc::clone(&services.control_errors);
         let alert_document = pdf.path.clone();
         let alert_interaction = services.interaction.clone();
+        let alert_budget = services.budget.clone();
         ctx.globals().set(
             "__alert",
             Function::new(
@@ -638,11 +791,16 @@ impl Runtime {
                             return Err(format!("Unanswered alert: {}", v["cTitle"]));
                         }
                         if let Some(handler) = &alert_interaction {
+                            let _pause = ExecutionBudget::pause(alert_budget.as_ref());
                             return handler
                                 .alert(&v)
                                 .map(|v| v.to_string())
                                 .map_err(|e| e.to_string());
                         }
+                        if !capabilities.allow_native_dialogs {
+                            return Err("Native alerts are disabled in server mode".into());
+                        }
+                        let _pause = ExecutionBudget::pause(alert_budget.as_ref());
                         crate::ui::alert(&v)
                             .map(|v| v.to_string())
                             .map_err(|e| e.to_string())
@@ -741,7 +899,17 @@ impl Runtime {
         Ok(pdf.scripts.len())
     }
     pub fn eval(&self, s: &str) -> Result<Value> {
-        self.js.with(|ctx| Self::eval_in(&ctx, s))
+        let _guard = ExecutionBudget::enter(self.budget.as_ref());
+        let res = self.js.with(|ctx| Self::eval_in(&ctx, s));
+        if let Some(b) = &self.budget {
+            if b.take_timed_out() {
+                bail!(
+                    "JavaScript execution timed out after {}ms",
+                    b.limit.as_millis()
+                );
+            }
+        }
+        res
     }
     fn eval_in(ctx: &Ctx<'_>, s: &str) -> Result<Value> {
         // Preserve stack traces, including exceptions caught by original sheet code in diagnostics.
@@ -755,7 +923,17 @@ impl Runtime {
         Ok(v["value"].clone())
     }
     fn raw(&self, code: &str) -> Result<String> {
-        self.js.with(|ctx| Self::raw_in(&ctx, code))
+        let _guard = ExecutionBudget::enter(self.budget.as_ref());
+        let res = self.js.with(|ctx| Self::raw_in(&ctx, code));
+        if let Some(b) = &self.budget {
+            if b.take_timed_out() {
+                bail!(
+                    "JavaScript execution timed out after {}ms",
+                    b.limit.as_millis()
+                );
+            }
+        }
+        res
     }
     fn raw_in(ctx: &Ctx<'_>, code: &str) -> Result<String> {
         ctx.eval::<String, _>(code)
@@ -1892,5 +2070,164 @@ mod tests {
         }
         assert_eq!(res["path"], json!("/sheet.pdf"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn build_minimal_pdf_with_script(script: Option<&str>) -> Vec<u8> {
+        use lopdf::{dictionary, Object, StringFormat};
+        let mut doc = lopdf::Document::with_version("1.7");
+        let pages_id = doc.new_object_id();
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+        });
+        doc.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => vec![page_id.into()],
+                "Count" => 1,
+            }),
+        );
+        let form_id = doc.add_object(dictionary! {
+            "Fields" => Vec::<Object>::new(),
+        });
+        let mut catalog = dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+            "AcroForm" => form_id,
+        };
+        if let Some(js) = script {
+            let js_action = doc.add_object(dictionary! {
+                "S" => "JavaScript",
+                "JS" => Object::String(js.as_bytes().to_vec(), StringFormat::Literal),
+            });
+            let js_tree = doc.add_object(dictionary! {
+                "Names" => vec![
+                    Object::String(b"Startup".to_vec(), StringFormat::Literal),
+                    js_action.into(),
+                ],
+            });
+            let names_id = doc.add_object(dictionary! {
+                "JavaScript" => js_tree,
+            });
+            catalog.set("Names", names_id);
+        }
+        let catalog_id = doc.add_object(catalog);
+        doc.trailer.set("Root", catalog_id);
+        let mut out = Vec::new();
+        doc.save_to(&mut out).unwrap();
+        out
+    }
+
+    #[test]
+    fn server_restricted_without_handler_blocks_native_dialog_and_alert() {
+        let bytes = build_minimal_pdf_with_script(None);
+        let missing_path = std::env::temp_dir().join("mpmb-deleted-sheet.pdf");
+        let _ = std::fs::remove_file(&missing_path);
+        // Byte-backed open & Runtime startup must succeed even when the backing file was deleted.
+        let pdf = Arc::new(Pdf::open_bytes(missing_path, &bytes).unwrap());
+        let rt = Runtime::new_with_capabilities(
+            &pdf,
+            vec![],
+            vec![],
+            true,
+            None,
+            None,
+            None,
+            HostCapabilities::server_restricted(),
+        )
+        .unwrap();
+
+        let dialog_err = rt
+            .eval(r#"__dialog(JSON.stringify({description:{name:"D",elements:[]}}))"#)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            dialog_err.contains("disabled in server mode"),
+            "unexpected dialog error: {dialog_err}"
+        );
+        let alert_err = rt
+            .eval(r#"__alert(JSON.stringify({cTitle:"A",cMsg:"hi",nType:0,nIcon:0}))"#)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            alert_err.contains("disabled in server mode"),
+            "unexpected alert error: {alert_err}"
+        );
+    }
+
+    #[test]
+    fn server_execution_budget_interrupts_infinite_loop_and_pauses_during_interaction() {
+        // 1. Startup infinite loop (even inside try/catch) is interrupted by script_timeout.
+        let loop_bytes =
+            build_minimal_pdf_with_script(Some("try { while (true) {} } catch (e) {}"));
+        let loop_pdf =
+            Arc::new(Pdf::open_bytes(PathBuf::from("/virtual/loop.pdf"), &loop_bytes).unwrap());
+        let started = Instant::now();
+        let err = match Runtime::new_with_capabilities(
+            &loop_pdf,
+            vec![],
+            vec![],
+            true,
+            None,
+            None,
+            None,
+            HostCapabilities::server_restricted()
+                .with_script_timeout(Some(Duration::from_millis(120))),
+        ) {
+            Ok(_) => panic!("infinite loop startup script should have timed out"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("timed out"),
+            "unexpected timeout error: {err:#}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "timeout took too long: {:?}",
+            started.elapsed()
+        );
+
+        // 2. Intentional browser prompt wait longer than script_timeout does NOT expire the budget.
+        struct SlowPromptHandler;
+        impl InteractionHandler for SlowPromptHandler {
+            fn modal(&self, _request: &Value) -> Result<Value> {
+                std::thread::sleep(Duration::from_millis(220));
+                Ok(json!({"result": "ok"}))
+            }
+            fn alert(&self, _request: &Value) -> Result<Value> {
+                std::thread::sleep(Duration::from_millis(220));
+                Ok(json!({"button": 1, "checked": false}))
+            }
+        }
+        let ok_bytes = build_minimal_pdf_with_script(None);
+        let ok_pdf =
+            Arc::new(Pdf::open_bytes(PathBuf::from("/virtual/ok.pdf"), &ok_bytes).unwrap());
+        let rt = Runtime::new_with_capabilities(
+            &ok_pdf,
+            vec![],
+            vec![],
+            true,
+            None,
+            None,
+            Some(Arc::new(SlowPromptHandler)),
+            HostCapabilities::server_restricted()
+                .with_script_timeout(Some(Duration::from_millis(120))),
+        )
+        .unwrap();
+        let alert_btn = rt
+            .eval(r#"app.alert({cTitle:"Slow", cMsg:"Wait", nType:0, nIcon:0})"#)
+            .unwrap();
+        assert_eq!(alert_btn, json!(1));
+
+        // 3. Post-startup infinite loop during eval is also interrupted cleanly.
+        let eval_err = rt.eval("while (true) {}").unwrap_err();
+        assert!(
+            eval_err.to_string().contains("timed out"),
+            "unexpected eval timeout error: {eval_err:#}"
+        );
+        // Subsequent valid evaluation still works on the same runtime.
+        assert_eq!(rt.eval("1 + 2").unwrap(), json!(3));
     }
 }

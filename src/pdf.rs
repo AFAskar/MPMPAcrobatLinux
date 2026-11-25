@@ -841,23 +841,23 @@ impl Pdf {
             },
         )
         .context("read PDF")?;
-        Self::from_document(path.to_owned(), doc)
+        Self::from_document(path.to_owned(), doc, true)
     }
 
     pub fn open_bytes(path: PathBuf, bytes: &[u8]) -> Result<Self> {
         eprintln!("PDF: loading {} ({} bytes)", path.display(), bytes.len());
-        let doc = Document::load_from_with_options(
-            std::io::Cursor::new(bytes),
+        let doc = Document::load_mem_with_options(
+            bytes,
             lopdf::LoadOptions {
                 strict: true,
                 ..Default::default()
             },
         )
         .context("read PDF")?;
-        Self::from_document(path, doc)
+        Self::from_document(path, doc, false)
     }
 
-    fn from_document(path: PathBuf, doc: Document) -> Result<Self> {
+    fn from_document(path: PathBuf, doc: Document, canonicalize_path: bool) -> Result<Self> {
         let path = path.as_path();
         eprintln!("PDF: parsed {} objects", doc.objects.len());
         let mut page_map = BTreeMap::new();
@@ -970,7 +970,11 @@ impl Pdf {
             order,
             bookmarks,
             info: Value::Object(info),
-            path: path.canonicalize()?,
+            path: if canonicalize_path {
+                path.canonicalize()?
+            } else {
+                path.to_owned()
+            },
         })
     }
     // Serialization is a projection of the JS state; this document is never edited independently.
