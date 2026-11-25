@@ -35,8 +35,12 @@
     <section id="tab-play" class="tab-panel active">
       <div id="play-empty" class="card empty-card">
         <h2>No Character Open</h2>
-        <p class="muted">Open an existing MPMB sheet or upload a PDF from the Library &amp; Git tab.</p>
-        <button class="btn primary" id="btn-go-library" type="button">Open Library</button>
+        <p class="muted" id="play-empty-desc">Create a new character from a blank MPMB template, or open an existing character.</p>
+        <div class="btn-row empty-actions">
+          <button class="btn primary" id="btn-empty-new-char" type="button">+ New Character</button>
+          <button class="btn" id="btn-go-library" type="button">Open Library</button>
+        </div>
+        <div id="empty-chars-list" class="stack-list empty-chars-list hidden"></div>
       </div>
 
       <div id="play-content" class="hidden">
@@ -187,6 +191,31 @@
     <section id="tab-library" class="tab-panel">
       <div class="card">
         <div class="card-header-row">
+          <div class="card-title">Characters</div>
+          <div class="seg-group">
+            <button class="btn small primary" id="btn-new-char" type="button">+ New Character</button>
+            <label class="btn small upload-label">
+              Upload PDF
+              <input type="file" id="file-upload" accept=".pdf,application/pdf" hidden />
+            </label>
+          </div>
+        </div>
+        <div id="sheets-list" class="stack-list"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-header-row">
+          <div class="card-title">Sheet Templates</div>
+          <label class="btn small upload-label">
+            Upload Template
+            <input type="file" id="template-upload" accept=".pdf,application/pdf" hidden />
+          </label>
+        </div>
+        <div id="templates-list" class="stack-list"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-header-row">
           <div class="card-title">Git / GitHub Store</div>
           <span class="status-badge" id="git-badge">Local Only</span>
         </div>
@@ -201,17 +230,6 @@
             <button class="btn danger hidden" id="btn-force-save" type="button">Force Save</button>
           </div>
         </div>
-      </div>
-
-      <div class="card">
-        <div class="card-header-row">
-          <div class="card-title">Character Sheets</div>
-          <label class="btn small primary upload-label">
-            Upload PDF
-            <input type="file" id="file-upload" accept=".pdf,application/pdf" hidden />
-          </label>
-        </div>
-        <div id="sheets-list" class="stack-list"></div>
       </div>
 
       <details class="card accordion" id="git-history-card">
@@ -256,6 +274,27 @@
       </div>
       <div class="modal-body" id="am-body"></div>
       <div class="modal-footer" id="am-footer"></div>
+    </div>
+  </div>
+
+  <!-- New Character From Template Modal -->
+  <div id="new-char-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal-sheet">
+      <div class="modal-header">
+        <div class="modal-title">New Character</div>
+        <button class="icon-btn" id="nc-close" type="button" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <label class="form-label" for="nc-name">Character Name</label>
+        <input type="text" id="nc-name" placeholder="e.g. Aelar Stormwind" autocomplete="off" />
+        <label class="form-label" for="nc-template">Sheet Template</label>
+        <select id="nc-template"></select>
+        <div class="muted small-text" id="nc-preview"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" id="nc-cancel" type="button">Cancel</button>
+        <button class="btn primary" id="nc-create" type="button">Create &amp; Open</button>
+      </div>
     </div>
   </div>
 
