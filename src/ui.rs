@@ -76,23 +76,9 @@ pub fn main() -> Result<()> {
     let pdf_path = if let Some(first) = args.first() {
         PathBuf::from(first)
     } else {
-        match crate::platform::open_file_dialog(
-            "Open MPMB Character Sheet",
-            "PDF documents",
-            &["*.pdf"],
-            None,
-            false,
-        ) {
-            Ok(Some(chosen)) => chosen,
-            Ok(None) => return Ok(()),
-            Err(_) => {
-                println!(
-                    "mpmb-reader <sheet.pdf> [--probe <scenario.json> <report.json>]\n\
-                     PDFium: auto-discovered (MPMB_PDFIUM overrides)\n\
-                     Native UI: edit fields, class selection, page navigation and save a new copy."
-                );
-                return Ok(());
-            }
+        match run_launcher_window()? {
+            Some(chosen) => chosen,
+            None => return Ok(()),
         }
     };
     let pdf = Arc::new(Pdf::open(&pdf_path)?);
@@ -343,6 +329,186 @@ fn dialog_options() -> eframe::NativeOptions {
         ..Default::default()
     }
 }
+fn run_launcher_window() -> Result<Option<PathBuf>> {
+    struct Launcher {
+        chosen: Arc<Mutex<Option<PathBuf>>>,
+        path_buf: String,
+        status: String,
+        status_is_error: bool,
+        theme_mode: ThemeMode,
+        theme_applied: Option<ThemeMode>,
+    }
+    impl eframe::App for Launcher {
+        fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+            let p = if self.theme_applied != Some(self.theme_mode) {
+                self.theme_applied = Some(self.theme_mode);
+                set_active_theme(self.theme_mode);
+                theme::apply(ctx, self.theme_mode)
+            } else {
+                Palette::for_mode(self.theme_mode)
+            };
+            // Accept drag-and-drop PDFs anywhere on the launcher window.
+            let dropped: Option<PathBuf> =
+                ctx.input(|i| i.raw.dropped_files.iter().find_map(|f| f.path.clone()));
+            if let Some(path) = dropped {
+                if path.is_file() {
+                    *self.chosen.lock().unwrap() = Some(path);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
+                }
+                self.status = format!("Dropped path is not a readable file: {}", path.display());
+                self.status_is_error = true;
+            }
+            let frame = egui::Frame::new()
+                .fill(p.canvas_bg)
+                .inner_margin(egui::Margin::same(24));
+            egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(16.0);
+                    ui.label(
+                        egui::RichText::new("MPMB Reader")
+                            .size(26.0)
+                            .strong()
+                            .color(p.text_primary),
+                    );
+                    ui.label(
+                        egui::RichText::new(
+                            "Native reader for MorePurpleMoreBetter interactive PDF character sheets",
+                        )
+                        .color(p.text_secondary),
+                    );
+                    ui.add_space(18.0);
+                });
+                theme::card_frame(&p).show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    ui.label(
+                        egui::RichText::new("Open a Character Sheet PDF")
+                            .strong()
+                            .size(15.0),
+                    );
+                    ui.label(
+                        egui::RichText::new(
+                            "Click Browse, drag and drop a .pdf file onto this window, or enter a local path below.",
+                        )
+                        .small()
+                        .color(p.text_secondary),
+                    );
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        let resp = ui.add(
+                            egui::TextEdit::singleline(&mut self.path_buf)
+                                .desired_width(ui.available_width() - 160.0)
+                                .hint_text("/path/to/character-sheet.pdf"),
+                        );
+                        let enter =
+                            resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        if ui.button("Browse…").clicked() {
+                            match crate::platform::open_file_dialog(
+                                "Open MPMB Character Sheet",
+                                "PDF documents",
+                                &["*.pdf"],
+                                None,
+                                false,
+                            ) {
+                                Ok(Some(path)) => {
+                                    *self.chosen.lock().unwrap() = Some(path);
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                    return;
+                                }
+                                Ok(None) => {}
+                                Err(e) => {
+                                    self.status = format!(
+                                        "File picker unavailable ({e:#}). Drag and drop a PDF or enter its path above."
+                                    );
+                                    self.status_is_error = true;
+                                }
+                            }
+                        }
+                        if theme::accent_button(ui, &p, "Open").clicked() || enter {
+                            let trimmed = self.path_buf.trim();
+                            if trimmed.is_empty() {
+                                self.status = "Enter or browse to a local PDF file path.".into();
+                                self.status_is_error = true;
+                            } else {
+                                let candidate = PathBuf::from(trimmed);
+                                if candidate.is_file() {
+                                    *self.chosen.lock().unwrap() = Some(candidate);
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                    return;
+                                }
+                                self.status = format!("File not found: {}", candidate.display());
+                                self.status_is_error = true;
+                            }
+                        }
+                    });
+                    if !self.status.is_empty() {
+                        ui.add_space(8.0);
+                        egui::Frame::new()
+                            .fill(if self.status_is_error {
+                                p.err_bg
+                            } else {
+                                p.accent_soft
+                            })
+                            .corner_radius(egui::CornerRadius::same(6))
+                            .inner_margin(egui::Margin::symmetric(8, 6))
+                            .show(ui, |ui| {
+                                ui.label(egui::RichText::new(&self.status).color(
+                                    if self.status_is_error {
+                                        p.err
+                                    } else {
+                                        p.text_primary
+                                    },
+                                ));
+                            });
+                    }
+                });
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION")))
+                            .small()
+                            .color(p.text_muted),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let label = match self.theme_mode {
+                            ThemeMode::Dark => "Light",
+                            ThemeMode::Light => "Dark",
+                        };
+                        if ui.button(label).clicked() {
+                            self.theme_mode = self.theme_mode.toggled();
+                            set_active_theme(self.theme_mode);
+                        }
+                    });
+                });
+            });
+        }
+    }
+    let chosen = Arc::new(Mutex::new(None));
+    let app = Launcher {
+        chosen: Arc::clone(&chosen),
+        path_buf: String::new(),
+        status: String::new(),
+        status_is_error: false,
+        theme_mode: ThemeMode::from_env(),
+        theme_applied: None,
+    };
+    let opts = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([560., 280.])
+            .with_min_inner_size([460., 240.])
+            .with_drag_and_drop(true),
+        ..Default::default()
+    };
+    eframe::run_native(
+        "MPMB Reader — Open Character Sheet",
+        opts,
+        Box::new(|_| Ok(Box::new(app))),
+    )
+    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    let selected = chosen.lock().unwrap().take();
+    Ok(selected)
+}
+
 fn browse_save_path(current: &str) -> Option<String> {
     let chosen = crate::platform::save_file_dialog(
         "Save Character Sheet Copy",

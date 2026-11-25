@@ -1,11 +1,12 @@
 //! Cross-platform desktop integration helpers (file pickers, URL/file opening).
 //! Linux/Unix preserves the exact `zenity` / `xdg-open` behavior tested by the
-//! GTK/AT-SPI desktop suites; Windows uses native WinForms dialogs via PowerShell
-//! STA and `cmd /C start` without extra native crates.
+//! GTK/AT-SPI desktop suites, falling back to `kdialog` when `zenity` is absent;
+//! Windows uses native WinForms dialogs via PowerShell STA with explicit UTF-8
+//! output encoding and `cmd /C start`.
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 
-#[cfg(target_os = "windows")]
+#[cfg(any(test, target_os = "windows"))]
 fn ps_escape(text: &str) -> String {
     text.replace('\'', "''")
 }
@@ -19,6 +20,69 @@ fn windows_filter_string(label: &str, patterns: &[&str], include_all_files: bool
     } else {
         base
     }
+}
+
+#[cfg(any(test, target_os = "windows"))]
+fn windows_open_script(
+    title: &str,
+    filter_label: &str,
+    patterns: &[&str],
+    start_dir: Option<&Path>,
+    include_all_files: bool,
+) -> String {
+    let filter = windows_filter_string(filter_label, patterns, include_all_files);
+    let init_dir = start_dir
+        .map(|d| {
+            format!(
+                "$d.InitialDirectory = '{}';",
+                ps_escape(&d.to_string_lossy())
+            )
+        })
+        .unwrap_or_default();
+    format!(
+        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; \
+         Add-Type -AssemblyName System.Windows.Forms; \
+         $d = New-Object System.Windows.Forms.OpenFileDialog; \
+         $d.Title = '{}'; \
+         $d.Filter = '{}'; \
+         {} \
+         if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{ \
+             [Console]::Out.Write($d.FileName) \
+         }}",
+        ps_escape(title),
+        ps_escape(&filter),
+        init_dir
+    )
+}
+
+#[cfg(any(test, target_os = "windows"))]
+fn windows_save_script(
+    title: &str,
+    filter_label: Option<(&str, &[&str])>,
+    initial_path: Option<&str>,
+) -> String {
+    let filter_stmt = filter_label
+        .map(|(label, patterns)| {
+            let f = windows_filter_string(label, patterns, true);
+            format!("$d.Filter = '{}';", ps_escape(&f))
+        })
+        .unwrap_or_default();
+    let file_stmt = initial_path
+        .map(|p| format!("$d.FileName = '{}';", ps_escape(p)))
+        .unwrap_or_default();
+    format!(
+        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; \
+         Add-Type -AssemblyName System.Windows.Forms; \
+         $d = New-Object System.Windows.Forms.SaveFileDialog; \
+         $d.Title = '{}'; \
+         {} {} \
+         if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{ \
+             [Console]::Out.Write($d.FileName) \
+         }}",
+        ps_escape(title),
+        filter_stmt,
+        file_stmt
+    )
 }
 
 pub fn open_file_dialog(
@@ -43,7 +107,25 @@ pub fn open_file_dialog(
         if let Some(dir) = start_dir {
             cmd.arg(format!("--filename={}/", dir.display()));
         }
-        let output = cmd.output().context("open native file picker")?;
+        let output = match cmd.output() {
+            Ok(out) => out,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                // Fall back to kdialog on KDE/Plasma systems without zenity.
+                let mut kd = std::process::Command::new("kdialog");
+                kd.arg("--getopenfilename")
+                    .arg(
+                        start_dir
+                            .map(|d| d.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| ".".to_owned()),
+                    )
+                    .arg(format!("{filter_label} ({})", patterns.join(" ")))
+                    .arg("--title")
+                    .arg(title);
+                kd.output()
+                    .context("open native file picker (install zenity or kdialog)")?
+            }
+            Err(err) => return Err(err).context("open native file picker"),
+        };
         if output.status.code() == Some(1) {
             return Ok(None);
         }
@@ -64,28 +146,8 @@ pub fn open_file_dialog(
     }
     #[cfg(target_os = "windows")]
     {
-        let filter = windows_filter_string(filter_label, patterns, include_all_files);
-        let init_dir = start_dir
-            .map(|d| {
-                format!(
-                    "$d.InitialDirectory = '{}';",
-                    ps_escape(&d.to_string_lossy())
-                )
-            })
-            .unwrap_or_default();
-        let script = format!(
-            "Add-Type -AssemblyName System.Windows.Forms; \
-             $d = New-Object System.Windows.Forms.OpenFileDialog; \
-             $d.Title = '{}'; \
-             $d.Filter = '{}'; \
-             {} \
-             if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{ \
-                 [Console]::Out.Write($d.FileName) \
-             }}",
-            ps_escape(title),
-            ps_escape(&filter),
-            init_dir
-        );
+        let script =
+            windows_open_script(title, filter_label, patterns, start_dir, include_all_files);
         let output = std::process::Command::new("powershell")
             .args([
                 "-NoProfile",
@@ -131,7 +193,21 @@ pub fn save_file_dialog(
         if let Some(path) = initial_path {
             cmd.arg(format!("--filename={path}"));
         }
-        let output = cmd.output().context("open native save dialog")?;
+        let output = match cmd.output() {
+            Ok(out) => out,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                let mut kd = std::process::Command::new("kdialog");
+                kd.arg("--getsavefilename")
+                    .arg(initial_path.unwrap_or("mpmb-character.pdf"));
+                if let Some((label, patterns)) = filter_label {
+                    kd.arg(format!("{label} ({})", patterns.join(" ")));
+                }
+                kd.arg("--title").arg(title);
+                kd.output()
+                    .context("open native save dialog (install zenity or kdialog)")?
+            }
+            Err(err) => return Err(err).context("open native save dialog"),
+        };
         if output.status.code() == Some(1) {
             return Ok(None);
         }
@@ -152,27 +228,7 @@ pub fn save_file_dialog(
     }
     #[cfg(target_os = "windows")]
     {
-        let filter_stmt = filter_label
-            .map(|(label, patterns)| {
-                let f = windows_filter_string(label, patterns, true);
-                format!("$d.Filter = '{}';", ps_escape(&f))
-            })
-            .unwrap_or_default();
-        let file_stmt = initial_path
-            .map(|p| format!("$d.FileName = '{}';", ps_escape(p)))
-            .unwrap_or_default();
-        let script = format!(
-            "Add-Type -AssemblyName System.Windows.Forms; \
-             $d = New-Object System.Windows.Forms.SaveFileDialog; \
-             $d.Title = '{}'; \
-             {} {} \
-             if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{ \
-                 [Console]::Out.Write($d.FileName) \
-             }}",
-            ps_escape(title),
-            filter_stmt,
-            file_stmt
-        );
+        let script = windows_save_script(title, filter_label, initial_path);
         let output = std::process::Command::new("powershell")
             .args([
                 "-NoProfile",
@@ -250,7 +306,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn windows_filter_formats_patterns_and_optional_wildcard() {
+    fn windows_filter_and_utf8_powershell_scripts_escape_quotes_and_unicode() {
         assert_eq!(
             windows_filter_string("XFDF", &["*.xfdf", "*.xml"], false),
             "XFDF (*.xfdf;*.xml)|*.xfdf;*.xml"
@@ -259,5 +315,23 @@ mod tests {
             windows_filter_string("PDF", &["*.pdf"], true),
             "PDF (*.pdf)|*.pdf|All files (*.*)|*.*"
         );
+        let open = windows_open_script(
+            "Open MPMB's Sheet",
+            "PDF",
+            &["*.pdf"],
+            Some(Path::new("C:\\Users\\Élodie's Sheets")),
+            false,
+        );
+        assert!(open.starts_with("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8;"));
+        assert!(open.contains("Open MPMB''s Sheet"));
+        assert!(open.contains("Élodie''s Sheets"));
+
+        let save = windows_save_script(
+            "Save Copy",
+            Some(("PDF", &["*.pdf"])),
+            Some("C:\\Users\\Ω\\sheet's.pdf"),
+        );
+        assert!(save.starts_with("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8;"));
+        assert!(save.contains("sheet''s.pdf"));
     }
 }

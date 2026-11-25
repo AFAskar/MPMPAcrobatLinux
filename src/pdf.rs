@@ -1607,11 +1607,57 @@ where
         let _ = std::fs::remove_file(&tmp);
         return Err(err).context("failed to write staged PDF");
     }
-    let publish_res = std::fs::hard_link(&tmp, path);
+    let publish_res = publish_new_file(&tmp, path, bytes);
     let _ = std::fs::remove_file(&tmp);
-    publish_res.context("save requires a new disposable path")?;
+    publish_res?;
     if let Ok(dir) = std::fs::File::open(parent) {
         let _ = dir.sync_all();
+    }
+    Ok(())
+}
+
+fn is_hard_link_unsupported(err: &std::io::Error) -> bool {
+    if err.kind() == std::io::ErrorKind::AlreadyExists {
+        return false;
+    }
+    if matches!(
+        err.kind(),
+        std::io::ErrorKind::Unsupported | std::io::ErrorKind::InvalidInput
+    ) {
+        return true;
+    }
+    // Common errno / Win32 codes on FAT32/exFAT/FUSE/portal mounts where hard_link is disallowed:
+    // Unix: EPERM(1), EXDEV(18), EINVAL(22), ENOSYS(38), EOPNOTSUPP(95)
+    // Windows: ERROR_INVALID_FUNCTION(1), ERROR_NOT_SUPPORTED(50)
+    #[cfg(unix)]
+    let fallback_codes = [1, 18, 22, 38, 95];
+    #[cfg(windows)]
+    let fallback_codes = [1, 50];
+    #[cfg(not(any(unix, windows)))]
+    let fallback_codes: [i32; 0] = [];
+    err.raw_os_error()
+        .is_some_and(|code| fallback_codes.contains(&code))
+}
+
+fn publish_new_file(tmp: &Path, path: &Path, bytes: &[u8]) -> Result<()> {
+    match std::fs::hard_link(tmp, path) {
+        Ok(()) => Ok(()),
+        Err(err) if is_hard_link_unsupported(&err) => create_new_fallback(path, bytes),
+        Err(err) => Err(err).context("save requires a new disposable path"),
+    }
+}
+
+fn create_new_fallback(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let mut dst = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .context("save requires a new disposable path")?;
+    if let Err(err) = dst.write_all(bytes).and_then(|_| dst.sync_all()) {
+        drop(dst);
+        let _ = std::fs::remove_file(path);
+        return Err(err).context("failed to write new PDF");
     }
     Ok(())
 }
@@ -2337,6 +2383,29 @@ mod action_tests {
             rt.eval("log").unwrap(),
             json!(["w1:Fo", "w1:U", "w1:Bl", "w0:Fo", "w0:U", "w0:Bl", "field:U", "f1:U"])
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn create_new_fallback_writes_new_file_and_refuses_overwrites() {
+        let dir = std::env::temp_dir().join(format!("mpmb-create-new-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("out.pdf");
+
+        create_new_fallback(&target, b"%PDF-1.7\n").unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"%PDF-1.7\n");
+        // Must never overwrite an existing file.
+        assert!(create_new_fallback(&target, b"overwrite").is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"%PDF-1.7\n");
+        assert!(!is_hard_link_unsupported(&std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "exists"
+        )));
+        assert!(is_hard_link_unsupported(&std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "unsupported"
+        )));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

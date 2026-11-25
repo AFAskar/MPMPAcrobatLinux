@@ -320,7 +320,7 @@ mod tests {
             document.trailer.set("Root", catalog);
             let path = self.0.join(name);
             document.save(&path).unwrap();
-            path
+            std::fs::canonicalize(&path).unwrap_or(path)
         }
     }
     impl Drop for Fixture {
