@@ -559,6 +559,7 @@ struct SheetWorker {
     bridge: Arc<InteractionBridge>,
     renderer: Option<Renderer>,
     autosave: bool,
+    capabilities: HostCapabilities,
     active: Option<ActiveSheet>,
     last_save_conflict: Option<SaveResult>,
 }
@@ -807,7 +808,7 @@ impl SheetWorker {
             None,
             None,
             Some(self.bridge.clone()),
-            HostCapabilities::server_restricted(),
+            self.capabilities,
         )?;
         // Reject sheets that fail their startup readiness check BEFORE replacing
         // the currently active session.
@@ -1361,6 +1362,13 @@ struct AppState {
 
 impl AppState {
     fn start(config: &ServeConfig) -> Result<Self> {
+        Self::start_with_capabilities(config, HostCapabilities::server_restricted())
+    }
+
+    fn start_with_capabilities(
+        config: &ServeConfig,
+        capabilities: HostCapabilities,
+    ) -> Result<Self> {
         let store = Arc::new(SheetStore::open(config.store.clone())?);
         let (interaction_tx, interaction_rx) = watch::channel(None);
         let (events_tx, _) = broadcast::channel(64);
@@ -1389,6 +1397,7 @@ impl AppState {
                     bridge: worker_bridge,
                     renderer,
                     autosave,
+                    capabilities,
                     active: None,
                     last_save_conflict: None,
                 };
@@ -3861,20 +3870,30 @@ mod tests {
         );
         // Startup leaves `delay = true` with no resumable timer -> Runtime::ready() fails!
         build_scripted_pdf(&store_dir.join("stuck-ready.pdf"), "this.delay = true;");
+        // Startup infinite loop -> server script_timeout interrupts it without wedging worker!
+        build_scripted_pdf(
+            &store_dir.join("infinite-loop.pdf"),
+            "try { while (true) {} } catch (e) {}",
+        );
         make_interactive_test_pdf(&store_dir.join("second.pdf"));
 
-        let state = AppState::start(&ServeConfig {
-            bind: "127.0.0.1:0".parse().unwrap(),
-            store: StoreConfig {
-                root: store_dir.clone(),
-                git: None,
+        let state = AppState::start_with_capabilities(
+            &ServeConfig {
+                bind: "127.0.0.1:0".parse().unwrap(),
+                store: StoreConfig {
+                    root: store_dir.clone(),
+                    git: None,
+                },
+                default_sheet: None,
+                auth_token: Some("tok-r2".into()),
+                autosave: false,
+                git_auto_sync_secs: 0,
             },
-            default_sheet: None,
-            auth_token: Some("tok-r2".into()),
-            autosave: false,
-            git_auto_sync_secs: 0,
-        })
+            HostCapabilities::server_restricted()
+                .with_script_timeout(Some(Duration::from_millis(600))),
+        )
         .unwrap();
+        let state_handle = state.clone();
         let app = build_router(state);
 
         // 1. /livez and /healthz respond 200 OK without auth.
@@ -3986,8 +4005,9 @@ mod tests {
         .await;
         assert_eq!(st, StatusCode::OK);
 
-        // 5. Queue Job B (edit PC Name -> 'GhostQueuedEdit') right BEFORE Job A opens its alert.
+        // 5. Queue Job B (edit PC Name -> 'GhostQueuedEdit') deterministically BEFORE Job A opens its alert.
         //    Job B must receive 409 Conflict AND must NOT execute after Job A's alert is answered!
+        let prev_job = state_handle.bridge.current_job.load(Ordering::SeqCst);
         let app_a = app.clone();
         let job_a = tokio::spawn(async move {
             authed_post(
@@ -3997,8 +4017,23 @@ mod tests {
             )
             .await
         });
-        // Give Job A ~40ms to enter the worker loop and start its 300ms spin BEFORE opening alert.
-        tokio::time::sleep(Duration::from_millis(40)).await;
+        // Synchronize until Job A has entered the worker loop and started its spin
+        // while no interaction is active yet.
+        for _ in 0..500 {
+            if state_handle.bridge.current_job.load(Ordering::SeqCst) != prev_job {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        assert_ne!(
+            state_handle.bridge.current_job.load(Ordering::SeqCst),
+            prev_job,
+            "Job A should have entered the worker"
+        );
+        assert!(
+            state_handle.bridge.active_public().is_none(),
+            "Job B must queue BEFORE Job A opens its alert"
+        );
         let app_b = app.clone();
         let job_b = tokio::spawn(async move {
             authed_post(
@@ -4008,6 +4043,17 @@ mod tests {
             )
             .await
         });
+        // Wait until Job B is actually registered in flight while alert is still not open.
+        for _ in 0..500 {
+            if state_handle.bridge.in_flight_jobs.lock().unwrap().len() >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        assert!(
+            state_handle.bridge.active_public().is_none(),
+            "Job B must have queued while Job A's alert was still unopened"
+        );
 
         let (st_a, body_a) = job_a.await.unwrap();
         assert_eq!(st_a, StatusCode::ACCEPTED);
@@ -4016,7 +4062,7 @@ mod tests {
         let (st_b, _) = job_b.await.unwrap();
         assert_eq!(st_b, StatusCode::CONFLICT);
 
-        // Answer Job A's alert; verify Job A completes and Job B NEVER ran!
+        // Answer Job A's alert.
         let reply_uri = format!("/api/session/interaction/{inter_id}");
         let reply_resp = app
             .clone()
@@ -4034,16 +4080,61 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(reply_resp.status(), StatusCode::OK);
-        let reply_json: Value = serde_json::from_slice(
-            &axum::body::to_bytes(reply_resp.into_body(), 1024 * 1024)
+
+        // Issue a fresh GET /api/session/state (queued AFTER Job B in the worker channel)
+        // to prove the worker passed and skipped cancelled Job B without mutating state.
+        let post_state_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/session/state")
+                    .header("authorization", "Bearer tok-r2")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(post_state_resp.status(), StatusCode::OK);
+        let post_state: Value = serde_json::from_slice(
+            &axum::body::to_bytes(post_state_resp.into_body(), 1024 * 1024)
                 .await
                 .unwrap(),
         )
         .unwrap();
         assert_eq!(
-            reply_json["state"]["character"]["name"], "AfterAlert",
+            post_state["character"]["name"], "AfterAlert",
             "cancelled queued Job B must never execute after Job A finishes"
         );
+
+        // 6. Startup infinite-loop PDF times out cleanly without wedging the server worker,
+        //    and the SAME worker immediately opens a normal sheet afterward.
+        let started = Instant::now();
+        let (st_loop, body_loop) = authed_post(
+            app.clone(),
+            "/api/session/open",
+            json!({"path": "infinite-loop.pdf", "force": true}),
+        )
+        .await;
+        assert_eq!(st_loop, StatusCode::BAD_REQUEST);
+        assert!(
+            body_loop["error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("timed out"),
+            "unexpected timeout payload: {body_loop}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "infinite-loop open hung past script timeout"
+        );
+        let (st_ok, body_ok) = authed_post(
+            app.clone(),
+            "/api/session/open",
+            json!({"path": "second.pdf", "force": true}),
+        )
+        .await;
+        assert_eq!(st_ok, StatusCode::OK);
+        assert_eq!(body_ok["state"]["path"], "second.pdf");
 
         let _ = std::fs::remove_dir_all(&base);
     }

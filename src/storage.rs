@@ -1190,18 +1190,49 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
+fn sha256_file_bounded(path: &Path, max_bytes: usize) -> Result<String> {
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    let mut total: usize = 0;
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        total = total.saturating_add(n);
+        if total > max_bytes {
+            bail!("file {} exceeds {} byte limit", path.display(), max_bytes);
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
+}
+
+#[cfg(unix)]
+extern "C" {
+    fn kill(pid: i32, sig: i32) -> i32;
+}
+
 fn kill_process_tree(child: &mut std::process::Child) {
     #[cfg(unix)]
     {
-        let pid = child.id();
-        // Best-effort process-group SIGKILL so transport grandchildren that
-        // inherited stdout/stderr pipes are terminated alongside git.
-        let _ = Command::new("kill")
-            .args(["-KILL", &format!("-{pid}")])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        // Signal the child's dedicated process group directly via POSIX kill(2)
+        // with SIGKILL (9) so transport grandchildren holding output pipes open
+        // are terminated immediately without spawning an external binary.
+        if let Ok(pgid) = i32::try_from(child.id()) {
+            if pgid > 0 {
+                // SAFETY: POSIX kill(-pgid, SIGKILL) with pgid > 0 targets only
+                // the child's own process group created via `process_group(0)`.
+                unsafe {
+                    kill(-pgid, 9);
+                }
+            }
+        }
     }
     let _ = child.kill();
     let _ = child.wait();
@@ -1521,7 +1552,11 @@ fn collect_pdfs(root: &Path, dir: &Path, out: &mut Vec<SheetEntry>) -> Result<()
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let name = entry.file_name();
-        let name_str = name.to_string_lossy();
+        let Some(name_str) = name.to_str() else {
+            // Skip non-UTF-8 filenames so lossy replacement characters cannot
+            // alias distinct files on disk.
+            continue;
+        };
         if name_str.starts_with('.') || name_str.contains('\\') || name_str != name_str.trim() {
             continue;
         }
@@ -1551,7 +1586,9 @@ fn collect_stageable_paths(root: &Path, dir: &Path, out: &mut Vec<String>) -> Re
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let name = entry.file_name();
-        let name_str = name.to_string_lossy();
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
         if name_str.starts_with('.') || name_str.contains('\\') || name_str != name_str.trim() {
             continue;
         }
@@ -1562,9 +1599,11 @@ fn collect_stageable_paths(root: &Path, dir: &Path, out: &mut Vec<String>) -> Re
         }
         if ty.is_dir() {
             collect_stageable_paths(root, &path, out)?;
-        } else if ty.is_file() && is_sheet_or_sidecar_path(&name_str) {
+        } else if ty.is_file() && is_sheet_or_sidecar_path(name_str) {
             if let Ok(rel) = path.strip_prefix(root) {
-                out.push(rel.to_string_lossy().replace('\\', "/"));
+                if let Some(rel_str) = rel.to_str() {
+                    out.push(rel_str.replace('\\', "/"));
+                }
             }
         }
     }
@@ -1572,14 +1611,15 @@ fn collect_stageable_paths(root: &Path, dir: &Path, out: &mut Vec<String>) -> Re
 }
 
 fn sheet_entry_from_path(root: &Path, abs: &Path) -> Result<SheetEntry> {
-    let rel = abs
-        .strip_prefix(root)
-        .unwrap_or(abs)
-        .to_string_lossy()
+    let rel_path = abs.strip_prefix(root).unwrap_or(abs);
+    let rel = rel_path
+        .to_str()
+        .ok_or_else(|| anyhow!("sheet path must be valid UTF-8"))?
         .replace('\\', "/");
     let name = abs
         .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
+        .and_then(|n| n.to_str())
+        .map(str::to_owned)
         .unwrap_or_else(|| rel.clone());
     let meta = fs::symlink_metadata(abs)?;
     if meta.file_type().is_symlink() || !meta.is_file() {
@@ -1588,8 +1628,7 @@ fn sheet_entry_from_path(root: &Path, abs: &Path) -> Result<SheetEntry> {
     if meta.len() as usize > MAX_PDF_BYTES {
         bail!("sheet exceeds 64 MiB limit");
     }
-    let bytes = read_bounded(abs, MAX_PDF_BYTES)?;
-    let pdf_sha = sha256_hex(&bytes);
+    let pdf_sha = sha256_file_bounded(abs, MAX_PDF_BYTES)?;
     let pdf_modified = meta.modified().ok();
     let modified_unix = pdf_modified
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
@@ -2537,13 +2576,45 @@ mod tests {
             b"%PDF-1.7\n%v-fetch-head\n"
         );
 
-        // 9. wait_child_with_timeout bounds collection even when a grandchild keeps stderr open.
+        // 9. wait_child_with_timeout bounds collection AND terminates grandchildren holding stderr open.
         #[cfg(unix)]
         {
+            use std::os::unix::ffi::OsStrExt;
             use std::os::unix::process::CommandExt;
+
+            // 9a. Non-UTF-8 filenames are skipped during discovery & staging so
+            // they never alias UTF-8 replacement-character filenames.
+            let non_utf8_name = std::ffi::OsStr::from_bytes(b"bad\xff.pdf");
+            fs::write(work_a.join(non_utf8_name), b"%PDF-1.7\n%non-utf8\n").unwrap();
+            let repl_name = "bad\u{FFFD}.pdf";
+            fs::write(work_a.join(repl_name), b"%PDF-1.7\n%utf8-repl\n").unwrap();
+            let listed_paths: Vec<String> = store_a
+                .list_sheets()
+                .unwrap()
+                .into_iter()
+                .map(|s| s.path)
+                .collect();
+            assert_eq!(
+                listed_paths.iter().filter(|p| *p == repl_name).count(),
+                1,
+                "non-UTF-8 file must not alias replacement-char filename"
+            );
+            let mut stageable = Vec::new();
+            collect_stageable_paths(&work_a, &work_a, &mut stageable).unwrap();
+            assert_eq!(
+                stageable.iter().filter(|p| *p == repl_name).count(),
+                1,
+                "non-UTF-8 file must be skipped during staging"
+            );
+            fs::remove_file(work_a.join(non_utf8_name)).unwrap();
+            fs::remove_file(work_a.join(repl_name)).unwrap();
+
+            // 9b. Direct process-group signaling terminates descendant holding stderr.
+            let pid_file = base.join("grandchild.pid");
+            let script = format!("sleep 30 >&2 & echo $! > {}; exit 0", pid_file.display());
             let mut cmd = Command::new("sh");
             cmd.process_group(0)
-                .args(["-c", "(sleep 30 >&2) & exit 0"])
+                .args(["-c", &script])
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
@@ -2556,7 +2627,111 @@ mod tests {
                 "wait_child_with_timeout hung past deadline: {:?}",
                 started.elapsed()
             );
+            let grandchild_pid: i32 = fs::read_to_string(&pid_file)
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap();
+            // Wait briefly for OS cleanup, then assert the grandchild is no longer alive.
+            let mut alive = true;
+            for _ in 0..40 {
+                let rc = unsafe { kill(grandchild_pid, 0) };
+                if rc != 0 {
+                    alive = false;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            assert!(
+                !alive,
+                "grandchild process {grandchild_pid} survived kill_process_tree"
+            );
         }
+
+        // 10. Two independent SheetStore instances sharing the same root serialize
+        //     save_sheet_atomic and git_sync via `.mpmb-store.lock`, so no committed
+        //     revision ever contains a mismatched PDF/sidecar pair.
+        let sync_base = base.join("dual-instance");
+        let sync_bare = sync_base.join("remote.git");
+        let sync_work = sync_base.join("work");
+        init_bare_remote(&sync_bare);
+        let sync_url = sync_bare.to_string_lossy().into_owned();
+        let writer_store = SheetStore::open(StoreConfig {
+            root: sync_work.clone(),
+            git: Some(GitConfig::new(sync_url.clone())),
+        })
+        .unwrap();
+        writer_store
+            .upload_sheet("pair.pdf", b"%PDF-1.7\n%v0\n", false)
+            .unwrap();
+        writer_store
+            .save_sheet_atomic(
+                "pair.pdf",
+                b"%PDF-1.7\n%v0\n",
+                None,
+                Some(&json!({"character": {"name": "Iter-0"}})),
+                true,
+            )
+            .unwrap();
+        writer_store.git_sync("initial pair").unwrap();
+
+        let syncer_store = SheetStore::open(StoreConfig {
+            root: sync_work.clone(),
+            git: Some(GitConfig::new(sync_url)),
+        })
+        .unwrap();
+
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let b1 = std::sync::Arc::clone(&barrier);
+        let writer_handle = std::thread::spawn(move || {
+            b1.wait();
+            for i in 1..=12 {
+                let pdf = format!("%PDF-1.7\n%dual-instance-iter-{i}\n");
+                let sc = json!({"character": {"name": format!("Iter-{i}")}});
+                let res = writer_store
+                    .save_sheet_atomic("pair.pdf", pdf.as_bytes(), None, Some(&sc), true)
+                    .unwrap();
+                assert!(matches!(res, SaveResult::Saved { .. }));
+            }
+        });
+        let b2 = std::sync::Arc::clone(&barrier);
+        let syncer_handle = std::thread::spawn(move || {
+            b2.wait();
+            for i in 1..=6 {
+                let _ = syncer_store.git_sync(&format!("sync-{i}")).unwrap();
+            }
+            syncer_store.git_sync("final-dual-sync").unwrap()
+        });
+        writer_handle.join().unwrap();
+        let final_res = syncer_handle.join().unwrap();
+        assert!(final_res.pushed || final_res.status == "clean");
+
+        // Verify EVERY commit on remote `main` has a consistent PDF + sidecar `pdfSha256`.
+        let revs_out = test_git_cmd(Some(&sync_bare))
+            .args(["rev-list", "main"])
+            .output()
+            .unwrap();
+        let revs = String::from_utf8(revs_out.stdout).unwrap();
+        let mut checked_commits = 0usize;
+        for rev in revs.lines().filter(|l| !l.trim().is_empty()) {
+            let pdf_out = test_git_cmd(Some(&sync_bare))
+                .args(["show", &format!("{rev}:pair.pdf")])
+                .output()
+                .unwrap();
+            let sc_out = test_git_cmd(Some(&sync_bare))
+                .args(["show", &format!("{rev}:pair.pdf.state.json")])
+                .output()
+                .unwrap();
+            assert!(pdf_out.status.success() && sc_out.status.success());
+            let sc_json: Value = serde_json::from_slice(&sc_out.stdout).unwrap();
+            assert_eq!(
+                sc_json["pdfSha256"].as_str(),
+                Some(sha256_hex(&pdf_out.stdout).as_str()),
+                "commit {rev} recorded mismatched PDF and sidecar"
+            );
+            checked_commits += 1;
+        }
+        assert!(checked_commits >= 2);
 
         let _ = fs::remove_dir_all(&base);
     }
