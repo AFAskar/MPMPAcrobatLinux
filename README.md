@@ -74,4 +74,4 @@ See [docs/testing-environment.md](docs/testing-environment.md) for setup, protoc
 
 ## License
 
-Licensed under the [MIT License](LICENSE). Third-party bundled runtime licenses (PDFium and DejaVu Fonts) are included in packaged releases.
+Licensed under the [GNU Affero General Public License v3.0 or later (`AGPL-3.0-or-later`)](LICENSE). Third-party bundled runtime licenses (PDFium and DejaVu Fonts) are included in packaged releases.

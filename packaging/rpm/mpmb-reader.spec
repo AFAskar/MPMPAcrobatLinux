@@ -7,7 +7,7 @@ Name:           mpmb-reader
 Version:        %{?_version}%{!?_version:0.1.0}
 Release:        1%{?dist}
 Summary:        Native desktop reader for MPMB interactive PDF character sheets
-License:        MIT AND BSD-3-Clause
+License:        AGPL-3.0-or-later AND BSD-3-Clause
 URL:            https://github.com/AFAskar/MPMPAcrobatLinux
 ExclusiveArch:  x86_64
 

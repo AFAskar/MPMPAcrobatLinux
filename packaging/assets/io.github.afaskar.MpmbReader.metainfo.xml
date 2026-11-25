@@ -4,7 +4,7 @@
   <name>MPMB Reader</name>
   <summary>Native desktop reader for MPMB interactive PDF character sheets</summary>
   <metadata_license>CC0-1.0</metadata_license>
-  <project_license>MIT</project_license>
+  <project_license>AGPL-3.0-or-later</project_license>
   <description>
     <p>
       MPMB Reader is a native Rust desktop application built to run original
