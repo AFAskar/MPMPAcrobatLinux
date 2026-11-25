@@ -8,13 +8,180 @@ use std::{
     path::PathBuf,
     rc::Rc,
     sync::{Arc, LazyLock, Mutex},
+    time::{Duration, Instant},
 };
 mod document_context;
 mod documents;
+
+/// Pluggable host callback for interactive dialogs, alerts, and URL opens.
+/// Desktop mode leaves this unset (falling back to native egui dialogs);
+/// web/server mode supplies a bridge that forwards requests over WebSocket.
+pub trait InteractionHandler: Send + Sync {
+    fn modal(&self, request: &Value) -> Result<Value>;
+    fn alert(&self, request: &Value) -> Result<Value>;
+    fn launch_url(&self, _url: &str, _new_frame: bool) -> Result<bool> {
+        Ok(false)
+    }
+}
+
+/// Capability policy governing host filesystem, native desktop operations,
+/// and per-evaluation QuickJS execution time budgets.
+/// Desktop/probe mode defaults to `HostCapabilities::desktop()`; web/server mode
+/// uses `HostCapabilities::server_restricted()` so uploaded PDF scripts cannot
+/// read arbitrary server files, open native desktop pickers/dialogs, or wedge
+/// the worker thread with infinite loops.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HostCapabilities {
+    pub allow_host_fs: bool,
+    pub allow_native_dialogs: bool,
+    pub script_timeout: Option<Duration>,
+}
+
+const DEFAULT_SERVER_SCRIPT_TIMEOUT: Duration = Duration::from_secs(15);
+
+impl HostCapabilities {
+    pub const fn desktop() -> Self {
+        Self {
+            allow_host_fs: true,
+            allow_native_dialogs: true,
+            script_timeout: None,
+        }
+    }
+
+    pub const fn server_restricted() -> Self {
+        Self {
+            allow_host_fs: false,
+            allow_native_dialogs: false,
+            script_timeout: Some(DEFAULT_SERVER_SCRIPT_TIMEOUT),
+        }
+    }
+
+    #[cfg(test)]
+    pub const fn with_script_timeout(mut self, script_timeout: Option<Duration>) -> Self {
+        self.script_timeout = script_timeout;
+        self
+    }
+}
+
+#[derive(Clone)]
+struct ExecutionBudget {
+    limit: Duration,
+    state: Arc<Mutex<BudgetState>>,
+}
+
+struct BudgetState {
+    depth: usize,
+    deadline: Option<Instant>,
+    timed_out: bool,
+}
+
+struct BudgetGuard {
+    budget: Option<ExecutionBudget>,
+}
+
+struct BudgetPauseGuard {
+    budget: Option<ExecutionBudget>,
+    remaining: Option<Duration>,
+}
+
+impl ExecutionBudget {
+    fn new(limit: Duration) -> Self {
+        Self {
+            limit,
+            state: Arc::new(Mutex::new(BudgetState {
+                depth: 0,
+                deadline: None,
+                timed_out: false,
+            })),
+        }
+    }
+
+    fn install(&self, engine: &Engine) {
+        let state = Arc::clone(&self.state);
+        engine.set_interrupt_handler(Some(Box::new(move || {
+            let mut guard = state.lock().unwrap();
+            if guard.deadline.is_some_and(|d| Instant::now() >= d) {
+                guard.timed_out = true;
+                true
+            } else {
+                false
+            }
+        })));
+    }
+
+    fn enter(budget: Option<&Self>) -> BudgetGuard {
+        if let Some(b) = budget {
+            let mut guard = b.state.lock().unwrap();
+            if guard.depth == 0 {
+                guard.timed_out = false;
+                guard.deadline = Some(Instant::now() + b.limit);
+            }
+            guard.depth += 1;
+            BudgetGuard {
+                budget: Some(b.clone()),
+            }
+        } else {
+            BudgetGuard { budget: None }
+        }
+    }
+
+    fn pause(budget: Option<&Self>) -> BudgetPauseGuard {
+        if let Some(b) = budget {
+            let mut guard = b.state.lock().unwrap();
+            let remaining = guard
+                .deadline
+                .take()
+                .map(|d| d.saturating_duration_since(Instant::now()));
+            BudgetPauseGuard {
+                budget: Some(b.clone()),
+                remaining,
+            }
+        } else {
+            BudgetPauseGuard {
+                budget: None,
+                remaining: None,
+            }
+        }
+    }
+
+    fn take_timed_out(&self) -> bool {
+        let mut guard = self.state.lock().unwrap();
+        let was = guard.timed_out;
+        guard.timed_out = false;
+        was
+    }
+}
+
+impl Drop for BudgetGuard {
+    fn drop(&mut self) {
+        if let Some(b) = &self.budget {
+            let mut guard = b.state.lock().unwrap();
+            guard.depth = guard.depth.saturating_sub(1);
+            if guard.depth == 0 {
+                guard.deadline = None;
+            }
+        }
+    }
+}
+
+impl Drop for BudgetPauseGuard {
+    fn drop(&mut self) {
+        if let (Some(b), Some(rem)) = (&self.budget, self.remaining) {
+            let mut guard = b.state.lock().unwrap();
+            if guard.depth > 0 {
+                guard.deadline = Some(Instant::now() + rem);
+            }
+        }
+    }
+}
+
 struct DocumentServices {
     dialogs: Arc<Mutex<VecDeque<Value>>>,
     alerts: Arc<Mutex<VecDeque<Value>>>,
     interactive: bool,
+    interaction: Option<Arc<dyn InteractionHandler>>,
+    capabilities: HostCapabilities,
+    budget: Option<ExecutionBudget>,
     print_output_dir: Option<PathBuf>,
     attachment_output_dir: Option<PathBuf>,
     trace_dir: Option<PathBuf>,
@@ -29,6 +196,7 @@ pub struct Runtime {
     engine: Engine,
     pub loaded: usize,
     documents: Rc<documents::Documents>,
+    budget: Option<ExecutionBudget>,
 }
 // Reader's span metrics use one decimal with ties-to-even, applied to the
 // actual binary value (8.05 rounds up; 7.25 rounds down). Multiplication by ten
@@ -248,14 +416,43 @@ impl Runtime {
         print_output_dir: Option<std::path::PathBuf>,
         attachment_output_dir: Option<std::path::PathBuf>,
     ) -> Result<Self> {
+        Self::new_with_capabilities(
+            pdf,
+            dialogs,
+            alerts,
+            interactive,
+            print_output_dir,
+            attachment_output_dir,
+            None,
+            HostCapabilities::desktop(),
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_capabilities(
+        pdf: &Arc<Pdf>,
+        dialogs: Vec<Value>,
+        alerts: Vec<Value>,
+        interactive: bool,
+        print_output_dir: Option<std::path::PathBuf>,
+        attachment_output_dir: Option<std::path::PathBuf>,
+        interaction: Option<Arc<dyn InteractionHandler>>,
+        capabilities: HostCapabilities,
+    ) -> Result<Self> {
         let engine = Engine::new()?;
         engine.set_memory_limit(512 * 1024 * 1024);
         engine.set_max_stack_size(2 * 1024 * 1024);
+        let budget = capabilities.script_timeout.map(ExecutionBudget::new);
+        if let Some(b) = &budget {
+            b.install(&engine);
+        }
         let js = Context::full(&engine)?;
         let services = DocumentServices {
             dialogs: Arc::new(Mutex::new(VecDeque::from(dialogs))),
             alerts: Arc::new(Mutex::new(VecDeque::from(alerts))),
             interactive,
+            interaction,
+            capabilities,
+            budget: budget.clone(),
             print_output_dir,
             attachment_output_dir,
             trace_dir: std::env::var_os("MPMB_DIALOG_TRACE_DIR").map(PathBuf::from),
@@ -264,12 +461,25 @@ impl Runtime {
             control_errors: Arc::new(Mutex::new(Vec::new())),
         };
         let documents = documents::Documents::new(js.clone(), Arc::clone(pdf), services)?;
-        let loaded = js.with(|ctx| Self::initialize_document(ctx, pdf, &documents))?;
+        let loaded = {
+            let _guard = ExecutionBudget::enter(budget.as_ref());
+            let init_res = js.with(|ctx| Self::initialize_document(ctx, pdf, &documents));
+            if let Some(b) = &budget {
+                if b.take_timed_out() {
+                    bail!(
+                        "JavaScript execution timed out during document startup after {}ms",
+                        b.limit.as_millis()
+                    );
+                }
+            }
+            init_res?
+        };
         Ok(Self {
             js,
             engine,
             loaded,
             documents,
+            budget,
         })
     }
     // Initialization can run inside an already-held QuickJS runtime guard.
@@ -295,6 +505,7 @@ impl Runtime {
         )?;
         let services = &documents.services;
         let interactive = services.interactive;
+        let capabilities = services.capabilities;
         let print_output_dir = services.print_output_dir.clone();
         let attachment_output_dir = services.attachment_output_dir.clone();
         let xfdf_base = pdf
@@ -304,8 +515,11 @@ impl Runtime {
             .to_owned();
         ctx.globals().set("__xfdfRead", Function::new(ctx.clone(), move |ctx: Ctx, path: String| -> rquickjs::Result<String> {
             (|| -> Result<String> {
+                if !capabilities.allow_host_fs {
+                    bail!("Host XFDF file access is disabled in server mode");
+                }
                 let selected = if path.is_empty() {
-                    if !interactive { bail!("XFDF file picker requires interactive mode or an explicit local path") }
+                    if !interactive || !capabilities.allow_native_dialogs { bail!("XFDF file picker requires interactive desktop mode or an explicit local path") }
                     let Some(chosen) = crate::platform::open_file_dialog(
                         "Import XFDF form data",
                         "XFDF",
@@ -333,12 +547,21 @@ impl Runtime {
             .parent()
             .unwrap_or(std::path::Path::new("."))
             .to_owned();
+        let icon_interaction = services.interaction.clone();
         ctx.globals().set("__iconImport", Function::new(ctx.clone(), move |ctx: Ctx, input: String| -> rquickjs::Result<String> {
             (|| -> Result<String> {
+                if !capabilities.allow_host_fs || !capabilities.allow_native_dialogs {
+                    bail!("Host icon file import is disabled in server mode");
+                }
                 let request: Value = serde_json::from_str(&input)?;
                 let result = crate::icon_import::request(&request, interactive, &icon_base)?;
                 if interactive && result["code"].as_i64().is_some_and(|v| v < 0) {
-                    crate::ui::alert(&json!({"cTitle":"Import image or PDF icon", "cMsg":result["reason"].as_str().unwrap_or("The selected page is invalid"), "nType":0, "nIcon":0}))?;
+                    let alert_req = json!({"cTitle":"Import image or PDF icon", "cMsg":result["reason"].as_str().unwrap_or("The selected page is invalid"), "nType":0, "nIcon":0});
+                    if let Some(handler) = &icon_interaction {
+                        handler.alert(&alert_req)?;
+                    } else {
+                        crate::ui::alert(&alert_req)?;
+                    }
                 }
                 Ok(result.to_string())
             })().map_err(|e| Exception::throw_message(&ctx, &format!("{e:#}")))
@@ -365,6 +588,12 @@ impl Runtime {
             Function::new(
                 ctx.clone(),
                 move |ctx: Ctx, request: String| -> rquickjs::Result<String> {
+                    if !capabilities.allow_host_fs || !capabilities.allow_native_dialogs {
+                        return Err(Exception::throw_message(
+                            &ctx,
+                            "Host attachment export is disabled in server mode",
+                        ));
+                    }
                     exporter
                         .borrow_mut()
                         .export(
@@ -384,6 +613,12 @@ impl Runtime {
             Function::new(
                 ctx.clone(),
                 move |ctx: Ctx, request: String| -> rquickjs::Result<String> {
+                    if !capabilities.allow_host_fs || !capabilities.allow_native_dialogs {
+                        return Err(Exception::throw_message(
+                            &ctx,
+                            "Host printing is disabled in server mode",
+                        ));
+                    }
                     crate::printing::execute(
                         &print_pdf,
                         &request,
@@ -395,6 +630,7 @@ impl Runtime {
                 },
             )?,
         )?;
+        let launch_interaction = services.interaction.clone();
         ctx.globals().set(
             "__launchUrl",
             Function::new(
@@ -410,8 +646,12 @@ impl Runtime {
                         }
                         let mut launched = false;
                         if interactive {
-                            crate::platform::open_url_detached(&url)?;
-                            launched = true;
+                            if let Some(handler) = &launch_interaction {
+                                launched = handler.launch_url(&url, new_frame)?;
+                            } else if capabilities.allow_native_dialogs {
+                                crate::platform::open_url_detached(&url)?;
+                                launched = true;
+                            }
                         }
                         Ok(
                             json!({"url":url,"new_frame":new_frame,"launched":launched})
@@ -434,6 +674,8 @@ impl Runtime {
         let trace_count = Arc::clone(&services.dialog_count);
         let control_errors = Arc::clone(&services.control_errors);
         let dialog_document = pdf.path.clone();
+        let dialog_interaction = services.interaction.clone();
+        let dialog_budget = services.budget.clone();
         ctx.globals().set(
             "__dialog",
             Function::new(
@@ -488,6 +730,17 @@ impl Runtime {
                                 request["description"]["name"]
                             ));
                         }
+                        if let Some(handler) = &dialog_interaction {
+                            let _pause = ExecutionBudget::pause(dialog_budget.as_ref());
+                            return handler
+                                .modal(&request)
+                                .map(|v| v.to_string())
+                                .map_err(|e| e.to_string());
+                        }
+                        if !capabilities.allow_native_dialogs {
+                            return Err("Native dialogs are disabled in server mode".into());
+                        }
+                        let _pause = ExecutionBudget::pause(dialog_budget.as_ref());
                         crate::ui::modal(&request)
                             .map(|v| v.to_string())
                             .map_err(|e| e.to_string())
@@ -510,6 +763,8 @@ impl Runtime {
         let alert_count = Arc::clone(&services.alert_count);
         let alert_control_errors = Arc::clone(&services.control_errors);
         let alert_document = pdf.path.clone();
+        let alert_interaction = services.interaction.clone();
+        let alert_budget = services.budget.clone();
         ctx.globals().set(
             "__alert",
             Function::new(
@@ -535,6 +790,17 @@ impl Runtime {
                         if !interactive {
                             return Err(format!("Unanswered alert: {}", v["cTitle"]));
                         }
+                        if let Some(handler) = &alert_interaction {
+                            let _pause = ExecutionBudget::pause(alert_budget.as_ref());
+                            return handler
+                                .alert(&v)
+                                .map(|v| v.to_string())
+                                .map_err(|e| e.to_string());
+                        }
+                        if !capabilities.allow_native_dialogs {
+                            return Err("Native alerts are disabled in server mode".into());
+                        }
+                        let _pause = ExecutionBudget::pause(alert_budget.as_ref());
                         crate::ui::alert(&v)
                             .map(|v| v.to_string())
                             .map_err(|e| e.to_string())
@@ -558,10 +824,13 @@ impl Runtime {
                 ctx.clone(),
                 move |ctx: Ctx, path: String| -> rquickjs::Result<String> {
                     (|| -> Result<String> {
+                        if !capabilities.allow_host_fs {
+                            bail!("Host file access is disabled in server mode");
+                        }
                         let selected = if path.is_empty() {
-                            if !interactive {
+                            if !interactive || !capabilities.allow_native_dialogs {
                                 bail!(
-                                    "file picker requires interactive mode or explicit local path"
+                                    "file picker requires interactive desktop mode or explicit local path"
                                 )
                             }
                             let Some(chosen) = crate::platform::open_file_dialog(
@@ -592,7 +861,13 @@ impl Runtime {
                 },
             )?,
         )?;
-        let initial = json!({"attachments":attachment_metadata,"templates":pdf.templates,"trace":std::env::var("MPMB_TRACE_FIELDS").unwrap_or_default().split(',').collect::<Vec<_>>(),"bookmarks":pdf.bookmarks,"fields":pdf.fields,"order":pdf.order,"info":pdf.info,"file":pdf.path.file_name().unwrap_or_default().to_string_lossy(),"path":pdf.path,"pages":pdf.doc.get_pages().len()});
+        let exposed_file = pdf.path.file_name().unwrap_or_default().to_string_lossy();
+        let exposed_path: Value = if capabilities.allow_host_fs {
+            json!(pdf.path)
+        } else {
+            json!(format!("/{exposed_file}"))
+        };
+        let initial = json!({"attachments":attachment_metadata,"templates":pdf.templates,"trace":std::env::var("MPMB_TRACE_FIELDS").unwrap_or_default().split(',').collect::<Vec<_>>(),"bookmarks":pdf.bookmarks,"fields":pdf.fields,"order":pdf.order,"info":pdf.info,"file":exposed_file,"path":exposed_path,"pages":pdf.doc.get_pages().len()});
         ctx.globals().set(
             "__roundRichMetric",
             Function::new(ctx.clone(), round_rich_metric)?,
@@ -624,7 +899,17 @@ impl Runtime {
         Ok(pdf.scripts.len())
     }
     pub fn eval(&self, s: &str) -> Result<Value> {
-        self.js.with(|ctx| Self::eval_in(&ctx, s))
+        let _guard = ExecutionBudget::enter(self.budget.as_ref());
+        let res = self.js.with(|ctx| Self::eval_in(&ctx, s));
+        if let Some(b) = &self.budget {
+            if b.take_timed_out() {
+                bail!(
+                    "JavaScript execution timed out after {}ms",
+                    b.limit.as_millis()
+                );
+            }
+        }
+        res
     }
     fn eval_in(ctx: &Ctx<'_>, s: &str) -> Result<Value> {
         // Preserve stack traces, including exceptions caught by original sheet code in diagnostics.
@@ -638,7 +923,17 @@ impl Runtime {
         Ok(v["value"].clone())
     }
     fn raw(&self, code: &str) -> Result<String> {
-        self.js.with(|ctx| Self::raw_in(&ctx, code))
+        let _guard = ExecutionBudget::enter(self.budget.as_ref());
+        let res = self.js.with(|ctx| Self::raw_in(&ctx, code));
+        if let Some(b) = &self.budget {
+            if b.take_timed_out() {
+                bail!(
+                    "JavaScript execution timed out after {}ms",
+                    b.limit.as_millis()
+                );
+            }
+        }
+        res
     }
     fn raw_in(ctx: &Ctx<'_>, code: &str) -> Result<String> {
         ctx.eval::<String, _>(code)
@@ -1564,5 +1859,375 @@ mod tests {
             17
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+    #[test]
+    fn custom_interaction_handler_intercepts_dialogs_alerts_and_urls() {
+        struct RecordingHandler {
+            modals: Mutex<Vec<Value>>,
+            alerts: Mutex<Vec<Value>>,
+            urls: Mutex<Vec<(String, bool)>>,
+        }
+        impl InteractionHandler for RecordingHandler {
+            fn modal(&self, request: &Value) -> Result<Value> {
+                self.modals.lock().unwrap().push(request.clone());
+                if request.to_string().contains("\"menu0\"") {
+                    return Ok(json!({"event": "menu0"}));
+                }
+                Ok(json!({"result": "ok", "values": {"name": "Aelar"}}))
+            }
+            fn alert(&self, request: &Value) -> Result<Value> {
+                self.alerts.lock().unwrap().push(request.clone());
+                Ok(json!({"button": 4, "checked": true}))
+            }
+            fn launch_url(&self, url: &str, new_frame: bool) -> Result<bool> {
+                self.urls.lock().unwrap().push((url.to_owned(), new_frame));
+                Ok(true)
+            }
+        }
+
+        // Build a minimal valid PDF on disk so Runtime::new_with_interaction exercises full host wiring.
+        use lopdf::dictionary;
+        let dir =
+            std::env::temp_dir().join(format!("mpmb-interaction-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let pdf_path = dir.join("minimal.pdf");
+        let mut doc = lopdf::Document::with_version("1.7");
+        let pages_id = doc.new_object_id();
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+        });
+        doc.objects.insert(
+            pages_id,
+            lopdf::Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => vec![page_id.into()],
+                "Count" => 1,
+            }),
+        );
+        let form_id = doc.add_object(dictionary! {
+            "Fields" => Vec::<lopdf::Object>::new(),
+        });
+        let catalog_id = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+            "AcroForm" => form_id,
+        });
+        doc.trailer.set("Root", catalog_id);
+        doc.save(&pdf_path).unwrap();
+
+        let pdf = Arc::new(Pdf::open(&pdf_path).unwrap());
+        let handler = Arc::new(RecordingHandler {
+            modals: Mutex::new(Vec::new()),
+            alerts: Mutex::new(Vec::new()),
+            urls: Mutex::new(Vec::new()),
+        });
+        let rt = Runtime::new_with_capabilities(
+            &pdf,
+            vec![],
+            vec![],
+            true,
+            None,
+            None,
+            Some(handler.clone()),
+            HostCapabilities::server_restricted(),
+        )
+        .unwrap();
+
+        let dialog_val = rt
+            .eval(
+                r#"(function(){
+                    var out = '';
+                    var res = app.execDialog({
+                        description: { name: 'Rename', elements: [{ type: 'edit_text', item_id: 'name' }] },
+                        commit(d){ out = d.store().name; }
+                    });
+                    var menu = app.popUpMenuEx({ cName: 'Action', cReturn: 'rest#short' });
+                    var chk = { cMsg: 'Remember', bInitialValue: false };
+                    var btn = app.alert({ cTitle: 'Confirm', cMsg: 'Rest?', nType: 2, oCheckbox: chk });
+                    app.launchURL('https://example.test/mpmb', true);
+                    return { res: res, out: out, menu: menu, btn: btn, checked: chk.bAfterValue };
+                })()"#,
+            )
+            .unwrap();
+        assert_eq!(dialog_val["res"], json!("ok"));
+        assert_eq!(dialog_val["out"], json!("Aelar"));
+        assert_eq!(dialog_val["menu"], json!("rest#short"));
+        assert_eq!(dialog_val["btn"], json!(4));
+        assert_eq!(dialog_val["checked"], json!(true));
+        assert_eq!(handler.modals.lock().unwrap().len(), 2);
+        assert_eq!(handler.alerts.lock().unwrap().len(), 1);
+        assert_eq!(
+            *handler.urls.lock().unwrap(),
+            vec![("https://example.test/mpmb".to_owned(), true)]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn server_restricted_capabilities_block_host_filesystem_and_native_ops() {
+        struct NoopHandler;
+        impl InteractionHandler for NoopHandler {
+            fn modal(&self, _request: &Value) -> Result<Value> {
+                Ok(json!({"result": "cancel"}))
+            }
+            fn alert(&self, _request: &Value) -> Result<Value> {
+                Ok(json!({"button": 1, "checked": false}))
+            }
+        }
+
+        use lopdf::dictionary;
+        let dir =
+            std::env::temp_dir().join(format!("mpmb-server-sandbox-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let secret_file = dir.join("host-secret.txt");
+        std::fs::write(&secret_file, "TOP_SECRET_HOST_DATA").unwrap();
+
+        let pdf_path = dir.join("sheet.pdf");
+        let mut doc = lopdf::Document::with_version("1.7");
+        let pages_id = doc.new_object_id();
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+        });
+        doc.objects.insert(
+            pages_id,
+            lopdf::Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => vec![page_id.into()],
+                "Count" => 1,
+            }),
+        );
+        let form_id = doc.add_object(dictionary! {
+            "Fields" => Vec::<lopdf::Object>::new(),
+        });
+        let catalog_id = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+            "AcroForm" => form_id,
+        });
+        doc.trailer.set("Root", catalog_id);
+        doc.save(&pdf_path).unwrap();
+
+        let pdf = Arc::new(Pdf::open(&pdf_path).unwrap());
+        let rt = Runtime::new_with_capabilities(
+            &pdf,
+            vec![],
+            vec![],
+            true,
+            None,
+            None,
+            Some(Arc::new(NoopHandler)),
+            HostCapabilities::server_restricted(),
+        )
+        .unwrap();
+
+        let secret_js = serde_json::to_string(secret_file.to_string_lossy().as_ref()).unwrap();
+        let res = rt
+            .eval(&format!(
+                r#"(function(){{
+                    var blocked = {{}};
+                    function check(name, fn) {{
+                        try {{ fn(); blocked[name] = false; }} catch (e) {{ blocked[name] = String(e); }}
+                    }}
+                    check('file', function(){{ util.readFileIntoStream({secret_js}); }});
+                    check('xfdf', function(){{ importAnXFDF({secret_js}); }});
+                    check('icon', function(){{ __iconImport('{{}}'); }});
+                    check('attachment', function(){{ __attachment('{{}}'); }});
+                    check('print', function(){{ __print('{{}}'); }});
+                    check('openDoc', function(){{ app.openDoc({{ cPath: {secret_js} }}); }});
+                    check('browsePdf', function(){{ __browsePdf(); }});
+                    blocked.path = this.path;
+                    return blocked;
+                }})()"#
+            ))
+            .unwrap();
+
+        for key in [
+            "file",
+            "xfdf",
+            "icon",
+            "attachment",
+            "print",
+            "openDoc",
+            "browsePdf",
+        ] {
+            let msg = res[key]
+                .as_str()
+                .unwrap_or_else(|| panic!("{key} was not blocked: {res:?}"));
+            assert!(
+                msg.contains("disabled in server mode"),
+                "{key} error did not mention server mode: {msg}"
+            );
+            assert!(
+                !msg.contains("TOP_SECRET_HOST_DATA"),
+                "{key} leaked secret contents"
+            );
+        }
+        assert_eq!(res["path"], json!("/sheet.pdf"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn build_minimal_pdf_with_script(script: Option<&str>) -> Vec<u8> {
+        use lopdf::{dictionary, Object, StringFormat};
+        let mut doc = lopdf::Document::with_version("1.7");
+        let pages_id = doc.new_object_id();
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+        });
+        doc.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => vec![page_id.into()],
+                "Count" => 1,
+            }),
+        );
+        let form_id = doc.add_object(dictionary! {
+            "Fields" => Vec::<Object>::new(),
+        });
+        let mut catalog = dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+            "AcroForm" => form_id,
+        };
+        if let Some(js) = script {
+            let js_action = doc.add_object(dictionary! {
+                "S" => "JavaScript",
+                "JS" => Object::String(js.as_bytes().to_vec(), StringFormat::Literal),
+            });
+            let js_tree = doc.add_object(dictionary! {
+                "Names" => vec![
+                    Object::String(b"Startup".to_vec(), StringFormat::Literal),
+                    js_action.into(),
+                ],
+            });
+            let names_id = doc.add_object(dictionary! {
+                "JavaScript" => js_tree,
+            });
+            catalog.set("Names", names_id);
+        }
+        let catalog_id = doc.add_object(catalog);
+        doc.trailer.set("Root", catalog_id);
+        let mut out = Vec::new();
+        doc.save_to(&mut out).unwrap();
+        out
+    }
+
+    #[test]
+    fn server_restricted_without_handler_blocks_native_dialog_and_alert() {
+        let bytes = build_minimal_pdf_with_script(None);
+        let missing_path = std::env::temp_dir().join("mpmb-deleted-sheet.pdf");
+        let _ = std::fs::remove_file(&missing_path);
+        // Byte-backed open & Runtime startup must succeed even when the backing file was deleted.
+        let pdf = Arc::new(Pdf::open_bytes(missing_path, &bytes).unwrap());
+        let rt = Runtime::new_with_capabilities(
+            &pdf,
+            vec![],
+            vec![],
+            true,
+            None,
+            None,
+            None,
+            HostCapabilities::server_restricted(),
+        )
+        .unwrap();
+
+        let dialog_err = rt
+            .eval(r#"__dialog(JSON.stringify({description:{name:"D",elements:[]}}))"#)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            dialog_err.contains("disabled in server mode"),
+            "unexpected dialog error: {dialog_err}"
+        );
+        let alert_err = rt
+            .eval(r#"__alert(JSON.stringify({cTitle:"A",cMsg:"hi",nType:0,nIcon:0}))"#)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            alert_err.contains("disabled in server mode"),
+            "unexpected alert error: {alert_err}"
+        );
+    }
+
+    #[test]
+    fn server_execution_budget_interrupts_infinite_loop_and_pauses_during_interaction() {
+        // 1. Startup infinite loop (even inside try/catch) is interrupted by script_timeout.
+        let loop_bytes =
+            build_minimal_pdf_with_script(Some("try { while (true) {} } catch (e) {}"));
+        let loop_pdf =
+            Arc::new(Pdf::open_bytes(PathBuf::from("/virtual/loop.pdf"), &loop_bytes).unwrap());
+        let started = Instant::now();
+        let err = match Runtime::new_with_capabilities(
+            &loop_pdf,
+            vec![],
+            vec![],
+            true,
+            None,
+            None,
+            None,
+            HostCapabilities::server_restricted()
+                .with_script_timeout(Some(Duration::from_millis(120))),
+        ) {
+            Ok(_) => panic!("infinite loop startup script should have timed out"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("timed out"),
+            "unexpected timeout error: {err:#}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "timeout took too long: {:?}",
+            started.elapsed()
+        );
+
+        // 2. Intentional browser prompt wait longer than script_timeout does NOT expire the budget.
+        struct SlowPromptHandler;
+        impl InteractionHandler for SlowPromptHandler {
+            fn modal(&self, _request: &Value) -> Result<Value> {
+                std::thread::sleep(Duration::from_millis(220));
+                Ok(json!({"result": "ok"}))
+            }
+            fn alert(&self, _request: &Value) -> Result<Value> {
+                std::thread::sleep(Duration::from_millis(220));
+                Ok(json!({"button": 1, "checked": false}))
+            }
+        }
+        let ok_bytes = build_minimal_pdf_with_script(None);
+        let ok_pdf =
+            Arc::new(Pdf::open_bytes(PathBuf::from("/virtual/ok.pdf"), &ok_bytes).unwrap());
+        let rt = Runtime::new_with_capabilities(
+            &ok_pdf,
+            vec![],
+            vec![],
+            true,
+            None,
+            None,
+            Some(Arc::new(SlowPromptHandler)),
+            HostCapabilities::server_restricted()
+                .with_script_timeout(Some(Duration::from_millis(120))),
+        )
+        .unwrap();
+        let alert_btn = rt
+            .eval(r#"app.alert({cTitle:"Slow", cMsg:"Wait", nType:0, nIcon:0})"#)
+            .unwrap();
+        assert_eq!(alert_btn, json!(1));
+
+        // 3. Post-startup infinite loop during eval is also interrupted cleanly.
+        let eval_err = rt.eval("while (true) {}").unwrap_err();
+        assert!(
+            eval_err.to_string().contains("timed out"),
+            "unexpected eval timeout error: {eval_err:#}"
+        );
+        // Subsequent valid evaluation still works on the same runtime.
+        assert_eq!(rt.eval("1 + 2").unwrap(), json!(3));
     }
 }

@@ -1,0 +1,11 @@
+# Ignore paid fixtures, local evidence, build outputs, and VCS metadata so they
+# can never enter a container build context or image.
+.git
+.github
+Testing/
+output/
+target/
+2024_MPMBs-Character-Record-Sheet/
+*.pdf
+*.qcow2
+*.save

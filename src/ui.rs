@@ -65,8 +65,10 @@ pub fn main() -> Result<()> {
         Some("-h" | "--help" | "--version")
     ) {
         println!(
-            "mpmb-reader {} — native desktop reader for MPMB Character Record Sheets\n\
-             Usage: mpmb-reader [<sheet.pdf>] [--probe <scenario.json> <report.json>]\n\
+            "mpmb-reader {} — native desktop & web reader for MPMB Character Record Sheets\n\
+             Usage:\n\
+               mpmb-reader [<sheet.pdf>] [--probe <scenario.json> <report.json>]\n\
+               mpmb-reader serve [--bind 127.0.0.1:8080] [--dir ./sheets] [--git-repo <url>]\n\
              PDFium: auto-discovered (MPMB_PDFIUM overrides)\n\
              Theme: MPMB_THEME=dark|light",
             env!("CARGO_PKG_VERSION")

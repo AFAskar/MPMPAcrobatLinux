@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mpmb-reader
+  annotations:
+    # Example for cert-manager using your cluster's CA / ACME ClusterIssuer:
+    # cert-manager.io/cluster-issuer: "your-cluster-issuer"
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - mpmb.example.internal
+      secretName: mpmb-reader-tls
+  rules:
+    - host: mpmb.example.internal
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: mpmb-reader
+                port:
+                  number: 80
