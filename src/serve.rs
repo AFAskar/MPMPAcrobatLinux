@@ -499,17 +499,6 @@ enum WorkerCommand {
         discard: Option<DiscardTarget>,
         expected_session: Option<String>,
     },
-    CreateFromTemplate {
-        job_id: u64,
-        gate: JobGate,
-        done: watch::Sender<Option<JobOutcome>>,
-        template: String,
-        name: String,
-        overwrite: bool,
-        force: bool,
-        discard: Option<DiscardTarget>,
-        expected_session: Option<String>,
-    },
     GetState {
         reply: mpsc::SyncSender<Result<Value>>,
     },
@@ -846,28 +835,6 @@ impl SheetWorker {
                     )
                 });
             }
-            WorkerCommand::CreateFromTemplate {
-                job_id,
-                gate,
-                done,
-                template,
-                name,
-                overwrite,
-                force,
-                discard,
-                expected_session,
-            } => {
-                self.run_job(job_id, gate, done, |w| {
-                    w.create_and_open_from_template(
-                        &template,
-                        &name,
-                        overwrite,
-                        force,
-                        discard.as_ref(),
-                        expected_session.as_deref(),
-                    )
-                });
-            }
             WorkerCommand::Edit {
                 job_id,
                 gate,
@@ -1035,10 +1002,7 @@ impl SheetWorker {
                     "type": "error",
                     "message": msg,
                 }));
-                let status = if msg.contains("conflict")
-                    || msg.contains("changed externally")
-                    || msg.contains("already exists")
-                {
+                let status = if msg.contains("conflict") || msg.contains("changed externally") {
                     StatusCode::CONFLICT
                 } else {
                     StatusCode::BAD_REQUEST
@@ -1208,55 +1172,17 @@ impl SheetWorker {
         discard: Option<&DiscardTarget>,
         expected_session: Option<&str>,
     ) -> Result<Value> {
-        let (norm, _) = self.store.resolve_safe_pdf_path(rel_path)?;
-        if crate::storage::is_template_path(&norm) {
-            bail!(
-                "template sheets cannot be opened directly; create a new character from this template instead"
-            );
-        }
         if let Some(conflict) =
             self.check_discard_guard("opening another sheet", force, discard, expected_session)
         {
             return Ok(conflict);
         }
-        self.open_sheet_unchecked(&norm)
-    }
-
-    fn create_and_open_from_template(
-        &mut self,
-        template_rel: &str,
-        character_name: &str,
-        overwrite: bool,
-        force: bool,
-        discard: Option<&DiscardTarget>,
-        expected_session: Option<&str>,
-    ) -> Result<Value> {
-        if let Some(conflict) = self.check_discard_guard(
-            "creating and opening a new character",
-            force,
-            discard,
-            expected_session,
-        ) {
-            return Ok(conflict);
-        }
-        let entry =
-            self.store
-                .create_sheet_from_template(template_rel, character_name, overwrite)?;
-        self.sync_tracker.mark_dirty();
-        let mut opened = self.open_sheet_unchecked_inner(&entry.path, false)?;
-        if let Some(obj) = opened.as_object_mut() {
-            obj.insert("sheet".into(), serde_json::to_value(&entry)?);
-        }
-        Ok(opened)
+        self.open_sheet_unchecked(rel_path)
     }
 
     fn open_sheet_unchecked(&mut self, rel_path: &str) -> Result<Value> {
-        self.open_sheet_unchecked_inner(rel_path, true)
-    }
-
-    fn open_sheet_unchecked_inner(&mut self, rel_path: &str, pull_if_git: bool) -> Result<Value> {
         // Pull latest changes opportunistically if Git is enabled and clean.
-        if pull_if_git && self.store.git_enabled() {
+        if self.store.git_enabled() {
             let _ = self.store.git_pull();
         }
         let (norm, abs, bytes, sha) = self.store.read_sheet_bytes(rel_path)?;
@@ -2212,27 +2138,6 @@ struct OpenRequest {
     session: Option<String>,
 }
 
-fn default_true() -> bool {
-    true
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CreateFromTemplateRequest {
-    template: String,
-    name: String,
-    #[serde(default = "default_true")]
-    open: bool,
-    #[serde(default)]
-    overwrite: bool,
-    #[serde(default)]
-    force: bool,
-    #[serde(default)]
-    discard: Option<DiscardTarget>,
-    #[serde(default)]
-    session: Option<String>,
-}
-
 #[derive(Deserialize)]
 struct FieldQuery {
     name: String,
@@ -2362,7 +2267,6 @@ fn build_router(state: AppState) -> Router {
         .route("/icon.svg", get(handle_icon))
         .route("/ws", get(handle_ws))
         .route("/api/sheets", get(handle_list_sheets))
-        .route("/api/sheets/new", post(handle_create_from_template))
         .route(
             "/api/sheets/upload",
             post(handle_upload_sheet).layer(DefaultBodyLimit::max(crate::storage::MAX_PDF_BYTES)),
@@ -2532,15 +2436,8 @@ async fn handle_list_sheets(
     let store = Arc::clone(&state.store);
     match tokio::task::spawn_blocking(move || -> Result<Value> {
         let sheets = store.list_sheets()?;
-        let templates: Vec<_> = sheets.iter().filter(|s| s.is_template).cloned().collect();
-        let characters: Vec<_> = sheets.iter().filter(|s| !s.is_template).cloned().collect();
         let git = store.git_status()?;
-        Ok(json!({
-            "sheets": sheets,
-            "templates": templates,
-            "characters": characters,
-            "git": git,
-        }))
+        Ok(json!({"sheets": sheets, "git": git}))
     })
     .await
     {
@@ -2548,61 +2445,6 @@ async fn handle_list_sheets(
         Ok(Err(e)) => err_response(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")),
         Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
-}
-
-async fn handle_create_from_template(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<CreateFromTemplateRequest>,
-) -> Response {
-    if !state.check_auth(&headers, None) {
-        return err_response(StatusCode::UNAUTHORIZED, "unauthorized");
-    }
-    if !req.open {
-        let store = Arc::clone(&state.store);
-        let template = req.template;
-        let name = req.name;
-        let overwrite = req.overwrite;
-        return match tokio::task::spawn_blocking(move || {
-            store.create_sheet_from_template(&template, &name, overwrite)
-        })
-        .await
-        {
-            Ok(Ok(entry)) => {
-                state.sync_tracker.mark_dirty();
-                (
-                    StatusCode::CREATED,
-                    Json(json!({"status": "ok", "sheet": entry})),
-                )
-                    .into_response()
-            }
-            Ok(Err(e)) => {
-                let msg = format!("{e:#}");
-                let status = if msg.contains("already exists") {
-                    StatusCode::CONFLICT
-                } else if msg.contains("not found") {
-                    StatusCode::NOT_FOUND
-                } else {
-                    StatusCode::BAD_REQUEST
-                };
-                err_response(status, msg)
-            }
-            Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-        };
-    }
-    state
-        .dispatch_job(|job_id, gate, done| WorkerCommand::CreateFromTemplate {
-            job_id,
-            gate,
-            done,
-            template: req.template,
-            name: req.name,
-            overwrite: req.overwrite,
-            force: req.force,
-            discard: req.discard,
-            expected_session: req.session,
-        })
-        .await
 }
 
 async fn handle_upload_sheet(
@@ -6327,139 +6169,6 @@ mod tests {
         assert_eq!(st, StatusCode::OK);
         assert_eq!(st3["dirtySinceSync"], true);
         assert_eq!(st3["git"]["head_backed_up"], false);
-
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    #[tokio::test]
-    async fn templates_are_protected_and_new_character_from_template_honors_guards() {
-        let base = std::env::temp_dir().join(format!(
-            "mpmb-serve-templates-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(base.join("templates")).unwrap();
-        make_scripted_hp_pdf(&base.join("templates/MPMB-2024-Blank.pdf"), "10", "", None);
-        make_scripted_hp_pdf(&base.join("existing.pdf"), "20", "", None);
-
-        let cfg = ServeConfig {
-            bind: "127.0.0.1:0".parse().unwrap(),
-            store: StoreConfig {
-                root: base.clone(),
-                git: None,
-            },
-            auth_token: None,
-            allow_unauthenticated: false,
-            git_auto_sync_secs: 0,
-            autosave: false,
-            default_sheet: None,
-        };
-        let state = AppState::start(&cfg).unwrap();
-        let app = build_router(state);
-
-        // 1. /api/sheets splits templates vs characters and marks is_template.
-        let (st, list) = get_json(&app, "/api/sheets").await;
-        assert_eq!(st, StatusCode::OK);
-        assert_eq!(list["templates"].as_array().unwrap().len(), 1);
-        assert_eq!(
-            list["templates"][0]["path"],
-            "templates/MPMB-2024-Blank.pdf"
-        );
-        assert_eq!(list["templates"][0]["is_template"], true);
-        assert_eq!(list["characters"].as_array().unwrap().len(), 1);
-        assert_eq!(list["characters"][0]["path"], "existing.pdf");
-        assert_eq!(list["characters"][0]["is_template"], false);
-
-        // 2. Direct open of a template is rejected.
-        let (st, err) = post_json(
-            &app,
-            "/api/session/open",
-            json!({"path": "templates/MPMB-2024-Blank.pdf"}),
-        )
-        .await;
-        assert_eq!(st, StatusCode::BAD_REQUEST);
-        assert!(err["error"]
-            .as_str()
-            .unwrap()
-            .contains("template sheets cannot be opened directly"));
-
-        // 3. Creating a new character from template copies + opens it immediately.
-        let (st, created) = post_json(
-            &app,
-            "/api/sheets/new",
-            json!({
-                "template": "templates/MPMB-2024-Blank.pdf",
-                "name": "Aelar Stormwind",
-                "open": true
-            }),
-        )
-        .await;
-        assert_eq!(st, StatusCode::OK, "unexpected create response: {created}");
-        assert_eq!(created["sheet"]["path"], "Aelar Stormwind.pdf");
-        assert_eq!(created["sheet"]["is_template"], false);
-        assert_eq!(created["state"]["open"], true);
-        assert_eq!(created["state"]["path"], "Aelar Stormwind.pdf");
-        assert!(base.join("Aelar Stormwind.pdf").is_file());
-
-        // 4. Duplicate name fails with 409 Conflict.
-        let (st, dup) = post_json(
-            &app,
-            "/api/sheets/new",
-            json!({
-                "template": "templates/MPMB-2024-Blank.pdf",
-                "name": "Aelar Stormwind",
-                "open": true
-            }),
-        )
-        .await;
-        assert_eq!(st, StatusCode::CONFLICT, "unexpected dup response: {dup}");
-
-        // 5. With unsaved edits in --no-autosave mode, POST /api/sheets/new (open: true)
-        //    returns 409 unsaved_edits WITHOUT creating an orphaned file on disk.
-        let (st, _) = post_json(
-            &app,
-            "/api/session/edit",
-            json!({"field": "HP Current", "value": "15", "sheet": "Aelar Stormwind.pdf"}),
-        )
-        .await;
-        assert_eq!(st, StatusCode::OK);
-
-        let (st, conflict) = post_json(
-            &app,
-            "/api/sheets/new",
-            json!({
-                "template": "templates/MPMB-2024-Blank.pdf",
-                "name": "Bryn",
-                "open": true
-            }),
-        )
-        .await;
-        assert_eq!(st, StatusCode::CONFLICT);
-        assert_eq!(conflict["code"], "unsaved_edits");
-        assert!(
-            !base.join("Bryn.pdf").exists(),
-            "rejected create+open must not leave an orphaned file on disk"
-        );
-
-        // Confirming with the exact discardTarget creates and opens Bryn.pdf.
-        let target = conflict["discardTarget"].clone();
-        let (st, ok_bryn) = post_json(
-            &app,
-            "/api/sheets/new",
-            json!({
-                "template": "templates/MPMB-2024-Blank.pdf",
-                "name": "Bryn",
-                "open": true,
-                "force": true,
-                "discard": target
-            }),
-        )
-        .await;
-        assert_eq!(st, StatusCode::OK, "unexpected forced create: {ok_bryn}");
-        assert_eq!(ok_bryn["state"]["path"], "Bryn.pdf");
-        assert!(base.join("Bryn.pdf").is_file());
 
         let _ = std::fs::remove_dir_all(&base);
     }

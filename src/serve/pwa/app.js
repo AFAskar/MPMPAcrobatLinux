@@ -5,8 +5,6 @@
     token: localStorage.getItem('mpmb_auth_token') || '',
     sheet: null,
     sheets: [],
-    templates: [],
-    characters: [],
     git: null,
     page: 0,
     zoom: 1.0,
@@ -224,8 +222,6 @@
     btn.addEventListener('click', () => switchTab(btn.dataset.tab));
   });
   $('btn-go-library').addEventListener('click', () => switchTab('library'));
-  $('btn-empty-new-char').addEventListener('click', () => openNewCharModal());
-  $('btn-new-char').addEventListener('click', () => openNewCharModal());
 
   function switchTab(name) {
     document.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
@@ -246,12 +242,6 @@
       if (fetchSeq < appState.appliedLibraryFetchSeq) return;
       appState.appliedLibraryFetchSeq = fetchSeq;
       appState.sheets = data.sheets || [];
-      appState.templates = Array.isArray(data.templates)
-        ? data.templates
-        : appState.sheets.filter((s) => isTemplateSheet(s));
-      appState.characters = Array.isArray(data.characters)
-        ? data.characters
-        : appState.sheets.filter((s) => !isTemplateSheet(s));
       appState.git = data.git || null;
       renderSheets();
       renderGit();
@@ -1541,217 +1531,47 @@
     summary.textContent = parts.join(' • ');
   }
 
-  function isTemplateSheet(sh) {
-    return Boolean(sh && (sh.is_template || String(sh.path || '').toLowerCase().startsWith('templates/')));
-  }
-
-  function preferredDefaultTemplate() {
-    const tpls = appState.templates || [];
-    if (!tpls.length) return null;
-    return tpls.find((t) => /2024|v24/i.test(t.name || t.path)) || tpls[0];
-  }
-
-  function formatTemplateLabel(sh) {
-    return String(sh.name || sh.path || '').replace(/\.pdf$/i, '');
-  }
-
-  function updateNewCharPreview() {
-    const preview = $('nc-preview');
-    const name = ($('nc-name').value || '').trim();
-    const tplPath = $('nc-template').value || '';
-    const tpl = (appState.templates || []).find((t) => t.path === tplPath);
-    if (!tpl) {
-      preview.textContent = 'Upload a blank MPMB PDF under Sheet Templates first.';
-      return;
-    }
-    const dest = name
-      ? (name.toLowerCase().endsWith('.pdf') ? name : `${name}.pdf`)
-      : '<Character Name>.pdf';
-    preview.textContent = `Creates ${dest} from ${tpl.name}`;
-  }
-
-  function openNewCharModal(preselectedTemplatePath = null) {
-    const tpls = appState.templates || [];
-    if (!tpls.length) {
-      showBanner('No templates yet — upload a blank MPMB PDF under Sheet Templates first', 'warn', 5000);
-      switchTab('library');
-      return;
-    }
-    const sel = $('nc-template');
-    sel.innerHTML = '';
-    tpls.forEach((tpl) => {
-      const opt = document.createElement('option');
-      opt.value = tpl.path;
-      opt.textContent = formatTemplateLabel(tpl);
-      sel.appendChild(opt);
-    });
-    const def = preselectedTemplatePath || preferredDefaultTemplate()?.path || tpls[0].path;
-    sel.value = def;
-    $('nc-name').value = '';
-    updateNewCharPreview();
-    $('new-char-modal').classList.remove('hidden');
-    if (typeof $('nc-name').focus === 'function') $('nc-name').focus();
-  }
-
-  function closeNewCharModal() {
-    $('new-char-modal').classList.add('hidden');
-  }
-
-  async function createCharacterFromTemplate(template, name, force = false, discard = null) {
-    const trimmed = String(name || '').trim();
-    if (!trimmed) {
-      showBanner('Enter a character name first', 'warn', 3500);
-      return;
-    }
-    if (!template) {
-      showBanner('Select a sheet template first', 'warn', 3500);
-      return;
-    }
-    try {
-      showBanner(`Creating ${trimmed}…`, 'warn', 0);
-      const body = { template, name: trimmed, open: true, force };
-      if (discard) body.discard = discard;
-      const res = await api('/api/sheets/new', { method: 'POST', json: body });
-      closeNewCharModal();
-      const applied = await handleActionResponse(res);
-      await refreshLibrary();
-      if (applied && res.status !== 'interaction_required') {
-        appState.page = 0;
-        const createdPath = res.sheet?.path || trimmed;
-        showBanner(`Created and opened ${createdPath}`, 'ok', 3000);
-        switchTab('play');
-      }
-    } catch (err) {
-      if (err.status === 409 && err.data && err.data.status === 'interaction_required' && err.data.interaction) {
-        closeNewCharModal();
-        openAcrobatInteraction(err.data.interaction);
-        showBanner('Finish or cancel the active dialog before creating a new character', 'warn', 5000);
-        return;
-      }
-      const target = err.data && err.data.discardTarget;
-      if (
-        err.status === 409 &&
-        !force &&
-        target &&
-        confirm(`${err.message}\n\nDiscard unsaved edits on ${target.sheet} (rev ${target.revision}) and create ${trimmed}?`)
-      ) {
-        return createCharacterFromTemplate(template, trimmed, true, target);
-      }
-      if (err.status === 409 && force) {
-        refreshSession();
-      }
-      showBanner(err.message, 'err', 6000);
-    }
-  }
-
-  $('nc-close').addEventListener('click', closeNewCharModal);
-  $('nc-cancel').addEventListener('click', closeNewCharModal);
-  $('nc-name').addEventListener('input', updateNewCharPreview);
-  $('nc-template').addEventListener('change', updateNewCharPreview);
-  $('nc-name').addEventListener('keydown', (ev) => {
-    if (ev.key === 'Enter') {
-      ev.preventDefault();
-      createCharacterFromTemplate($('nc-template').value, $('nc-name').value);
-    }
-  });
-  $('nc-create').addEventListener('click', () => {
-    createCharacterFromTemplate($('nc-template').value, $('nc-name').value);
-  });
-
-  function buildCharacterRow(sh, activePath) {
-    const row = document.createElement('div');
-    row.className = 'row-card';
-    const title = sh.character_name ? `${sh.character_name} (${sh.name})` : sh.name;
-    const meta = [
-      sh.class_and_levels || (sh.level ? `Lv ${sh.level}` : ''),
-      `${(sh.size_bytes / (1024 * 1024)).toFixed(2)} MB`,
-      sh.path,
-    ].filter(Boolean).join(' • ');
-    row.innerHTML = `
-      <div class="row-main">
-        <div class="row-title">${esc(title)}</div>
-        <div class="row-sub">${esc(meta)}</div>
-      </div>
-    `;
-    const actions = document.createElement('div');
-    actions.className = 'seg-group';
-    const dl = document.createElement('a');
-    const tokenQs = appState.token ? `?token=${encodeURIComponent(appState.token)}` : '';
-    dl.href = `/api/sheets/${encodeURIComponent(sh.path)}/download${tokenQs}`;
-    dl.className = 'btn small';
-    dl.textContent = '↓';
-    dl.title = 'Download PDF';
-    const openBtn = document.createElement('button');
-    openBtn.type = 'button';
-    openBtn.className = activePath === sh.path ? 'btn small accent' : 'btn small primary';
-    openBtn.textContent = activePath === sh.path ? 'Open ✓' : 'Open';
-    openBtn.addEventListener('click', () => openSheet(sh.path));
-    actions.appendChild(dl);
-    actions.appendChild(openBtn);
-    row.appendChild(actions);
-    return row;
-  }
-
   function renderSheets() {
     const list = $('sheets-list');
-    const tplList = $('templates-list');
-    const emptyChars = $('empty-chars-list');
     list.innerHTML = '';
-    tplList.innerHTML = '';
-    emptyChars.innerHTML = '';
-
+    if (!appState.sheets.length) {
+      list.innerHTML = '<div class="muted small-text">No PDF sheets in store yet. Tap "Upload PDF" to add one.</div>';
+      return;
+    }
     const activePath = appState.sheet?.path;
-    const chars = appState.characters || [];
-    const tpls = appState.templates || [];
-
-    if (!chars.length) {
-      list.innerHTML = tpls.length
-        ? '<div class="muted small-text">No characters yet. Tap "+ New Character" to start from a blank MPMB template.</div>'
-        : '<div class="muted small-text">No characters yet. Upload a blank template below or upload a PDF.</div>';
-      emptyChars.classList.add('hidden');
-    } else {
-      chars.forEach((sh) => {
-        list.appendChild(buildCharacterRow(sh, activePath));
-        emptyChars.appendChild(buildCharacterRow(sh, activePath));
-      });
-      emptyChars.classList.remove('hidden');
-    }
-
-    if (!tpls.length) {
-      tplList.innerHTML = '<div class="muted small-text">No sheet templates yet. Tap "Upload Template" to add a blank MPMB PDF.</div>';
-    } else {
-      tpls.forEach((tpl) => {
-        const row = document.createElement('div');
-        row.className = 'row-card';
-        const meta = [
-          `${(tpl.size_bytes / (1024 * 1024)).toFixed(2)} MB`,
-          tpl.path,
-        ].join(' • ');
-        row.innerHTML = `
-          <div class="row-main">
-            <div class="row-title">${esc(formatTemplateLabel(tpl))}</div>
-            <div class="row-sub">${esc(meta)}</div>
-          </div>
-        `;
-        const actions = document.createElement('div');
-        actions.className = 'seg-group';
-        const dl = document.createElement('a');
-        const tokenQs = appState.token ? `?token=${encodeURIComponent(appState.token)}` : '';
-        dl.href = `/api/sheets/${encodeURIComponent(tpl.path)}/download${tokenQs}`;
-        dl.className = 'btn small';
-        dl.textContent = '↓';
-        dl.title = 'Download Template PDF';
-        const useBtn = document.createElement('button');
-        useBtn.type = 'button';
-        useBtn.className = 'btn small primary';
-        useBtn.textContent = '+ New';
-        useBtn.addEventListener('click', () => openNewCharModal(tpl.path));
-        actions.appendChild(dl);
-        actions.appendChild(useBtn);
-        row.appendChild(actions);
-        tplList.appendChild(row);
-      });
-    }
+    appState.sheets.forEach((sh) => {
+      const row = document.createElement('div');
+      row.className = 'row-card';
+      const title = sh.character_name ? `${sh.character_name} (${sh.name})` : sh.name;
+      const meta = [
+        sh.class_and_levels || (sh.level ? `Lv ${sh.level}` : ''),
+        `${(sh.size_bytes / (1024 * 1024)).toFixed(2)} MB`,
+        sh.path,
+      ].filter(Boolean).join(' • ');
+      row.innerHTML = `
+        <div class="row-main">
+          <div class="row-title">${esc(title)}</div>
+          <div class="row-sub">${esc(meta)}</div>
+        </div>
+      `;
+      const actions = document.createElement('div');
+      actions.className = 'seg-group';
+      const dl = document.createElement('a');
+      const tokenQs = appState.token ? `?token=${encodeURIComponent(appState.token)}` : '';
+      dl.href = `/api/sheets/${encodeURIComponent(sh.path)}/download${tokenQs}`;
+      dl.className = 'btn small';
+      dl.textContent = '↓';
+      dl.title = 'Download PDF';
+      const openBtn = document.createElement('button');
+      openBtn.type = 'button';
+      openBtn.className = activePath === sh.path ? 'btn small accent' : 'btn small primary';
+      openBtn.textContent = activePath === sh.path ? 'Open ✓' : 'Open';
+      openBtn.addEventListener('click', () => openSheet(sh.path));
+      actions.appendChild(dl);
+      actions.appendChild(openBtn);
+      row.appendChild(actions);
+      list.appendChild(row);
+    });
   }
 
   function renderHistory(commits) {
@@ -1873,19 +1693,22 @@
   $('btn-save-now').addEventListener('click', () => doSaveNow(false));
   $('btn-force-save').addEventListener('click', () => doSaveNow(true));
 
-  async function handlePdfUpload(file, targetName, label) {
+  $('file-upload').addEventListener('change', async (ev) => {
+    const file = ev.target.files?.[0];
+    ev.target.value = '';
+    if (!file) return;
     try {
-      showBanner(`Uploading ${label}…`, 'warn', 0);
+      showBanner(`Uploading ${file.name}…`, 'warn', 0);
       const buf = await file.arrayBuffer();
       try {
-        await api(`/api/sheets/upload?name=${encodeURIComponent(targetName)}&overwrite=false`, {
+        await api(`/api/sheets/upload?name=${encodeURIComponent(file.name)}&overwrite=false`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/pdf' },
           body: buf,
         });
       } catch (err) {
-        if (err.status === 409 && confirm(`"${targetName}" already exists. Overwrite it?`)) {
-          await api(`/api/sheets/upload?name=${encodeURIComponent(targetName)}&overwrite=true`, {
+        if (err.status === 409 && confirm(`A sheet named "${file.name}" already exists. Overwrite it?`)) {
+          await api(`/api/sheets/upload?name=${encodeURIComponent(file.name)}&overwrite=true`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/pdf' },
             body: buf,
@@ -1894,25 +1717,11 @@
           throw err;
         }
       }
-      showBanner(`Uploaded ${label}`, 'ok', 3000);
+      showBanner(`Uploaded ${file.name}`, 'ok', 3000);
       await refreshLibrary();
     } catch (err) {
       showBanner(err.message, 'err');
     }
-  }
-
-  $('file-upload').addEventListener('change', async (ev) => {
-    const file = ev.target.files?.[0];
-    ev.target.value = '';
-    if (!file) return;
-    await handlePdfUpload(file, file.name, file.name);
-  });
-
-  $('template-upload').addEventListener('change', async (ev) => {
-    const file = ev.target.files?.[0];
-    ev.target.value = '';
-    if (!file) return;
-    await handlePdfUpload(file, `templates/${file.name}`, `template ${file.name}`);
   });
 
   function isPlainObj(v) {

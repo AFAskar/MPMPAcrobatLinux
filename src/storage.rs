@@ -76,8 +76,6 @@ pub struct SheetEntry {
     pub size_bytes: u64,
     pub sha256: String,
     pub modified_unix: u64,
-    #[serde(default)]
-    pub is_template: bool,
     pub has_state_sidecar: bool,
     pub character_name: Option<String>,
     pub class_and_levels: Option<String>,
@@ -343,28 +341,6 @@ impl SheetStore {
             sync_parent_dir(&abs);
         }
         sheet_entry_from_path(&self.root, &abs)
-    }
-
-    pub fn create_sheet_from_template(
-        &self,
-        template_rel: &str,
-        character_name: &str,
-        overwrite: bool,
-    ) -> Result<SheetEntry> {
-        let dest_rel = normalize_new_character_path(character_name)?;
-        let (src_norm, _, bytes, _) = self.read_sheet_bytes(template_rel)?;
-        if !is_template_path(&src_norm) {
-            bail!("source sheet must be a template inside templates/: {src_norm}");
-        }
-        if bytes.is_empty() || bytes.len() > MAX_PDF_BYTES {
-            bail!("template PDF must be between 1 byte and 64 MiB");
-        }
-        if !bytes.starts_with(b"%PDF-") {
-            bail!("template file does not start with %PDF- header");
-        }
-        let (dest_norm, mut staged) = self.start_staged_upload(&dest_rel)?;
-        staged.write_chunk(&bytes)?;
-        self.commit_staged_upload(&dest_norm, staged, overwrite)
     }
 
     #[cfg(test)]
@@ -1827,34 +1803,6 @@ fn collect_stageable_paths(root: &Path, dir: &Path, out: &mut Vec<String>) -> Re
     Ok(())
 }
 
-pub fn is_template_path(rel: &str) -> bool {
-    let raw = rel.replace('\\', "/");
-    let mut parts = Path::new(&raw).components().filter_map(|c| match c {
-        Component::Normal(seg) => seg.to_str(),
-        _ => None,
-    });
-    matches!(parts.next(), Some(first) if first.eq_ignore_ascii_case("templates"))
-        && parts.next().is_some()
-}
-
-pub fn normalize_new_character_path(name: &str) -> Result<String> {
-    let trimmed = name.trim().replace('\\', "/");
-    if trimmed.is_empty() {
-        bail!("character name cannot be empty");
-    }
-    let with_ext = if trimmed.to_ascii_lowercase().ends_with(".pdf") {
-        trimmed
-    } else {
-        format!("{trimmed}.pdf")
-    };
-    let parts = validate_safe_rel_pdf_path(&with_ext)?;
-    let normalized = parts.join("/");
-    if is_template_path(&normalized) {
-        bail!("character path cannot be inside templates/");
-    }
-    Ok(normalized)
-}
-
 fn validate_safe_rel_pdf_path(rel: &str) -> Result<Vec<String>> {
     if rel.is_empty() || rel.len() > 240 {
         bail!("invalid sheet path");
@@ -1967,14 +1915,12 @@ fn sheet_entry_from_path(root: &Path, abs: &Path) -> Result<SheetEntry> {
             .filter(|s| !s.is_empty())
             .map(str::to_owned)
     };
-    let is_template = is_template_path(&rel);
     Ok(SheetEntry {
         path: rel,
         name,
         size_bytes: meta.len(),
         sha256: pdf_sha,
         modified_unix,
-        is_template,
         has_state_sidecar: sidecar_json.is_some(),
         character_name: sidecar_json
             .as_ref()
@@ -3249,79 +3195,5 @@ mod tests {
         assert!(store.git_pull().is_err());
 
         let _ = fs::remove_dir_all(&base);
-    }
-
-    #[test]
-    fn template_path_rules_and_create_sheet_from_template() {
-        assert!(is_template_path("templates/MPMB-2024.pdf"));
-        assert!(is_template_path("Templates/nested/blank.pdf"));
-        assert!(!is_template_path("templates.pdf"));
-        assert!(!is_template_path("aelar.pdf"));
-        assert!(!is_template_path("campaigns/templates/aelar.pdf"));
-
-        assert_eq!(
-            normalize_new_character_path("  Aelar Stormwind  ").unwrap(),
-            "Aelar Stormwind.pdf"
-        );
-        assert_eq!(
-            normalize_new_character_path("party/Bryn.pdf").unwrap(),
-            "party/Bryn.pdf"
-        );
-        assert!(normalize_new_character_path("").is_err());
-        assert!(normalize_new_character_path("templates/Nope").is_err());
-        assert!(normalize_new_character_path("Templates/Nope.pdf").is_err());
-        assert!(normalize_new_character_path("../escape.pdf").is_err());
-
-        let dir = temp_dir("template-copy");
-        let store = SheetStore::open(StoreConfig {
-            root: dir.clone(),
-            git: None,
-        })
-        .unwrap();
-
-        let tpl = store
-            .upload_sheet(
-                "templates/MPMB-2024-Blank.pdf",
-                &valid_test_pdf("Blank"),
-                false,
-            )
-            .unwrap();
-        assert!(tpl.is_template);
-        // Write a sidecar beside the template to ensure it is NOT copied to new characters.
-        store
-            .write_sidecar_atomic(
-                "templates/MPMB-2024-Blank.pdf",
-                &tpl.sha256,
-                &json!({"character": {"name": "TemplateMeta"}}),
-            )
-            .unwrap();
-
-        let created = store
-            .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "Aelar", false)
-            .unwrap();
-        assert_eq!(created.path, "Aelar.pdf");
-        assert!(!created.is_template);
-        assert_eq!(created.sha256, tpl.sha256);
-        assert!(!created.has_state_sidecar);
-
-        // Duplicate creation without overwrite fails cleanly.
-        let dup = store
-            .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "Aelar", false)
-            .unwrap_err();
-        assert!(format!("{dup:#}").contains("already exists"));
-
-        // Non-template source is rejected.
-        let non_tpl = store
-            .create_sheet_from_template("Aelar.pdf", "Clone", false)
-            .unwrap_err();
-        assert!(format!("{non_tpl:#}").contains("must be a template"));
-
-        // Destination inside templates/ is rejected.
-        let bad_dest = store
-            .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "templates/Clone", false)
-            .unwrap_err();
-        assert!(format!("{bad_dest:#}").contains("inside templates/"));
-
-        let _ = fs::remove_dir_all(&dir);
     }
 }

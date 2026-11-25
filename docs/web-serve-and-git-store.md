@@ -10,7 +10,7 @@
   - **Play (Table View)**: Vitals (AC, Initiative, Speed, Prof), HP bar with quick `−5/−1/+1/+5/Full` and Temp HP controls, 6 Abilities & Saves, Attacks, live toggleable Spell Slots, dynamically enumerated Limited Features, Short/Long Rest actions, Skills, and Notes.
   - **Sheet (PDF View)**: High-DPI PDFium page renders with tappable widget overlays and a `Shift` modifier toggle for MPMB spell-row options.
   - **Tools**: Original MPMB Tools menu (`ClassesButton`, etc.), Spell Sheet / Companion / Wild-Shape generators, searchable Field Inspector, Bookmarks, and Diagnostics/Console.
-  - **Library & Templates**: Store blank MPMB PDFs under `templates/` (protected from direct edits) and create new characters from a template as the default flow (`POST /api/sheets/new`), alongside upload/download, character switching, Git status/history, and Pull / Commit & Push.
+  - **Library & Git**: Upload/download `.pdf` files, switch characters, inspect Git status & commit history, and trigger Pull / Commit & Push.
   - **Offline resilience**: Service Worker caches the PWA shell, last character state, and rendered pages for read-only access if reception drops at the table.
 - **Git/GitHub concrete store (`src/storage.rs`)**:
   - Shells out to system `git` (zero `libgit2` build overhead) using an SSH deploy key (`MPMB_GIT_SSH_KEY`) or transient `GIT_ASKPASS` HTTPS token (`MPMB_GIT_TOKEN`).
