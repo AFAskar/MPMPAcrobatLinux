@@ -29,6 +29,10 @@ RUN mkdir -p /pdfium \
 
 FROM docker.io/library/debian:bookworm-slim AS runtime
 
+LABEL org.opencontainers.image.source="https://github.com/AFAskar/MPMPAcrobatLinux" \
+      org.opencontainers.image.description="MPMB Character Sheet Native Reader web server (PWA + QuickJS + PDFium)" \
+      org.opencontainers.image.licenses="AGPL-3.0-or-later"
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates \
       fontconfig \
