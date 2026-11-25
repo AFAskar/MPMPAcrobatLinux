@@ -1,0 +1,360 @@
+import shutil
+import subprocess
+import textwrap
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+APP_JS = ROOT / "src/serve/pwa/app.js"
+SW_JS = ROOT / "src/serve/pwa/sw.js"
+
+PWA_HARNESS = textwrap.dedent(
+    r"""
+    const assert = require('node:assert/strict');
+    const fs = require('node:fs');
+    const vm = require('node:vm');
+
+    const source = fs.readFileSync(process.argv[process.argv.length - 1], 'utf8').replace(
+      '  // Boot\n  updateConnDot();\n  connectWs();\n  refreshAll();',
+      '  globalThis.harness = { appState, applySessionState, openFieldEditorByName, enqueueStep, currentSessionRef, editField, openSheet, doGitPull, refreshSession, connectWs };'
+    );
+
+    const elements = new Map();
+    function element(id) {
+      if (!elements.has(id)) {
+        const classes = new Set();
+        elements.set(id, {
+          listeners: {},
+          dataset: {},
+          style: {},
+          value: '',
+          textContent: '',
+          classList: {
+            toggle(c, force) {
+              if (force === undefined) {
+                if (classes.has(c)) classes.delete(c);
+                else classes.add(c);
+              } else if (force) classes.add(c);
+              else classes.delete(c);
+            },
+            add(c) { classes.add(c); },
+            remove(c) { classes.delete(c); },
+            contains(c) { return classes.has(c); },
+          },
+          addEventListener(type, fn) { this.listeners[type] = fn; },
+          getAttribute() {},
+          setAttribute() {},
+          appendChild() {},
+        });
+      }
+      return elements.get(id);
+    }
+
+    const sockets = [];
+    class MockWebSocket {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSED = 3;
+      constructor(url) {
+        this.url = url;
+        this.readyState = MockWebSocket.CONNECTING;
+        sockets.push(this);
+      }
+      close() {
+        this.readyState = MockWebSocket.CLOSED;
+      }
+    }
+
+    let fetchHandler = null;
+    let confirmHandler = () => true;
+    const context = {
+      navigator: { onLine: true },
+      localStorage: { getItem() { return ''; }, setItem() {} },
+      window: { addEventListener() {}, open() {}, innerWidth: 1000, devicePixelRatio: 1 },
+      document: {
+        getElementById: element,
+        documentElement: element('root'),
+        querySelector() { return null; },
+        querySelectorAll() { return []; },
+        createElement() { return element(Symbol()); },
+        createTextNode(t) { return { textContent: t }; },
+      },
+      URLSearchParams,
+      WebSocket: MockWebSocket,
+      location: { search: '', protocol: 'http:', host: '127.0.0.1:8080', pathname: '/' },
+      history: { replaceState() {} },
+      confirm(msg) { return confirmHandler(msg); },
+      setTimeout() {},
+      clearTimeout() {},
+      fetch(path, options) {
+        return fetchHandler(path, options);
+      },
+    };
+    vm.createContext(context);
+    vm.runInContext(source, context);
+    const {
+      appState,
+      applySessionState,
+      openFieldEditorByName,
+      enqueueStep,
+      currentSessionRef,
+      editField,
+      openSheet,
+      doGitPull,
+      refreshSession,
+      connectWs,
+    } = context.harness;
+
+    function jsonResp(payload, status = 200) {
+      return {
+        status,
+        ok: status >= 200 && status < 300,
+        statusText: String(status),
+        headers: { get: () => 'application/json' },
+        json: async () => payload,
+      };
+    }
+
+    (async () => {
+      const alpha1 = {
+        open: true,
+        path: 'Alpha.pdf',
+        serverInstanceId: 'srv-1',
+        sessionId: 'srv-1-s1',
+        stateSeq: 1,
+        revision: 1,
+        vitals: { hpCurrent: '10', hpMax: '20' },
+      };
+      const beta1 = {
+        open: true,
+        path: 'Beta.pdf',
+        serverInstanceId: 'srv-1',
+        sessionId: 'srv-1-s2',
+        stateSeq: 2,
+        revision: 1,
+        vitals: { hpCurrent: '20', hpMax: '20' },
+      };
+      const edits = [];
+      const fieldCalls = [];
+      fetchHandler = async (path, options) => {
+        if (path.startsWith('/api/session/field?')) {
+          fieldCalls.push(path);
+          return jsonResp({ name: 'HP Current', value: '10', type: 'text' });
+        }
+        if (path === '/api/session/edit') {
+          edits.push(JSON.parse(options.body));
+          return jsonResp({});
+        }
+        throw new Error('Unexpected fetch ' + path);
+      };
+
+      // 1. Editor opened on Alpha must not submit edit for Beta after live sheet switch.
+      applySessionState(alpha1);
+      await openFieldEditorByName('HP Current');
+      assert.ok(fieldCalls[0].includes('sheet=Alpha.pdf'));
+      assert.ok(fieldCalls[0].includes('session=srv-1-s1'));
+      element('fm-input').value = '7';
+      applySessionState(beta1);
+      assert.equal(appState.selectedField, null);
+      await element('fm-save').listeners.click();
+      assert.deepEqual(edits, []);
+
+      // 2. Same-path reopen (new sessionId) closes modal and rejects stale editor submit.
+      applySessionState({ ...alpha1, sessionId: 'srv-1-s3', stateSeq: 3 });
+      await openFieldEditorByName('HP Current');
+      element('fm-input').value = '5';
+      applySessionState({ ...alpha1, sessionId: 'srv-1-s4', stateSeq: 4 });
+      assert.equal(appState.selectedField, null);
+      await element('fm-save').listeners.click();
+      assert.deepEqual(edits, []);
+
+      // 3. Delayed lower stateSeq from Alpha must not overwrite newer Beta across paths.
+      applySessionState({ ...beta1, stateSeq: 5 });
+      assert.equal(applySessionState({ ...alpha1, stateSeq: 1 }), false);
+      assert.equal(appState.sheet.path, 'Beta.pdf');
+      assert.equal(appState.lastStateSeq, 5);
+
+      // 4. Server restart (new serverInstanceId, reset stateSeq=1) is accepted,
+      //    AND delayed snapshots from the retired serverInstanceId are rejected!
+      const beta2 = {
+        open: true,
+        path: 'Beta.pdf',
+        serverInstanceId: 'srv-2',
+        sessionId: 'srv-2-s1',
+        stateSeq: 1,
+        revision: 0,
+        vitals: { hpCurrent: '20', hpMax: '20' },
+      };
+      assert.equal(applySessionState(beta2), true);
+      assert.equal(appState.lastServerInstanceId, 'srv-2');
+      assert.equal(appState.lastStateSeq, 1);
+      assert.equal(applySessionState({ ...alpha1, serverInstanceId: 'srv-1', stateSeq: 99 }), false);
+      assert.equal(appState.sheet.path, 'Beta.pdf');
+      assert.equal(appState.lastServerInstanceId, 'srv-2');
+      assert.equal(appState.lastStateSeq, 1);
+
+      // 5. Overlap between pending HTTP refreshSession/openSheet and WebSocket reconnect
+      //    to a new server generation (srv-3), plus superseded WebSocket handlers!
+      connectWs();
+      const wsOld = sockets[sockets.length - 1];
+      wsOld.readyState = MockWebSocket.OPEN;
+      wsOld.onopen();
+
+      let resolveOldRefresh;
+      let resolveOldOpen;
+      const srv3Gamma = {
+        open: true,
+        path: 'Gamma.pdf',
+        serverInstanceId: 'srv-3',
+        sessionId: 'srv-3-s1',
+        stateSeq: 1,
+        revision: 1,
+        vitals: { hpCurrent: '30', hpMax: '30' },
+      };
+      let stateCallCount = 0;
+      fetchHandler = (path) => {
+        if (path === '/api/session/state') {
+          stateCallCount += 1;
+          if (stateCallCount === 1) {
+            return new Promise((r) => { resolveOldRefresh = r; });
+          }
+          return Promise.resolve(jsonResp(srv3Gamma));
+        }
+        if (path === '/api/session/open') {
+          return new Promise((r) => { resolveOldOpen = r; });
+        }
+        throw new Error('Unexpected overlap fetch ' + path);
+      };
+
+      const pendingRefresh = refreshSession();
+      const pendingOpen = openSheet('Alpha.pdf');
+
+      // Reconnect establishes a new WebSocket (wsNew) and fetches srv-3 Gamma first.
+      wsOld.readyState = MockWebSocket.CLOSED;
+      appState.ws = null;
+      connectWs();
+      const wsNew = sockets[sockets.length - 1];
+      wsNew.readyState = MockWebSocket.OPEN;
+      wsNew.onopen();
+      await new Promise((r) => setImmediate(r));
+      assert.equal(appState.sheet.path, 'Gamma.pdf', 'banner=' + element('banner').textContent);
+      assert.equal(appState.lastServerInstanceId, 'srv-3');
+
+      // Now delayed HTTP responses from retired srv-2 arrive AND superseded wsOld fires events!
+      resolveOldRefresh(jsonResp({ ...beta2, stateSeq: 40 }));
+      resolveOldOpen(jsonResp({ status: 'ok', state: { ...beta2, path: 'Alpha.pdf', stateSeq: 41 } }));
+      await pendingRefresh;
+      await pendingOpen;
+      wsOld.onmessage({ data: JSON.stringify({ type: 'state_updated', state: { ...beta2, stateSeq: 42 } }) });
+      wsOld.onmessage({ data: JSON.stringify({ type: 'interaction_requested', interaction: { id: 'old-int', kind: 'alert', request: { cMsg: 'stale' } } }) });
+      wsOld.onclose();
+
+      assert.equal(appState.sheet.path, 'Gamma.pdf');
+      assert.equal(appState.lastServerInstanceId, 'srv-3');
+      assert.equal(appState.activeInteraction, null);
+      assert.equal(appState.wsConnected, true);
+
+      // 6. Queued step captured on srv-3-s1 is dropped if sheet switches before execution.
+      const targetGamma = currentSessionRef();
+      let releaseBlocker;
+      const blocker = new Promise((r) => { releaseBlocker = r; });
+      enqueueStep(targetGamma, () => blocker);
+      const queued = enqueueStep(targetGamma, (ref) => editField('HP Current', '9', 'user', ref));
+      applySessionState({ ...srv3Gamma, path: 'Delta.pdf', sessionId: 'srv-3-s2', stateSeq: 2 });
+      releaseBlocker();
+      await queued;
+      assert.deepEqual(edits, []);
+
+      // 7. openSheet and doGitPull carry structured discardTarget through confirmation
+      //    and never re-confirm blindly if the server returns discard_target_stale.
+      const openBodies = [];
+      const pullBodies = [];
+      const discardTarget = { sheet: 'Delta.pdf', sessionId: 'srv-3-s2', revision: 7 };
+      let openAttempt = 0;
+      let pullAttempt = 0;
+      let confirms = 0;
+      confirmHandler = () => { confirms += 1; return true; };
+      fetchHandler = async (path, options) => {
+        if (path === '/api/session/open') {
+          const body = JSON.parse(options.body);
+          openBodies.push(body);
+          openAttempt += 1;
+          if (openAttempt === 1) {
+            return jsonResp({ status: 'conflict', code: 'unsaved_edits', error: 'unsaved', discardTarget }, 409);
+          }
+          return jsonResp({ status: 'conflict', code: 'discard_target_stale', error: 'stale', discardTarget: { sheet: 'Other.pdf', sessionId: 'srv-3-s9', revision: 2 } }, 409);
+        }
+        if (path === '/api/git/pull') {
+          const body = JSON.parse(options.body);
+          pullBodies.push(body);
+          pullAttempt += 1;
+          if (pullAttempt === 1) {
+            return jsonResp({ status: 'conflict', code: 'unsaved_edits', error: 'unsaved', discardTarget }, 409);
+          }
+          return jsonResp({ status: 'ok', pull: { message: 'ok' }, state: { ...srv3Gamma, stateSeq: 3 } }, 200);
+        }
+        if (path === '/api/session/state') {
+          return jsonResp({ ...srv3Gamma, stateSeq: 3 });
+        }
+        if (path === '/api/sheets') {
+          return jsonResp({ sheets: [], git: { enabled: false } });
+        }
+        throw new Error('Unexpected discard test fetch ' + path);
+      };
+
+      await openSheet('Alpha.pdf');
+      assert.equal(confirms, 1, 'stale retry must not loop confirm');
+      assert.deepEqual(openBodies, [
+        { path: 'Alpha.pdf', force: false },
+        { path: 'Alpha.pdf', force: true, discard: discardTarget },
+      ]);
+
+      await doGitPull();
+      assert.equal(confirms, 2);
+      assert.deepEqual(pullBodies, [
+        { force: false },
+        { force: true, discard: discardTarget },
+      ]);
+
+      console.log('PWA_CLIENT_REGRESSIONS_OK');
+    })().catch((err) => {
+      console.error(err);
+      process.exit(1);
+    });
+    """
+)
+
+
+class PwaClientRegressionTests(unittest.TestCase):
+    def test_pwa_js_syntax_and_state_machine_regressions(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed")
+        for script in (APP_JS, SW_JS):
+            check = subprocess.run(
+                [node, "--check", str(script)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                check.returncode,
+                0,
+                f"node --check failed for {script}: {check.stderr}",
+            )
+        run = subprocess.run(
+            [node, "-e", PWA_HARNESS, str(APP_JS)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(
+            run.returncode,
+            0,
+            f"PWA regression harness failed:\nstdout={run.stdout}\nstderr={run.stderr}",
+        )
+        self.assertIn("PWA_CLIENT_REGRESSIONS_OK", run.stdout)
+
+
+if __name__ == "__main__":
+    unittest.main()

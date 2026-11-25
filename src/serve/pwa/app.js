@@ -12,7 +12,12 @@
     pageSize: [612, 792],
     pageLoadSeq: 0,
     lastServerInstanceId: null,
+    retiredServerInstanceIds: new Set(),
     lastStateSeq: 0,
+    sessionFetchSeq: 0,
+    appliedSessionFetchSeq: 0,
+    libraryFetchSeq: 0,
+    appliedLibraryFetchSeq: 0,
     selectedField: null,
     activeInteraction: null,
     inFlightInteractionId: null,
@@ -159,6 +164,7 @@
     const ws = new WebSocket(`${proto}//${location.host}/ws${qs}`);
     appState.ws = ws;
     ws.onopen = () => {
+      if (appState.ws !== ws) return;
       const isReconnect = appState.wsHasConnectedOnce;
       appState.wsHasConnectedOnce = true;
       appState.wsConnected = true;
@@ -169,15 +175,18 @@
       }
     };
     ws.onclose = () => {
+      if (appState.ws !== ws) return;
       appState.wsConnected = false;
       updateConnDot();
       setTimeout(connectWs, 2500);
     };
     ws.onerror = () => {
+      if (appState.ws !== ws) return;
       appState.wsConnected = false;
       updateConnDot();
     };
     ws.onmessage = (ev) => {
+      if (appState.ws !== ws) return;
       try {
         const msg = JSON.parse(ev.data);
         if (msg.type === 'state_updated' && msg.state) {
@@ -220,14 +229,18 @@
   }
 
   async function refreshLibrary() {
+    const fetchSeq = ++appState.libraryFetchSeq;
     try {
       const data = await api('/api/sheets');
+      if (fetchSeq < appState.appliedLibraryFetchSeq) return;
+      appState.appliedLibraryFetchSeq = fetchSeq;
       appState.sheets = data.sheets || [];
       appState.git = data.git || null;
       renderSheets();
       renderGit();
       if (appState.git && appState.git.enabled) {
         const hist = await api('/api/git/history').catch(() => ({ commits: [] }));
+        if (fetchSeq < appState.appliedLibraryFetchSeq) return;
         renderHistory(hist.commits || []);
       }
     } catch (err) {
@@ -236,10 +249,12 @@
   }
 
   async function refreshSession() {
+    const fetchSeq = ++appState.sessionFetchSeq;
     try {
       const state = await api('/api/session/state');
-      if (state) {
-        applySessionState(state);
+      if (!state || fetchSeq < appState.appliedSessionFetchSeq) return;
+      if (applySessionState(state)) {
+        appState.appliedSessionFetchSeq = fetchSeq;
       }
     } catch (err) {
       if (err.message !== 'Authentication required') showBanner(err.message, 'err');
@@ -247,9 +262,13 @@
   }
 
   function applySessionState(state) {
-    if (!state) return;
+    if (!state) return false;
     if (typeof state.serverInstanceId === 'string' && state.serverInstanceId) {
+      if (appState.retiredServerInstanceIds.has(state.serverInstanceId)) {
+        return false;
+      }
       if (appState.lastServerInstanceId && appState.lastServerInstanceId !== state.serverInstanceId) {
+        appState.retiredServerInstanceIds.add(appState.lastServerInstanceId);
         appState.lastStateSeq = 0;
       }
       appState.lastServerInstanceId = state.serverInstanceId;
@@ -260,11 +279,11 @@
         renderGit();
       }
       if (state.activeInteraction) openAcrobatInteraction(state.activeInteraction);
-      return;
+      return true;
     }
     if (!state.open) {
       if (typeof state.stateSeq === 'number' && state.stateSeq < appState.lastStateSeq) {
-        return;
+        return false;
       }
       if (typeof state.stateSeq === 'number') {
         appState.lastStateSeq = state.stateSeq;
@@ -275,14 +294,14 @@
       renderTopbar();
       renderPlay();
       renderGit();
-      return;
+      return true;
     }
     const prevRev = appState.sheet ? appState.sheet.revision : -1;
     const prevPath = appState.sheet ? appState.sheet.path : null;
     const prevSessionId = appState.sheet ? (appState.sheet.sessionId || '') : '';
     const nextSessionId = state.sessionId || '';
     if (typeof state.stateSeq === 'number' && state.stateSeq < appState.lastStateSeq) {
-      return;
+      return false;
     }
     if (
       typeof state.stateSeq !== 'number' &&
@@ -292,7 +311,7 @@
       typeof prevRev === 'number' &&
       state.revision < prevRev
     ) {
-      return;
+      return false;
     }
     if (typeof state.stateSeq === 'number') {
       appState.lastStateSeq = state.stateSeq;
@@ -326,6 +345,7 @@
     if (sheetTabActive && (prevRev !== state.revision || sessionChanged)) {
       loadPdfPage();
     }
+    return true;
   }
 
   function renderTopbar() {
@@ -841,13 +861,15 @@
 
   // --- SESSION ACTIONS ---
   async function handleActionResponse(res) {
-    if (!res) return;
+    if (!res) return false;
     if (res.status === 'interaction_required' && res.interaction) {
       openAcrobatInteraction(res.interaction);
-      return;
+      return true;
     }
-    if (res.state) applySessionState(res.state);
-    if (res.message) showBanner(res.message, 'ok', 3000);
+    let applied = true;
+    if (res.state) applied = applySessionState(res.state);
+    if (applied && res.message) showBanner(res.message, 'ok', 3000);
+    return applied;
   }
 
   function currentSessionRef() {
@@ -1503,19 +1525,30 @@
     });
   }
 
-  async function openSheet(path, force = false) {
+  async function openSheet(path, force = false, discard = null) {
     try {
       showBanner(`Loading ${path}…`, 'warn', 0);
-      const res = await api('/api/session/open', { method: 'POST', json: { path, force } });
-      appState.page = 0;
-      await handleActionResponse(res);
-      if (res.status !== 'interaction_required') {
+      const body = { path, force };
+      if (discard) body.discard = discard;
+      const res = await api('/api/session/open', { method: 'POST', json: body });
+      const applied = await handleActionResponse(res);
+      if (applied && res.status !== 'interaction_required') {
+        appState.page = 0;
         showBanner(`Loaded ${path}`, 'ok', 2500);
         switchTab('play');
       }
     } catch (err) {
-      if (err.status === 409 && !force && confirm(`${err.message}\n\nDiscard unsaved edits and open ${path}?`)) {
-        return openSheet(path, true);
+      const target = err.data && err.data.discardTarget;
+      if (
+        err.status === 409 &&
+        !force &&
+        target &&
+        confirm(`${err.message}\n\nDiscard unsaved edits on ${target.sheet} (rev ${target.revision}) and open ${path}?`)
+      ) {
+        return openSheet(path, true, target);
+      }
+      if (err.status === 409 && force) {
+        refreshSession();
       }
       showBanner(err.message, 'err');
     }
@@ -1554,17 +1587,28 @@
     }
   }
 
-  async function doGitPull(force = false) {
+  async function doGitPull(force = false, discard = null) {
     try {
       showBanner('Pulling latest from GitHub…', 'warn', 0);
-      const res = await api('/api/git/pull', { method: 'POST', json: { force } });
+      const body = { force };
+      if (discard) body.discard = discard;
+      const res = await api('/api/git/pull', { method: 'POST', json: body });
       if (res.state) applySessionState(res.state);
       showBanner(res.pull?.message || 'Pull complete', res.pull?.dirty ? 'warn' : 'ok', 5000);
       await refreshLibrary();
     } catch (err) {
       if (err.data && err.data.state) applySessionState(err.data.state);
-      if (err.status === 409 && !force && String(err.message).includes('unsaved edits') && confirm(`${err.message}\n\nDiscard unsaved edits and pull latest?`)) {
-        return doGitPull(true);
+      const target = err.data && err.data.discardTarget;
+      if (
+        err.status === 409 &&
+        !force &&
+        target &&
+        confirm(`${err.message}\n\nDiscard unsaved edits on ${target.sheet} (rev ${target.revision}) and pull latest?`)
+      ) {
+        return doGitPull(true, target);
+      }
+      if (err.status === 409 && force) {
+        refreshSession();
       }
       showBanner(err.message, 'err', 7000);
     }
