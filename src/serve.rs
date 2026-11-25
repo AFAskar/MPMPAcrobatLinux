@@ -291,8 +291,122 @@ struct DiscardTarget {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PublicInteraction {
     pub id: String,
+    #[serde(rename = "serverInstanceId", default)]
+    pub server_instance_id: String,
     pub kind: String,
     pub request: Value,
+}
+
+#[derive(Clone, Debug)]
+struct ActiveSessionMeta {
+    sheet: String,
+    session_id: String,
+    revision: u64,
+    dirty_since_save: bool,
+}
+
+fn validate_discard_meta(
+    meta: Option<&ActiveSessionMeta>,
+    action: &str,
+    force: bool,
+    discard: Option<&DiscardTarget>,
+    expected_session: Option<&str>,
+    allow_revision_bump: bool,
+) -> Option<Value> {
+    let cur = meta?;
+    let current_target = DiscardTarget {
+        sheet: cur.sheet.clone(),
+        session_id: cur.session_id.clone(),
+        revision: cur.revision,
+    };
+    if !cur.dirty_since_save {
+        if let Some(exp_sess) = expected_session.map(str::trim).filter(|s| !s.is_empty()) {
+            if cur.session_id != exp_sess {
+                return Some(json!({
+                    "status": "conflict",
+                    "code": "discard_target_stale",
+                    "error": format!(
+                        "conflict: active session changed before {action} (expected session '{exp_sess}', active is '{}' session '{}' rev {}); refresh before retrying",
+                        cur.sheet, cur.session_id, cur.revision
+                    ),
+                    "discardTarget": current_target,
+                }));
+            }
+        }
+        if let Some(req_discard) = discard {
+            if req_discard.sheet != cur.sheet || req_discard.session_id != cur.session_id {
+                return Some(json!({
+                    "status": "conflict",
+                    "code": "discard_target_stale",
+                    "error": format!(
+                        "conflict: active session changed before {action} (expected '{}' session '{}', active is '{}' session '{}' rev {}); refresh before retrying",
+                        req_discard.sheet,
+                        req_discard.session_id,
+                        cur.sheet,
+                        cur.session_id,
+                        cur.revision,
+                    ),
+                    "discardTarget": current_target,
+                }));
+            }
+        }
+        return None;
+    }
+    if !force {
+        return Some(json!({
+            "status": "conflict",
+            "code": "unsaved_edits",
+            "error": format!(
+                "conflict: active sheet '{}' has unsaved edits (rev {}); save first or confirm discarding them before {action}",
+                cur.sheet, cur.revision
+            ),
+            "discardTarget": current_target,
+        }));
+    }
+    if let Some(exp_sess) = expected_session.map(str::trim).filter(|s| !s.is_empty()) {
+        if cur.session_id != exp_sess {
+            return Some(json!({
+                "status": "conflict",
+                "code": "discard_target_stale",
+                "error": format!(
+                    "conflict: active unsaved session changed before {action} (expected session '{exp_sess}', active is '{}' session '{}' rev {}); refresh before discarding",
+                    cur.sheet, cur.session_id, cur.revision
+                ),
+                "discardTarget": current_target,
+            }));
+        }
+    }
+    let Some(req_discard) = discard else {
+        return Some(json!({
+            "status": "conflict",
+            "code": "discard_target_required",
+            "error": format!(
+                "conflict: discarding unsaved edits on '{}' (rev {}) requires passing the matching discardTarget",
+                cur.sheet, cur.revision
+            ),
+            "discardTarget": current_target,
+        }));
+    };
+    let matches = req_discard.sheet == cur.sheet
+        && req_discard.session_id == cur.session_id
+        && (allow_revision_bump || req_discard.revision == cur.revision);
+    if !matches {
+        return Some(json!({
+            "status": "conflict",
+            "code": "discard_target_stale",
+            "error": format!(
+                "conflict: active unsaved edits changed before {action} (expected '{}' session '{}' rev {}, active is '{}' session '{}' rev {}); refresh before discarding",
+                req_discard.sheet,
+                req_discard.session_id,
+                req_discard.revision,
+                cur.sheet,
+                cur.session_id,
+                cur.revision,
+            ),
+            "discardTarget": current_target,
+        }));
+    }
+    None
 }
 
 type JobOutcome = std::result::Result<Value, (StatusCode, Value)>;
@@ -334,11 +448,13 @@ struct PendingInteraction {
 }
 
 struct InteractionBridge {
+    server_instance_id: String,
     seq: AtomicU64,
     state_seq: AtomicU64,
     current_job: AtomicU64,
     cancelling_job: AtomicU64,
     active: Mutex<Option<PendingInteraction>>,
+    session_meta: Mutex<Option<ActiveSessionMeta>>,
     in_flight_jobs: Mutex<BTreeMap<u64, watch::Receiver<Option<JobOutcome>>>>,
     interaction_tx: watch::Sender<Option<(u64, PublicInteraction)>>,
     events_tx: broadcast::Sender<Value>,
@@ -346,19 +462,26 @@ struct InteractionBridge {
 
 impl InteractionBridge {
     fn new(
+        server_instance_id: String,
         interaction_tx: watch::Sender<Option<(u64, PublicInteraction)>>,
         events_tx: broadcast::Sender<Value>,
     ) -> Arc<Self> {
         Arc::new(Self {
+            server_instance_id,
             seq: AtomicU64::new(1),
             state_seq: AtomicU64::new(1),
             current_job: AtomicU64::new(0),
             cancelling_job: AtomicU64::new(0),
             active: Mutex::new(None),
+            session_meta: Mutex::new(None),
             in_flight_jobs: Mutex::new(BTreeMap::new()),
             interaction_tx,
             events_tx,
         })
+    }
+
+    fn set_session_meta(&self, meta: Option<ActiveSessionMeta>) {
+        *self.session_meta.lock().unwrap() = meta;
     }
 
     fn next_state_seq(&self) -> u64 {
@@ -402,19 +525,46 @@ impl InteractionBridge {
         }
     }
 
-    fn cancel_active(&self) {
-        if let Some(pending) = self.active.lock().unwrap().take() {
-            // Mark this job as cancelling so any cascading follow-up modal/alert
-            // fired while unwinding auto-cancels instead of re-blocking the worker.
-            self.cancelling_job.store(pending.job_id, Ordering::SeqCst);
-            // Broadcast clear BEFORE waking the worker so `state_updated` never
-            // arrives ahead of `interaction_cleared`.
-            let _ = self.interaction_tx.send(None);
-            let _ = self.events_tx.send(json!({"type": "interaction_cleared"}));
-            let cancel_reply =
-                Self::cancel_reply_for(&pending.public.kind, &pending.public.request);
-            let _ = pending.tx.send(cancel_reply);
+    fn try_cancel_for_open(
+        &self,
+        force: bool,
+        discard: Option<&DiscardTarget>,
+        expected_session: Option<&str>,
+    ) -> std::result::Result<bool, Value> {
+        // Lock `active` then `session_meta` atomically so a stale or unconfirmed
+        // open request NEVER cancels another session's modal or runs its cancel callback.
+        let mut active = self.active.lock().unwrap();
+        let meta = self.session_meta.lock().unwrap();
+        if active.is_none() {
+            return Ok(false);
         }
+        if let Some(conflict) = validate_discard_meta(
+            meta.as_ref(),
+            "opening another sheet",
+            force,
+            discard,
+            expected_session,
+            false,
+        ) {
+            return Err(conflict);
+        }
+        let pending = active.take().unwrap();
+        drop(meta);
+        drop(active);
+        // Mark this job as cancelling so any cascading follow-up modal/alert
+        // fired while unwinding auto-cancels instead of re-blocking the worker.
+        self.cancelling_job.store(pending.job_id, Ordering::SeqCst);
+        // Broadcast clear BEFORE waking the worker so `state_updated` never
+        // arrives ahead of `interaction_cleared`.
+        let _ = self.interaction_tx.send(None);
+        let _ = self.events_tx.send(json!({
+            "type": "interaction_cleared",
+            "id": pending.public.id,
+            "serverInstanceId": self.server_instance_id,
+        }));
+        let cancel_reply = Self::cancel_reply_for(&pending.public.kind, &pending.public.request);
+        let _ = pending.tx.send(cancel_reply);
+        Ok(true)
     }
 
     fn respond(
@@ -436,7 +586,11 @@ impl InteractionBridge {
         // in-flight jobs or waking the worker so a rejected reply never strands a
         // prompt and WebSocket clients never see the next modal before this clear.
         let _ = self.interaction_tx.send(None);
-        let _ = self.events_tx.send(json!({"type": "interaction_cleared"}));
+        let _ = self.events_tx.send(json!({
+            "type": "interaction_cleared",
+            "id": pending.public.id,
+            "serverInstanceId": self.server_instance_id,
+        }));
         let done_rx = self
             .in_flight_jobs
             .lock()
@@ -459,6 +613,7 @@ impl InteractionBridge {
         let id = format!("int-{}", self.seq.fetch_add(1, Ordering::SeqCst));
         let public = PublicInteraction {
             id,
+            server_instance_id: self.server_instance_id.clone(),
             kind: kind.to_owned(),
             request: request.clone(),
         };
@@ -516,6 +671,7 @@ enum WorkerCommand {
         force: bool,
         discard: Option<DiscardTarget>,
         expected_session: Option<String>,
+        cancelled_modal: bool,
     },
     GetState {
         reply: mpsc::SyncSender<Result<Value>>,
@@ -843,6 +999,7 @@ impl SheetWorker {
                 force,
                 discard,
                 expected_session,
+                cancelled_modal,
             } => {
                 self.run_job(job_id, gate, done, |w| {
                     w.open_sheet(
@@ -850,6 +1007,7 @@ impl SheetWorker {
                         force,
                         discard.as_ref(),
                         expected_session.as_deref(),
+                        cancelled_modal,
                     )
                 });
             }
@@ -1083,74 +1241,38 @@ impl SheetWorker {
         Ok(())
     }
 
+    fn sync_session_meta(&self) {
+        let meta = self.active.as_ref().map(|sh| ActiveSessionMeta {
+            sheet: sh.rel_path.clone(),
+            session_id: sh.session_id.clone(),
+            revision: sh.revision,
+            dirty_since_save: sh.dirty_since_save,
+        });
+        self.bridge.set_session_meta(meta);
+    }
+
     fn check_discard_guard(
         &self,
         action: &str,
         force: bool,
         discard: Option<&DiscardTarget>,
         expected_session: Option<&str>,
+        allow_revision_bump: bool,
     ) -> Option<Value> {
-        let cur = self.active.as_ref()?;
-        if !cur.dirty_since_save {
-            return None;
-        }
-        let current_target = DiscardTarget {
+        let meta = self.active.as_ref().map(|cur| ActiveSessionMeta {
             sheet: cur.rel_path.clone(),
             session_id: cur.session_id.clone(),
             revision: cur.revision,
-        };
-        if !force {
-            return Some(json!({
-                "status": "conflict",
-                "code": "unsaved_edits",
-                "error": format!(
-                    "conflict: active sheet '{}' has unsaved edits (rev {}); save first or confirm discarding them before {action}",
-                    cur.rel_path, cur.revision
-                ),
-                "discardTarget": current_target,
-            }));
-        }
-        if let Some(exp_sess) = expected_session.map(str::trim).filter(|s| !s.is_empty()) {
-            if cur.session_id != exp_sess {
-                return Some(json!({
-                    "status": "conflict",
-                    "code": "discard_target_stale",
-                    "error": format!(
-                        "conflict: active unsaved session changed before {action} (expected session '{exp_sess}', active is '{}' session '{}' rev {}); refresh before discarding",
-                        cur.rel_path, cur.session_id, cur.revision
-                    ),
-                    "discardTarget": current_target,
-                }));
-            }
-        }
-        let Some(req_discard) = discard else {
-            return Some(json!({
-                "status": "conflict",
-                "code": "discard_target_required",
-                "error": format!(
-                    "conflict: discarding unsaved edits on '{}' (rev {}) requires passing the matching discardTarget",
-                    cur.rel_path, cur.revision
-                ),
-                "discardTarget": current_target,
-            }));
-        };
-        if req_discard != &current_target {
-            return Some(json!({
-                "status": "conflict",
-                "code": "discard_target_stale",
-                "error": format!(
-                    "conflict: active unsaved edits changed before {action} (expected '{}' session '{}' rev {}, active is '{}' session '{}' rev {}); refresh before discarding",
-                    req_discard.sheet,
-                    req_discard.session_id,
-                    req_discard.revision,
-                    cur.rel_path,
-                    cur.session_id,
-                    cur.revision,
-                ),
-                "discardTarget": current_target,
-            }));
-        }
-        None
+            dirty_since_save: cur.dirty_since_save,
+        });
+        validate_discard_meta(
+            meta.as_ref(),
+            action,
+            force,
+            discard,
+            expected_session,
+            allow_revision_bump,
+        )
     }
 
     fn open_sheet(
@@ -1159,10 +1281,15 @@ impl SheetWorker {
         force: bool,
         discard: Option<&DiscardTarget>,
         expected_session: Option<&str>,
+        cancelled_modal: bool,
     ) -> Result<Value> {
-        if let Some(conflict) =
-            self.check_discard_guard("opening another sheet", force, discard, expected_session)
-        {
+        if let Some(conflict) = self.check_discard_guard(
+            "opening another sheet",
+            force,
+            discard,
+            expected_session,
+            cancelled_modal,
+        ) {
             return Ok(conflict);
         }
         self.open_sheet_unchecked(rel_path)
@@ -1211,6 +1338,7 @@ impl SheetWorker {
             page_sizes: BTreeMap::new(),
         });
         self.last_save_conflict = None;
+        self.sync_session_meta();
         let state = self.build_state_payload()?;
         Ok(json!({"status": "ok", "state": state}))
     }
@@ -1394,6 +1522,7 @@ impl SheetWorker {
         if mutated {
             self.sync_tracker.mark_dirty();
         }
+        self.sync_session_meta();
         let mut save_conflict: Option<SaveResult> = None;
         if self.autosave && self.active.as_ref().is_some_and(|s| s.dirty_since_save) {
             let res = self.persist_active(false)?;
@@ -1609,6 +1738,7 @@ impl SheetWorker {
                 self.last_save_conflict = Some(save_res.clone());
             }
         }
+        self.sync_session_meta();
         Ok(save_res)
     }
 
@@ -1661,9 +1791,10 @@ impl SheetWorker {
         let sync_gen = self.sync_tracker.snapshot_gen();
         let sync = self.store.git_sync(&commit_msg)?;
         let git = self.store.git_status()?;
-        if (sync.pushed || sync.status == "clean") && !git.dirty && git.ahead == 0 {
+        let pending = git.dirty || (git.ahead > 0 && !git.head_backed_up);
+        if (sync.pushed || sync.status == "clean") && !pending {
             self.sync_tracker.clear_if_unchanged(sync_gen);
-        } else if (git.dirty || git.ahead > 0) && !self.sync_tracker.is_dirty() {
+        } else if pending && !self.sync_tracker.is_dirty() {
             self.sync_tracker.mark_dirty();
         }
         let state = self.build_state_payload()?;
@@ -1682,7 +1813,7 @@ impl SheetWorker {
         expected_session: Option<&str>,
     ) -> Result<Value> {
         if let Some(conflict) =
-            self.check_discard_guard("pulling from Git", force, discard, expected_session)
+            self.check_discard_guard("pulling from Git", force, discard, expected_session, false)
         {
             return Ok(conflict);
         }
@@ -1702,6 +1833,7 @@ impl SheetWorker {
                         if is_missing {
                             self.active = None;
                             self.last_save_conflict = None;
+                            self.sync_session_meta();
                             let git = self.store.git_status()?;
                             let state = self.build_state_payload()?;
                             return Ok(json!({
@@ -1818,11 +1950,10 @@ impl AppState {
         let store = Arc::new(SheetStore::open(config.store.clone())?);
         let (interaction_tx, interaction_rx) = watch::channel(None);
         let (events_tx, _) = broadcast::channel(64);
-        let bridge = InteractionBridge::new(interaction_tx, events_tx);
         let sync_tracker = Arc::new(StoreSyncTracker::default());
         if store.git_enabled() {
             if let Ok(status) = store.git_status() {
-                if status.dirty || status.ahead > 0 {
+                if status.dirty || (status.ahead > 0 && !status.head_backed_up) {
                     sync_tracker.mark_dirty();
                 }
             }
@@ -1837,6 +1968,7 @@ impl AppState {
             std::process::id(),
             SERVER_INSTANCE_SEQ.fetch_add(1, Ordering::SeqCst)
         );
+        let bridge = InteractionBridge::new(server_instance_id.clone(), interaction_tx, events_tx);
         let (cmd_tx, cmd_rx) = mpsc::channel();
 
         let (ready_tx, ready_rx) = mpsc::sync_channel::<bool>(1);
@@ -1902,6 +2034,7 @@ impl AppState {
                 force: true,
                 discard: None,
                 expected_session: None,
+                cancelled_modal: false,
             });
         }
         Ok(state)
@@ -2556,8 +2689,16 @@ async fn handle_open_session(
     if !state.check_auth(&headers, None) {
         return err_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
-    // Switching sheets cancels any lingering modal (including cascading dialogs) on the previous sheet.
-    state.bridge.cancel_active();
+    // Validate discard target / session BEFORE cancelling any active modal so a
+    // stale or unconfirmed open request never cancels another session's dialog.
+    let cancelled_modal = match state.bridge.try_cancel_for_open(
+        req.force,
+        req.discard.as_ref(),
+        req.session.as_deref(),
+    ) {
+        Ok(cancelled) => cancelled,
+        Err(conflict) => return (StatusCode::CONFLICT, Json(conflict)).into_response(),
+    };
     state
         .dispatch_job(|job_id, gate, done| WorkerCommand::Open {
             job_id,
@@ -2567,6 +2708,7 @@ async fn handle_open_session(
             force: req.force,
             discard: req.discard,
             expected_session: req.session,
+            cancelled_modal,
         })
         .await
 }
@@ -5598,6 +5740,367 @@ mod tests {
             git_cmd(&bare, &["rev-parse", "refs/heads/main"]),
             after_dirty_sha
         );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn rejected_stale_force_open_preserves_active_modal_and_session_state() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!(
+            "mpmb-serve-modal-discard-{}-{nanos}",
+            std::process::id()
+        ));
+        let data_dir = base.join("sheets");
+        std::fs::create_dir_all(&data_dir).unwrap();
+
+        make_scripted_hp_pdf(&data_dir.join("alpha.pdf"), "10", "", None);
+        // Beta's button opens an Acrobat dialog whose cancel handler mutates HP Current to 99!
+        make_scripted_hp_pdf(
+            &data_dir.join("beta.pdf"),
+            "20",
+            "",
+            Some(
+                "var r = app.execDialog({description:{name:'Beta Prompt',elements:[{type:'ok_cancel'}]}}); if (r === 'cancel') { getField('HP Current').value = '99'; }",
+            ),
+        );
+
+        let state = AppState::start(&ServeConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            store: StoreConfig {
+                root: data_dir,
+                git: None,
+            },
+            default_sheet: None,
+            auth_token: None,
+            allow_unauthenticated: false,
+            autosave: false,
+            git_auto_sync_secs: 0,
+        })
+        .unwrap();
+        let app = build_router(state);
+
+        // Open Alpha, edit HP 10 -> 11, capture Alpha's discardTarget.
+        let (st, a_open) = post_json(&app, "/api/session/open", json!({"path": "alpha.pdf"})).await;
+        assert_eq!(st, StatusCode::OK);
+        let alpha_session = a_open["state"]["sessionId"].as_str().unwrap().to_owned();
+        assert_eq!(
+            post_json(
+                &app,
+                "/api/session/edit",
+                json!({"field": "HP Current", "value": "11", "sheet": "alpha.pdf", "session": alpha_session}),
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+        let (st, conflict_alpha) =
+            post_json(&app, "/api/session/open", json!({"path": "beta.pdf"})).await;
+        assert_eq!(st, StatusCode::CONFLICT);
+        let alpha_target = conflict_alpha["discardTarget"].clone();
+
+        // Switch to Beta with valid Alpha discardTarget, edit Beta HP 20 -> 21, and open Beta's dialog.
+        let (st, b_open) = post_json(
+            &app,
+            "/api/session/open",
+            json!({"path": "beta.pdf", "force": true, "discard": alpha_target}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        let beta_session = b_open["state"]["sessionId"].as_str().unwrap().to_owned();
+        assert_eq!(
+            post_json(
+                &app,
+                "/api/session/edit",
+                json!({"field": "HP Current", "value": "21", "sheet": "beta.pdf", "session": beta_session}),
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+        let (st, modal_resp) = post_json(
+            &app,
+            "/api/session/activate",
+            json!({"field": "ActionButton", "index": 0, "sheet": "beta.pdf", "session": beta_session}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::ACCEPTED);
+        let beta_int_id = modal_resp["interaction"]["id"].as_str().unwrap().to_owned();
+        assert!(!modal_resp["interaction"]["serverInstanceId"]
+            .as_str()
+            .unwrap_or("")
+            .is_empty());
+
+        // Stale force-open (Alpha's old target), missing-target force-open, and non-force open
+        // MUST all return 409 WITHOUT cancelling Beta's dialog or running its cancel callback!
+        let (st, r1) = post_json(
+            &app,
+            "/api/session/open",
+            json!({"path": "alpha.pdf", "force": true, "discard": alpha_target}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::CONFLICT);
+        assert_eq!(r1["code"], "discard_target_stale");
+
+        let (st, r2) = post_json(
+            &app,
+            "/api/session/open",
+            json!({"path": "alpha.pdf", "force": true}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::CONFLICT);
+        assert_eq!(r2["code"], "discard_target_required");
+
+        let (st, r3) = post_json(&app, "/api/session/open", json!({"path": "alpha.pdf"})).await;
+        assert_eq!(st, StatusCode::CONFLICT);
+        assert_eq!(r3["code"], "unsaved_edits");
+
+        // Beta's dialog must STILL be active!
+        let (st, busy_state) = get_json(&app, "/api/session/state").await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(busy_state["busy"], true);
+        assert_eq!(busy_state["activeInteraction"]["id"], beta_int_id);
+
+        // Answering OK on Beta's dialog completes cleanly with HP 21 (NOT 99 from cancel)!
+        let (st, reply_ok) = post_json(
+            &app,
+            &format!("/api/session/interaction/{beta_int_id}"),
+            json!({"result": "ok", "values": {}}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK, "reply failed: {reply_ok}");
+        assert_eq!(reply_ok["state"]["path"], "beta.pdf");
+        assert_eq!(reply_ok["state"]["vitals"]["hpCurrent"], "21");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn diverged_git_conflict_backup_is_deduplicated_across_idle_ticks_and_restart() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!(
+            "mpmb-serve-conflict-dedup-{}-{nanos}",
+            std::process::id()
+        ));
+        let bare = base.join("remote.git");
+        let upstream = base.join("upstream");
+        let data_dir = base.join("sheets");
+        std::fs::create_dir_all(&bare).unwrap();
+        assert!(Command::new("git")
+            .args(["init", "--bare", "-b", "main"])
+            .arg(&bare)
+            .status()
+            .unwrap()
+            .success());
+
+        let git_cmd = |dir: &std::path::Path, args: &[&str]| -> String {
+            let mut cmd = Command::new("git");
+            for key in [
+                "GIT_DIR",
+                "GIT_WORK_TREE",
+                "GIT_INDEX_FILE",
+                "GIT_COMMON_DIR",
+                "GIT_OBJECT_DIRECTORY",
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            ] {
+                cmd.env_remove(key);
+            }
+            let out = cmd.current_dir(dir).args(args).output().unwrap();
+            assert!(
+                out.status.success(),
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).trim().to_owned()
+        };
+        let conflict_refs = || -> Vec<String> {
+            git_cmd(
+                &bare,
+                &["for-each-ref", "--format=%(refname)", "refs/heads/conflict"],
+            )
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(str::to_owned)
+            .collect()
+        };
+
+        let make_cfg = |repo_url: String| ServeConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            store: StoreConfig {
+                root: data_dir.clone(),
+                git: Some(GitConfig::new(repo_url)),
+            },
+            default_sheet: None,
+            auth_token: None,
+            allow_unauthenticated: false,
+            autosave: true,
+            git_auto_sync_secs: 1,
+        };
+        let bare_url = bare.to_string_lossy().into_owned();
+
+        // 1. Seed baseline and push to bare remote.
+        let s1 = AppState::start(&make_cfg(bare_url.clone())).unwrap();
+        make_scripted_hp_pdf(&data_dir.join("alpha.pdf"), "10", "", None);
+        let app1 = build_router(s1.clone());
+        assert_eq!(
+            post_json(&app1, "/api/git/sync", json!({"message": "baseline"}))
+                .await
+                .0,
+            StatusCode::OK
+        );
+
+        // 2. Open alpha.pdf first, THEN advance remote main from an independent upstream clone
+        //    so local main diverges instead of fast-forwarding on open.
+        assert_eq!(
+            post_json(&app1, "/api/session/open", json!({"path": "alpha.pdf"}))
+                .await
+                .0,
+            StatusCode::OK
+        );
+        git_cmd(
+            &base,
+            &["clone", "-b", "main", &bare_url, upstream.to_str().unwrap()],
+        );
+        git_cmd(&upstream, &["config", "user.name", "Upstream"]);
+        git_cmd(&upstream, &["config", "user.email", "up@example.com"]);
+        make_scripted_hp_pdf(&upstream.join("upstream.pdf"), "50", "", None);
+        git_cmd(&upstream, &["add", "upstream.pdf"]);
+        git_cmd(&upstream, &["commit", "-m", "upstream commit"]);
+        git_cmd(&upstream, &["push", "origin", "main"]);
+
+        // 3. Make one server-side edit -> first idle sync creates exactly ONE conflict branch.
+        assert_eq!(
+            post_json(
+                &app1,
+                "/api/session/edit",
+                json!({"field": "HP Current", "value": "17", "sheet": "alpha.pdf"}),
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+        tokio::time::sleep(Duration::from_millis(1150)).await;
+        let res1 = s1
+            .dispatch_job(|job_id, gate, done| WorkerCommand::CheckIdleAutoSync {
+                job_id,
+                gate,
+                done,
+                idle_secs: 1,
+            })
+            .await;
+        assert_eq!(res1.status(), StatusCode::OK);
+        let b1 = json_body(res1).await;
+        assert_eq!(b1["sync"]["status"], "conflict_branch");
+        assert_eq!(b1["state"]["dirtySinceSync"], false);
+        let refs_after_first = conflict_refs();
+        assert_eq!(
+            refs_after_first.len(),
+            1,
+            "expected 1 conflict branch: {refs_after_first:?}"
+        );
+
+        // 4. Subsequent idle ticks AND manual sync with no new edits must NOT create duplicates!
+        for _ in 0..2 {
+            tokio::time::sleep(Duration::from_millis(1100)).await;
+            let skip = s1
+                .dispatch_job(|job_id, gate, done| WorkerCommand::CheckIdleAutoSync {
+                    job_id,
+                    gate,
+                    done,
+                    idle_secs: 1,
+                })
+                .await;
+            assert_eq!(skip.status(), StatusCode::OK);
+            assert_eq!(json_body(skip).await["status"], "skipped");
+        }
+        let (st, manual_dup) =
+            post_json(&app1, "/api/git/sync", json!({"message": "manual retry"})).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(manual_dup["sync"]["status"], "conflict_branch");
+        assert_eq!(
+            conflict_refs(),
+            refs_after_first,
+            "same SHA must not create duplicate remote conflict branches"
+        );
+        drop(app1);
+        drop(s1);
+
+        // 5. Restart server on the same diverged checkout -> dirtySinceSync stays false and
+        //    no duplicate conflict branch is created on idle ticks!
+        let s2 = AppState::start(&make_cfg(bare_url.clone())).unwrap();
+        let app2 = build_router(s2.clone());
+        let (st, st2) = get_json(&app2, "/api/session/state").await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(st2["dirtySinceSync"], false);
+        assert!(st2["git"]["last_conflict_branch"].as_str().is_some());
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        let skip2 = s2
+            .dispatch_job(|job_id, gate, done| WorkerCommand::CheckIdleAutoSync {
+                job_id,
+                gate,
+                done,
+                idle_secs: 1,
+            })
+            .await;
+        assert_eq!(json_body(skip2).await["status"], "skipped");
+        assert_eq!(conflict_refs(), refs_after_first);
+
+        // 6. A later edit produces a NEW SHA and DOES sync to a second conflict branch!
+        assert_eq!(
+            post_json(&app2, "/api/session/open", json!({"path": "alpha.pdf"}))
+                .await
+                .0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            post_json(
+                &app2,
+                "/api/session/edit",
+                json!({"field": "HP Current", "value": "18", "sheet": "alpha.pdf"}),
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+        tokio::time::sleep(Duration::from_millis(1150)).await;
+        let res2 = s2
+            .dispatch_job(|job_id, gate, done| WorkerCommand::CheckIdleAutoSync {
+                job_id,
+                gate,
+                done,
+                idle_secs: 1,
+            })
+            .await;
+        assert_eq!(res2.status(), StatusCode::OK);
+        let b2 = json_body(res2).await;
+        assert_eq!(b2["sync"]["status"], "conflict_branch");
+        assert_eq!(b2["state"]["dirtySinceSync"], false);
+        assert_eq!(
+            conflict_refs().len(),
+            2,
+            "later edit must create a new backup ref"
+        );
+        drop(app2);
+        drop(s2);
+
+        // 7. A failed/unbacked local commit (ahead > 0, head_backed_up == false) MUST still
+        //    recover dirtySinceSync=true on restart so it retries!
+        make_scripted_hp_pdf(&data_dir.join("unbacked.pdf"), "33", "", None);
+        git_cmd(&data_dir, &["add", "unbacked.pdf"]);
+        git_cmd(&data_dir, &["commit", "-m", "failed backup local commit"]);
+        let s3 = AppState::start(&make_cfg(bare_url)).unwrap();
+        let app3 = build_router(s3.clone());
+        let (st, st3) = get_json(&app3, "/api/session/state").await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(st3["dirtySinceSync"], true);
+        assert_eq!(st3["git"]["head_backed_up"], false);
 
         let _ = std::fs::remove_dir_all(&base);
     }

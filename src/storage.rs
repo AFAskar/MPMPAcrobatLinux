@@ -112,8 +112,16 @@ pub struct GitStatus {
     pub changed_files: Vec<String>,
     pub ahead: usize,
     pub behind: usize,
+    #[serde(default)]
+    pub head_backed_up: bool,
     pub last_conflict_branch: Option<String>,
     pub last_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+struct ConflictBackupMarker {
+    sha: String,
+    branch: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -514,6 +522,7 @@ impl SheetStore {
                 changed_files: Vec::new(),
                 ahead: 0,
                 behind: 0,
+                head_backed_up: false,
                 last_conflict_branch: None,
                 last_error: None,
             });
@@ -543,6 +552,17 @@ impl SheetStore {
             .map(|l| l.trim().to_owned())
             .collect();
         let (ahead, behind) = self.ahead_behind(cfg);
+        let backup_marker = self.read_conflict_backup(cfg);
+        let head_backed_up = head
+            .as_deref()
+            .is_some_and(|h| backup_marker.as_ref().is_some_and(|m| m.sha == h));
+        let last_conflict_branch = guard.last_conflict_branch.clone().or_else(|| {
+            if head_backed_up {
+                backup_marker.as_ref().map(|m| m.branch.clone())
+            } else {
+                None
+            }
+        });
         Ok(GitStatus {
             enabled: true,
             repo_url: Some(redact_url(&cfg.repo_url)),
@@ -553,7 +573,8 @@ impl SheetStore {
             changed_files,
             ahead,
             behind,
-            last_conflict_branch: guard.last_conflict_branch.clone(),
+            head_backed_up,
+            last_conflict_branch,
             last_error: guard.last_error.clone(),
         })
     }
@@ -647,6 +668,10 @@ impl SheetStore {
             .ok()
             .filter(|s| !s.is_empty());
         let updated = old_head != new_head;
+        if updated {
+            self.clear_conflict_backup(cfg);
+            guard.last_conflict_branch = None;
+        }
         Ok(PullResult {
             updated,
             dirty: false,
@@ -761,6 +786,7 @@ impl SheetStore {
         let target_refspec = format!("{sha}:refs/heads/{}", cfg.branch);
         match self.run_git(cfg, &["push", &cfg.remote, &target_refspec]) {
             Ok(_) => {
+                self.clear_conflict_backup(cfg);
                 guard.last_error = None;
                 guard.last_conflict_branch = None;
                 Ok(SyncResult {
@@ -784,6 +810,32 @@ impl SheetStore {
                     || err_text.contains("fetch first")
                     || err_text.contains("Updates were rejected");
                 if is_divergence {
+                    // Deduplicate backups by immutable commit SHA: if this exact commit
+                    // is already preserved on a remote conflict branch, reuse it rather
+                    // than creating unbounded duplicate backup refs.
+                    if let Some(existing) = self.read_conflict_backup(cfg) {
+                        if existing.sha == sha
+                            && self.remote_branch_matches_sha(cfg, &existing.branch, &sha)
+                        {
+                            guard.last_conflict_branch = Some(existing.branch.clone());
+                            guard.last_error = Some(format!(
+                                "Remote {} diverged; local edits already saved on branch {}",
+                                cfg.branch, existing.branch
+                            ));
+                            return Ok(SyncResult {
+                                status: "conflict_branch".into(),
+                                committed,
+                                pushed: true,
+                                commit_sha: Some(sha),
+                                branch: cfg.branch.clone(),
+                                conflict_branch: Some(existing.branch.clone()),
+                                message: format!(
+                                    "Remote {} changed elsewhere; your session is already backed up on {}",
+                                    cfg.branch, existing.branch
+                                ),
+                            });
+                        }
+                    }
                     let host = hostname_slug();
                     let ts_ms = SystemTime::now()
                         .duration_since(UNIX_EPOCH)
@@ -800,6 +852,7 @@ impl SheetStore {
                                 "primary push rejected and fallback push to {conflict_branch} failed"
                             )
                         })?;
+                    self.write_conflict_backup(cfg, &sha, &conflict_branch);
                     guard.last_conflict_branch = Some(conflict_branch.clone());
                     guard.last_error = Some(format!(
                         "Remote {} diverged; saved local edits to branch {}",
@@ -1025,6 +1078,58 @@ impl SheetStore {
             .into_iter()
             .filter(|p| eligible.contains(p.as_str()))
             .collect())
+    }
+
+    fn conflict_backup_marker_path(&self, cfg: &GitConfig) -> Option<PathBuf> {
+        let git_dir = self
+            .run_git_allow_fail(cfg, &["rev-parse", "--git-dir"])
+            .ok()
+            .filter(|s| !s.is_empty())?;
+        let dir_path = PathBuf::from(git_dir);
+        let resolved = if dir_path.is_absolute() {
+            dir_path
+        } else {
+            self.root.join(dir_path)
+        };
+        Some(resolved.join("mpmb-conflict-backup.json"))
+    }
+
+    fn read_conflict_backup(&self, cfg: &GitConfig) -> Option<ConflictBackupMarker> {
+        let path = self.conflict_backup_marker_path(cfg)?;
+        let bytes = fs::read(path).ok()?;
+        serde_json::from_slice(&bytes).ok()
+    }
+
+    fn write_conflict_backup(&self, cfg: &GitConfig, sha: &str, branch: &str) {
+        let Some(path) = self.conflict_backup_marker_path(cfg) else {
+            return;
+        };
+        let marker = ConflictBackupMarker {
+            sha: sha.to_owned(),
+            branch: branch.to_owned(),
+        };
+        if let Ok(bytes) = serde_json::to_vec(&marker) {
+            let _ = write_file_atomic_replace(&path, &bytes);
+        }
+    }
+
+    fn clear_conflict_backup(&self, cfg: &GitConfig) {
+        if let Some(path) = self.conflict_backup_marker_path(cfg) {
+            let _ = fs::remove_file(path);
+        }
+    }
+
+    fn remote_branch_matches_sha(&self, cfg: &GitConfig, branch: &str, sha: &str) -> bool {
+        let ref_name = format!("refs/heads/{branch}");
+        let Ok(out) =
+            self.run_git_allow_fail(cfg, &["ls-remote", "--heads", &cfg.remote, &ref_name])
+        else {
+            return false;
+        };
+        out.lines().any(|line| {
+            let mut parts = line.split_whitespace();
+            parts.next() == Some(sha) && parts.next() == Some(ref_name.as_str())
+        })
     }
 
     fn ahead_behind(&self, cfg: &GitConfig) -> (usize, usize) {
