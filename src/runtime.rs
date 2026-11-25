@@ -23,11 +23,38 @@ pub trait InteractionHandler: Send + Sync {
     }
 }
 
+/// Capability policy governing host filesystem and native desktop operations.
+/// Desktop/probe mode defaults to `HostCapabilities::desktop()`; web/server mode
+/// uses `HostCapabilities::server_restricted()` so uploaded PDF scripts cannot
+/// read arbitrary server files or open native desktop pickers/dialogs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HostCapabilities {
+    pub allow_host_fs: bool,
+    pub allow_native_dialogs: bool,
+}
+
+impl HostCapabilities {
+    pub const fn desktop() -> Self {
+        Self {
+            allow_host_fs: true,
+            allow_native_dialogs: true,
+        }
+    }
+
+    pub const fn server_restricted() -> Self {
+        Self {
+            allow_host_fs: false,
+            allow_native_dialogs: false,
+        }
+    }
+}
+
 struct DocumentServices {
     dialogs: Arc<Mutex<VecDeque<Value>>>,
     alerts: Arc<Mutex<VecDeque<Value>>>,
     interactive: bool,
     interaction: Option<Arc<dyn InteractionHandler>>,
+    capabilities: HostCapabilities,
     print_output_dir: Option<PathBuf>,
     attachment_output_dir: Option<PathBuf>,
     trace_dir: Option<PathBuf>,
@@ -261,7 +288,7 @@ impl Runtime {
         print_output_dir: Option<std::path::PathBuf>,
         attachment_output_dir: Option<std::path::PathBuf>,
     ) -> Result<Self> {
-        Self::new_with_interaction(
+        Self::new_with_capabilities(
             pdf,
             dialogs,
             alerts,
@@ -269,9 +296,11 @@ impl Runtime {
             print_output_dir,
             attachment_output_dir,
             None,
+            HostCapabilities::desktop(),
         )
     }
-    pub fn new_with_interaction(
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_capabilities(
         pdf: &Arc<Pdf>,
         dialogs: Vec<Value>,
         alerts: Vec<Value>,
@@ -279,6 +308,7 @@ impl Runtime {
         print_output_dir: Option<std::path::PathBuf>,
         attachment_output_dir: Option<std::path::PathBuf>,
         interaction: Option<Arc<dyn InteractionHandler>>,
+        capabilities: HostCapabilities,
     ) -> Result<Self> {
         let engine = Engine::new()?;
         engine.set_memory_limit(512 * 1024 * 1024);
@@ -289,6 +319,7 @@ impl Runtime {
             alerts: Arc::new(Mutex::new(VecDeque::from(alerts))),
             interactive,
             interaction,
+            capabilities,
             print_output_dir,
             attachment_output_dir,
             trace_dir: std::env::var_os("MPMB_DIALOG_TRACE_DIR").map(PathBuf::from),
@@ -328,6 +359,7 @@ impl Runtime {
         )?;
         let services = &documents.services;
         let interactive = services.interactive;
+        let capabilities = services.capabilities;
         let print_output_dir = services.print_output_dir.clone();
         let attachment_output_dir = services.attachment_output_dir.clone();
         let xfdf_base = pdf
@@ -337,8 +369,11 @@ impl Runtime {
             .to_owned();
         ctx.globals().set("__xfdfRead", Function::new(ctx.clone(), move |ctx: Ctx, path: String| -> rquickjs::Result<String> {
             (|| -> Result<String> {
+                if !capabilities.allow_host_fs {
+                    bail!("Host XFDF file access is disabled in server mode");
+                }
                 let selected = if path.is_empty() {
-                    if !interactive { bail!("XFDF file picker requires interactive mode or an explicit local path") }
+                    if !interactive || !capabilities.allow_native_dialogs { bail!("XFDF file picker requires interactive desktop mode or an explicit local path") }
                     let Some(chosen) = crate::platform::open_file_dialog(
                         "Import XFDF form data",
                         "XFDF",
@@ -369,6 +404,9 @@ impl Runtime {
         let icon_interaction = services.interaction.clone();
         ctx.globals().set("__iconImport", Function::new(ctx.clone(), move |ctx: Ctx, input: String| -> rquickjs::Result<String> {
             (|| -> Result<String> {
+                if !capabilities.allow_host_fs || !capabilities.allow_native_dialogs {
+                    bail!("Host icon file import is disabled in server mode");
+                }
                 let request: Value = serde_json::from_str(&input)?;
                 let result = crate::icon_import::request(&request, interactive, &icon_base)?;
                 if interactive && result["code"].as_i64().is_some_and(|v| v < 0) {
@@ -404,6 +442,12 @@ impl Runtime {
             Function::new(
                 ctx.clone(),
                 move |ctx: Ctx, request: String| -> rquickjs::Result<String> {
+                    if !capabilities.allow_host_fs || !capabilities.allow_native_dialogs {
+                        return Err(Exception::throw_message(
+                            &ctx,
+                            "Host attachment export is disabled in server mode",
+                        ));
+                    }
                     exporter
                         .borrow_mut()
                         .export(
@@ -423,6 +467,12 @@ impl Runtime {
             Function::new(
                 ctx.clone(),
                 move |ctx: Ctx, request: String| -> rquickjs::Result<String> {
+                    if !capabilities.allow_host_fs || !capabilities.allow_native_dialogs {
+                        return Err(Exception::throw_message(
+                            &ctx,
+                            "Host printing is disabled in server mode",
+                        ));
+                    }
                     crate::printing::execute(
                         &print_pdf,
                         &request,
@@ -452,7 +502,7 @@ impl Runtime {
                         if interactive {
                             if let Some(handler) = &launch_interaction {
                                 launched = handler.launch_url(&url, new_frame)?;
-                            } else {
+                            } else if capabilities.allow_native_dialogs {
                                 crate::platform::open_url_detached(&url)?;
                                 launched = true;
                             }
@@ -616,10 +666,13 @@ impl Runtime {
                 ctx.clone(),
                 move |ctx: Ctx, path: String| -> rquickjs::Result<String> {
                     (|| -> Result<String> {
+                        if !capabilities.allow_host_fs {
+                            bail!("Host file access is disabled in server mode");
+                        }
                         let selected = if path.is_empty() {
-                            if !interactive {
+                            if !interactive || !capabilities.allow_native_dialogs {
                                 bail!(
-                                    "file picker requires interactive mode or explicit local path"
+                                    "file picker requires interactive desktop mode or explicit local path"
                                 )
                             }
                             let Some(chosen) = crate::platform::open_file_dialog(
@@ -650,7 +703,13 @@ impl Runtime {
                 },
             )?,
         )?;
-        let initial = json!({"attachments":attachment_metadata,"templates":pdf.templates,"trace":std::env::var("MPMB_TRACE_FIELDS").unwrap_or_default().split(',').collect::<Vec<_>>(),"bookmarks":pdf.bookmarks,"fields":pdf.fields,"order":pdf.order,"info":pdf.info,"file":pdf.path.file_name().unwrap_or_default().to_string_lossy(),"path":pdf.path,"pages":pdf.doc.get_pages().len()});
+        let exposed_file = pdf.path.file_name().unwrap_or_default().to_string_lossy();
+        let exposed_path: Value = if capabilities.allow_host_fs {
+            json!(pdf.path)
+        } else {
+            json!(format!("/{exposed_file}"))
+        };
+        let initial = json!({"attachments":attachment_metadata,"templates":pdf.templates,"trace":std::env::var("MPMB_TRACE_FIELDS").unwrap_or_default().split(',').collect::<Vec<_>>(),"bookmarks":pdf.bookmarks,"fields":pdf.fields,"order":pdf.order,"info":pdf.info,"file":exposed_file,"path":exposed_path,"pages":pdf.doc.get_pages().len()});
         ctx.globals().set(
             "__roundRichMetric",
             Function::new(ctx.clone(), round_rich_metric)?,
@@ -1687,7 +1746,7 @@ mod tests {
             alerts: Mutex::new(Vec::new()),
             urls: Mutex::new(Vec::new()),
         });
-        let rt = Runtime::new_with_interaction(
+        let rt = Runtime::new_with_capabilities(
             &pdf,
             vec![],
             vec![],
@@ -1695,6 +1754,7 @@ mod tests {
             None,
             None,
             Some(handler.clone()),
+            HostCapabilities::server_restricted(),
         )
         .unwrap();
 
@@ -1725,6 +1785,112 @@ mod tests {
             *handler.urls.lock().unwrap(),
             vec![("https://example.test/mpmb".to_owned(), true)]
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn server_restricted_capabilities_block_host_filesystem_and_native_ops() {
+        struct NoopHandler;
+        impl InteractionHandler for NoopHandler {
+            fn modal(&self, _request: &Value) -> Result<Value> {
+                Ok(json!({"result": "cancel"}))
+            }
+            fn alert(&self, _request: &Value) -> Result<Value> {
+                Ok(json!({"button": 1, "checked": false}))
+            }
+        }
+
+        use lopdf::dictionary;
+        let dir =
+            std::env::temp_dir().join(format!("mpmb-server-sandbox-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let secret_file = dir.join("host-secret.txt");
+        std::fs::write(&secret_file, "TOP_SECRET_HOST_DATA").unwrap();
+
+        let pdf_path = dir.join("sheet.pdf");
+        let mut doc = lopdf::Document::with_version("1.7");
+        let pages_id = doc.new_object_id();
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+        });
+        doc.objects.insert(
+            pages_id,
+            lopdf::Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => vec![page_id.into()],
+                "Count" => 1,
+            }),
+        );
+        let form_id = doc.add_object(dictionary! {
+            "Fields" => Vec::<lopdf::Object>::new(),
+        });
+        let catalog_id = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+            "AcroForm" => form_id,
+        });
+        doc.trailer.set("Root", catalog_id);
+        doc.save(&pdf_path).unwrap();
+
+        let pdf = Arc::new(Pdf::open(&pdf_path).unwrap());
+        let rt = Runtime::new_with_capabilities(
+            &pdf,
+            vec![],
+            vec![],
+            true,
+            None,
+            None,
+            Some(Arc::new(NoopHandler)),
+            HostCapabilities::server_restricted(),
+        )
+        .unwrap();
+
+        let secret_js = serde_json::to_string(secret_file.to_string_lossy().as_ref()).unwrap();
+        let res = rt
+            .eval(&format!(
+                r#"(function(){{
+                    var blocked = {{}};
+                    function check(name, fn) {{
+                        try {{ fn(); blocked[name] = false; }} catch (e) {{ blocked[name] = String(e); }}
+                    }}
+                    check('file', function(){{ util.readFileIntoStream({secret_js}); }});
+                    check('xfdf', function(){{ importAnXFDF({secret_js}); }});
+                    check('icon', function(){{ __iconImport('{{}}'); }});
+                    check('attachment', function(){{ __attachment('{{}}'); }});
+                    check('print', function(){{ __print('{{}}'); }});
+                    check('openDoc', function(){{ app.openDoc({{ cPath: {secret_js} }}); }});
+                    check('browsePdf', function(){{ __browsePdf(); }});
+                    blocked.path = this.path;
+                    return blocked;
+                }})()"#
+            ))
+            .unwrap();
+
+        for key in [
+            "file",
+            "xfdf",
+            "icon",
+            "attachment",
+            "print",
+            "openDoc",
+            "browsePdf",
+        ] {
+            let msg = res[key]
+                .as_str()
+                .unwrap_or_else(|| panic!("{key} was not blocked: {res:?}"));
+            assert!(
+                msg.contains("disabled in server mode"),
+                "{key} error did not mention server mode: {msg}"
+            );
+            assert!(
+                !msg.contains("TOP_SECRET_HOST_DATA"),
+                "{key} leaked secret contents"
+            );
+        }
+        assert_eq!(res["path"], json!("/sheet.pdf"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

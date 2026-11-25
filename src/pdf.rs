@@ -841,6 +841,24 @@ impl Pdf {
             },
         )
         .context("read PDF")?;
+        Self::from_document(path.to_owned(), doc)
+    }
+
+    pub fn open_bytes(path: PathBuf, bytes: &[u8]) -> Result<Self> {
+        eprintln!("PDF: loading {} ({} bytes)", path.display(), bytes.len());
+        let doc = Document::load_from_with_options(
+            std::io::Cursor::new(bytes),
+            lopdf::LoadOptions {
+                strict: true,
+                ..Default::default()
+            },
+        )
+        .context("read PDF")?;
+        Self::from_document(path, doc)
+    }
+
+    fn from_document(path: PathBuf, doc: Document) -> Result<Self> {
+        let path = path.as_path();
         eprintln!("PDF: parsed {} objects", doc.objects.len());
         let mut page_map = BTreeMap::new();
         for (n, id) in doc.get_pages() {

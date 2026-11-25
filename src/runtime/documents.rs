@@ -140,8 +140,12 @@ impl Documents {
             )?,
         )?;
         let interactive = self.services.interactive;
+        let capabilities = self.services.capabilities;
         ctx.globals().set("__browsePdf", Function::new(ctx.clone(), move |ctx: Ctx<'js>| -> rquickjs::Result<Option<String>> {
             (|| -> Result<Option<String>> {
+                if !capabilities.allow_host_fs || !capabilities.allow_native_dialogs {
+                    bail!("Native PDF file picker is disabled in server mode");
+                }
                 if !interactive {bail!("PDF file picker requires interactive mode; scripted imports must supply an explicit path")}
                 let chosen = crate::platform::open_file_dialog(
                     "Select MPMB source PDF",
@@ -205,6 +209,9 @@ impl Documents {
         path: &str,
         relative: Option<Object<'js>>,
     ) -> Result<Object<'js>> {
+        if !self.services.capabilities.allow_host_fs {
+            bail!("Opening host PDF files is disabled in server mode");
+        }
         let path = self.resolve(ctx, path, relative)?;
         let existing = self
             .open
