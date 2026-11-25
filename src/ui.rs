@@ -266,6 +266,12 @@ pub fn main() -> Result<()> {
         .unwrap_or(0);
     let mut cache = ProjectionCache::default();
     cache.ensure_metadata(&rt, &pdf, initial_rev);
+    let save_path = default_save_path(
+        &pdf.path,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_millis(),
+    );
     let app = Reader {
         doc_title,
         menu_images: BTreeMap::new(),
@@ -299,12 +305,7 @@ pub fn main() -> Result<()> {
         status_is_error: false,
         last_tick: std::time::Instant::now(),
         bookmarks_pane_applied: false,
-        save_path: format!(
-            "output/testing/native-{}.pdf",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)?
-                .as_millis()
-        ),
+        save_path,
     };
     eframe::run_native(
         "MPMB Linux Reader",
@@ -329,6 +330,22 @@ fn dialog_options() -> eframe::NativeOptions {
         ..Default::default()
     }
 }
+fn default_save_path(source_pdf: &std::path::Path, stamp_ms: u128) -> String {
+    let stem = source_pdf
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("character-sheet");
+    let dir = source_pdf
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty() && p.is_dir())
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    dir.join(format!("{stem}-copy-{stamp_ms}.pdf"))
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn run_launcher_window() -> Result<Option<PathBuf>> {
     struct Launcher {
         chosen: Arc<Mutex<Option<PathBuf>>>,
@@ -3336,6 +3353,28 @@ mod dialog_tests {
             unsaved,
             "timer-driven field change must mark document unsaved"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn default_save_path_targets_writable_source_directory_without_overwriting() {
+        let dir = std::env::temp_dir().join(format!("mpmb-default-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("Hero Sheet.pdf");
+        std::fs::write(&src, b"orig").unwrap();
+        let out = PathBuf::from(default_save_path(&src, 12345));
+        assert_eq!(out.parent(), Some(dir.as_path()));
+        assert_ne!(out, src);
+        assert_eq!(
+            out.file_name().and_then(|s| s.to_str()),
+            Some("Hero Sheet-copy-12345.pdf")
+        );
+        let fallback = PathBuf::from(default_save_path(
+            std::path::Path::new("/nonexistent-mpmb-dir-999/char.pdf"),
+            67890,
+        ));
+        assert_eq!(fallback.parent(), Some(std::env::temp_dir().as_path()));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

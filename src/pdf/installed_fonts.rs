@@ -9,27 +9,73 @@ use std::{
     process::Command,
 };
 
-fn bundled_font_candidates(filename: &str) -> Vec<PathBuf> {
-    let mut out = Vec::new();
+fn bundled_font_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
     if let Some(dir) = std::env::var_os("MPMB_FONT_DIR") {
-        out.push(PathBuf::from(dir).join(filename));
+        dirs.push(PathBuf::from(dir));
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            out.push(dir.join("fonts").join(filename));
-            out.push(dir.join(filename));
-            out.push(
+            dirs.push(dir.join("fonts"));
+            dirs.push(dir.to_path_buf());
+            dirs.push(
                 dir.join("..")
                     .join("share")
                     .join("mpmb-reader")
-                    .join("fonts")
-                    .join(filename),
+                    .join("fonts"),
             );
         }
     }
-    out.push(PathBuf::from("output/deps/fonts").join(filename));
-    out.push(PathBuf::from("/app/share/mpmb-reader/fonts").join(filename));
-    out
+    dirs.push(PathBuf::from("output/deps/fonts"));
+    dirs.push(PathBuf::from("/app/share/mpmb-reader/fonts"));
+    #[cfg(target_os = "windows")]
+    dirs.push(PathBuf::from("C:\\Windows\\Fonts"));
+    dirs
+}
+
+fn bundled_font_candidates(filename: &str) -> Vec<PathBuf> {
+    bundled_font_dirs()
+        .into_iter()
+        .map(|d| d.join(filename))
+        .collect()
+}
+
+fn scan_dirs_for_face(
+    dirs: &[PathBuf],
+    matcher: impl Fn(&ttf_parser::Face<'_>) -> Option<String>,
+) -> Option<EmbeddedFont> {
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        let mut files: Vec<PathBuf> = entries
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| {
+                p.extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e.eq_ignore_ascii_case("ttf"))
+            })
+            .collect();
+        files.sort();
+        for path in files {
+            let Ok(bytes) = std::fs::read(&path) else {
+                continue;
+            };
+            let Ok(face) = ttf_parser::Face::parse(&bytes, 0) else {
+                continue;
+            };
+            if let Some(font_name) = matcher(&face) {
+                let metrics = RichFontMetrics::from_face(&face, None);
+                return Some(EmbeddedFont {
+                    bytes,
+                    metrics,
+                    font_name,
+                });
+            }
+        }
+    }
+    None
 }
 
 /// Preserve explicit overrides, but find the same default face across packaged
@@ -126,6 +172,12 @@ impl Resolver {
         {
             return;
         }
+        if let Some(asset) = scan_dirs_for_face(&bundled_font_dirs(), |face| {
+            matching_family(face, family, weight, italic)
+        }) {
+            fonts.insert(alias.to_owned(), asset);
+            return;
+        }
         let query = format!(
             "{family}:weight={}:slant={}",
             if weight == 700 { 200 } else { 80 },
@@ -165,6 +217,12 @@ impl Resolver {
 
     pub fn resolve(&mut self, name: &str, fonts: &mut BTreeMap<String, EmbeddedFont>) {
         if fonts.contains_key(name) || !self.attempted.insert(name.to_owned()) {
+            return;
+        }
+        if let Some(asset) =
+            scan_dirs_for_face(&bundled_font_dirs(), |face| matching_name(face, name))
+        {
+            fonts.insert(name.to_owned(), asset);
             return;
         }
         let canonical = name.replace(',', "-");
@@ -352,5 +410,30 @@ mod tests {
             matching_name(&bold, "DejaVuSans,Bold").as_deref(),
             Some("DejaVuSans-Bold")
         );
+
+        // Bundled/directory scan resolves exact bold face without calling fc-match.
+        let dir = std::env::temp_dir().join(format!("mpmb-font-scan-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::copy(
+            crate::pdf::installed_fonts::test_font_path("DejaVuSans"),
+            dir.join("DejaVuSans.ttf"),
+        )
+        .unwrap();
+        std::fs::copy(
+            crate::pdf::installed_fonts::test_font_path("DejaVuSans-Bold"),
+            dir.join("DejaVuSans-Bold.ttf"),
+        )
+        .unwrap();
+        let found_bold = scan_dirs_for_face(std::slice::from_ref(&dir), |face| {
+            matching_family(face, "DejaVu Sans", 700, false)
+        })
+        .expect("should resolve DejaVu Sans Bold from directory without fc-match");
+        assert_eq!(found_bold.font_name, "DejaVuSans-Bold");
+        assert!(scan_dirs_for_face(std::slice::from_ref(&dir), |face| {
+            matching_family(face, "DejaVu Sans", 700, true)
+        })
+        .is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
