@@ -1895,6 +1895,16 @@ impl Reader {
     }
 }
 
+fn sync_revision_state(render_revision: &mut u64, next_revision: u64, unsaved: &mut bool) -> bool {
+    if next_revision != *render_revision {
+        *render_revision = next_revision;
+        *unsaved = true;
+        true
+    } else {
+        false
+    }
+}
+
 static ACTIVE_THEME: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 fn set_active_theme(mode: ThemeMode) {
     ACTIVE_THEME.store(
@@ -2032,8 +2042,7 @@ impl eframe::App for Reader {
         }
         if let Ok(value) = self.rt.eval("__host.revision") {
             let revision = value.as_u64().unwrap_or(0);
-            if revision != self.render_revision {
-                self.render_revision = revision;
+            if sync_revision_state(&mut self.render_revision, revision, &mut self.unsaved) {
                 if !self.editor.dirty {
                     let _ = self.refresh_editor();
                 }
@@ -3255,6 +3264,78 @@ mod dialog_tests {
         let reopened = Pdf::open(&out_path).unwrap();
         assert_eq!(reopened.fields["PC Name"].value, json!("Saved Hero"));
         assert_eq!(reopened.fields["Str Mod"].value, json!("+2"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn timer_revision_change_marks_document_unsaved_for_close_prompt() {
+        let mut doc = lopdf::Document::new();
+        let page = doc.add_object(lopdf::dictionary! {
+            "Type" => "Page",
+            "MediaBox" => vec![0.into(), 0.into(), 200.into(), 200.into()]
+        });
+        let pages = doc.add_object(lopdf::dictionary! {
+            "Type" => "Pages",
+            "Kids" => vec![page.into()],
+            "Count" => 1
+        });
+        doc.get_dictionary_mut(page).unwrap().set("Parent", pages);
+        let field = doc.add_object(lopdf::dictionary! {
+            "FT" => "Tx",
+            "T" => lopdf::Object::string_literal("PC Name"),
+            "V" => lopdf::Object::string_literal("Initial"),
+            "Subtype" => "Widget",
+            "Rect" => vec![10.into(), 10.into(), 120.into(), 30.into()],
+            "P" => page,
+            "F" => 4
+        });
+        doc.get_dictionary_mut(page)
+            .unwrap()
+            .set("Annots", vec![field.into()]);
+        let form = doc.add_object(lopdf::dictionary! {"Fields" => vec![field.into()]});
+        let root = doc.add_object(lopdf::dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages,
+            "AcroForm" => form
+        });
+        doc.trailer.set("Root", root);
+
+        let dir = std::env::temp_dir().join(format!("mpmb-timer-unsaved-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("timer.pdf");
+        doc.save(&path).unwrap();
+
+        let pdf = Arc::new(Pdf::open(&path).unwrap());
+        let rt = Runtime::new(&pdf, vec![], vec![], false, None, None).unwrap();
+        let mut render_revision = rt.eval("__host.revision").unwrap().as_u64().unwrap();
+        let mut unsaved = false;
+
+        // Schedule a timer callback that mutates a field asynchronously.
+        rt.eval("app.setTimeOut(\"getField('PC Name').value = 'Timer Updated';\", 50);")
+            .unwrap();
+        assert!(!sync_revision_state(
+            &mut render_revision,
+            rt.eval("__host.revision").unwrap().as_u64().unwrap(),
+            &mut unsaved
+        ));
+        assert!(!unsaved);
+
+        rt.advance(100).unwrap();
+        assert_eq!(
+            rt.eval("getField('PC Name').valueAsString").unwrap(),
+            json!("Timer Updated")
+        );
+        let next_rev = rt.eval("__host.revision").unwrap().as_u64().unwrap();
+        assert!(sync_revision_state(
+            &mut render_revision,
+            next_rev,
+            &mut unsaved
+        ));
+        assert!(
+            unsaved,
+            "timer-driven field change must mark document unsaved"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

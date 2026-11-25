@@ -258,6 +258,47 @@ pub fn save_file_dialog(
     }
 }
 
+#[cfg(any(test, target_os = "windows"))]
+fn wide_nul(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(target_os = "windows")]
+fn shell_execute_open(target: &str) -> Result<()> {
+    use std::ffi::c_void;
+    #[link(name = "shell32")]
+    extern "system" {
+        fn ShellExecuteW(
+            hwnd: *mut c_void,
+            lp_operation: *const u16,
+            lp_file: *const u16,
+            lp_parameters: *const u16,
+            lp_directory: *const u16,
+            n_show_cmd: i32,
+        ) -> isize;
+    }
+    if target.contains('\0') {
+        bail!("Target contains interior NUL byte");
+    }
+    let verb = wide_nul("open");
+    let file = wide_nul(target);
+    // SW_SHOWNORMAL = 1; Win32 ShellExecuteW returns > 32 on success without invoking cmd.exe.
+    let rc = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            verb.as_ptr(),
+            file.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            1,
+        )
+    };
+    if rc <= 32 {
+        bail!("Windows ShellExecuteW failed with code {rc}");
+    }
+    Ok(())
+}
+
 pub fn open_url_detached(url: &str) -> Result<()> {
     #[cfg(not(target_os = "windows"))]
     {
@@ -272,14 +313,7 @@ pub fn open_url_detached(url: &str) -> Result<()> {
     }
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("cmd")
-            .args(["/C", "start", "", url])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .context("launch URL with Windows shell")?;
-        Ok(())
+        shell_execute_open(url).context("launch URL with Windows ShellExecuteW")
     }
 }
 
@@ -293,11 +327,8 @@ pub fn open_file_blocking(path: &Path) -> Result<bool> {
     }
     #[cfg(target_os = "windows")]
     {
-        Ok(std::process::Command::new("cmd")
-            .args(["/C", "start", ""])
-            .arg(path)
-            .status()?
-            .success())
+        shell_execute_open(&path.to_string_lossy())?;
+        Ok(true)
     }
 }
 
@@ -306,7 +337,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn windows_filter_and_utf8_powershell_scripts_escape_quotes_and_unicode() {
+    fn windows_filter_utf8_scripts_and_wide_nul_preserve_metacharacters_and_unicode() {
         assert_eq!(
             windows_filter_string("XFDF", &["*.xfdf", "*.xml"], false),
             "XFDF (*.xfdf;*.xml)|*.xfdf;*.xml"
@@ -333,5 +364,10 @@ mod tests {
         );
         assert!(save.starts_with("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8;"));
         assert!(save.contains("sheet''s.pdf"));
+
+        let url = "https://example.com/sheet?a=1&b=2&name=Élodie";
+        let wide = wide_nul(url);
+        assert_eq!(wide.last().copied(), Some(0));
+        assert_eq!(String::from_utf16(&wide[..wide.len() - 1]).unwrap(), url);
     }
 }
