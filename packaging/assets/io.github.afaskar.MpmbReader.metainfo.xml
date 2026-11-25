@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.afaskar.MpmbReader</id>
+  <name>MPMB Reader</name>
+  <summary>Native desktop reader for MPMB interactive PDF character sheets</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>
+      MPMB Reader is a native Rust desktop application built to run original
+      MorePurpleMoreBetter (MPMB) interactive 5e/2024 PDF character sheets
+      without Adobe Acrobat Reader. It pairs QuickJS for live Acrobat-style form
+      state and calculations, lopdf for interactive PDF persistence, PDFium for
+      page rendering, and a themed Dark/Light desktop interface with a live
+      Character Quick-Card, field inspector, bookmarks, and native dialog support.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.afaskar.MpmbReader.desktop</launchable>
+  <url type="homepage">https://github.com/AFAskar/MPMPAcrobatLinux</url>
+  <url type="bugtracker">https://github.com/AFAskar/MPMPAcrobatLinux/issues</url>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="0.1.0" date="2026-11-25">
+      <description>
+        <p>Initial packaged release with refreshed Dark/Light desktop UI, projection caching, and cross-platform builds.</p>
+      </description>
+    </release>
+  </releases>
+</component>

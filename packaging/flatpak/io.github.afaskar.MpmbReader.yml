@@ -1,0 +1,41 @@
+app-id: io.github.afaskar.MpmbReader
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+command: mpmb-reader
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  - --filesystem=home
+  - --talk-name=org.freedesktop.portal.Desktop
+  - --env=MPMB_PDFIUM=/app/lib/libpdfium.so
+  - --env=MPMB_FONT=/app/share/mpmb-reader/fonts/DejaVuSans.ttf
+
+modules:
+  - name: mpmb-reader
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 mpmb-reader /app/bin/mpmb-reader
+      - install -Dm644 libpdfium.so /app/lib/libpdfium.so
+      - install -Dm644 LICENSE-PDFIUM.txt /app/share/licenses/mpmb-reader/LICENSE-PDFIUM.txt
+      - install -Dm644 DejaVuSans.ttf /app/share/mpmb-reader/fonts/DejaVuSans.ttf
+      - install -Dm644 io.github.afaskar.MpmbReader.desktop /app/share/applications/io.github.afaskar.MpmbReader.desktop
+      - install -Dm644 io.github.afaskar.MpmbReader.metainfo.xml /app/share/metainfo/io.github.afaskar.MpmbReader.metainfo.xml
+      - install -Dm644 io.github.afaskar.MpmbReader.svg /app/share/icons/hicolor/scalable/apps/io.github.afaskar.MpmbReader.svg
+    sources:
+      - type: file
+        path: mpmb-reader
+      - type: file
+        path: libpdfium.so
+      - type: file
+        path: LICENSE-PDFIUM.txt
+      - type: file
+        path: DejaVuSans.ttf
+      - type: file
+        path: io.github.afaskar.MpmbReader.desktop
+      - type: file
+        path: io.github.afaskar.MpmbReader.metainfo.xml
+      - type: file
+        path: io.github.afaskar.MpmbReader.svg

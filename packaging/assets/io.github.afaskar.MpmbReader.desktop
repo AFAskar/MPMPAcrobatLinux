@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=MPMB Reader
+GenericName=D&D Character Sheet Reader
+Comment=Native reader for MorePurpleMoreBetter interactive PDF character sheets
+Exec=mpmb-reader %f
+Icon=io.github.afaskar.MpmbReader
+Terminal=false
+Categories=Game;RolePlaying;Utility;
+MimeType=application/pdf;
+StartupNotify=true
+Keywords=MPMB;DnD;D&D;PDF;Character Sheet;Tabletop;RPG;
