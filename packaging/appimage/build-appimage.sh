@@ -49,6 +49,9 @@ install -Dm644 "$PDFIUM_DIR/lib/libpdfium.so" "$APPDIR/usr/lib/libpdfium.so"
 if [[ -f "$PDFIUM_DIR/LICENSE" ]]; then
   install -Dm644 "$PDFIUM_DIR/LICENSE" "$APPDIR/usr/share/licenses/mpmb-reader/LICENSE-PDFIUM.txt"
 fi
+if [[ -d "$PDFIUM_DIR/licenses" ]]; then
+  cp -r "$PDFIUM_DIR/licenses" "$APPDIR/usr/share/licenses/mpmb-reader/licenses"
+fi
 if [[ -n "$FONT_SRC" && -f "$FONT_SRC" ]]; then
   install -Dm644 "$FONT_SRC" "$APPDIR/usr/share/mpmb-reader/fonts/DejaVuSans.ttf"
 fi

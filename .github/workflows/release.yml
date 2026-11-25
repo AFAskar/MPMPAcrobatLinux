@@ -94,6 +94,7 @@ jobs:
             target/release/mpmb-reader
             output/deps/lib/libpdfium.so
             output/deps/LICENSE
+            output/deps/licenses
           retention-days: 1
 
   package-appimage:

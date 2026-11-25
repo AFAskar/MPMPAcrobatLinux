@@ -39,6 +39,12 @@ if (Test-Path $LicenseFile) {
 } else {
     Set-Content (Join-Path $StageDir "LICENSE-PDFIUM.txt") "PDFium (Chromium BSD-3-Clause)"
 }
+$LicensesDir = Join-Path $DepsDir "licenses"
+$StageLicenses = Join-Path $StageDir "licenses"
+New-Item -ItemType Directory -Force -Path $StageLicenses | Out-Null
+if (Test-Path $LicensesDir) {
+    Copy-Item -Recurse -Force (Join-Path $LicensesDir "*") $StageLicenses
+}
 
 @"
 MPMB Reader $Version (Windows x64 Portable)

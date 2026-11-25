@@ -11,8 +11,8 @@ License:        MIT AND BSD-3-Clause
 URL:            https://github.com/AFAskar/MPMPAcrobatLinux
 ExclusiveArch:  x86_64
 
-Recommends:     zenity
-Recommends:     dejavu-sans-fonts
+Requires:       zenity
+Requires:       dejavu-sans-fonts
 
 %description
 MPMB Reader is a native Rust desktop application built to run original
@@ -24,6 +24,10 @@ persistence, bundled PDFium rendering, and a themed Dark/Light UI.
 install -Dm755 "%{_binary_path}" "%{buildroot}%{_bindir}/mpmb-reader"
 install -Dm644 "%{_pdfium_lib}" "%{buildroot}%{_libdir}/mpmb-reader/libpdfium.so"
 install -Dm644 "%{_pdfium_license}" "%{buildroot}%{_licensedir}/mpmb-reader/LICENSE-PDFIUM.txt"
+if [ -d "%{_pdfium_licenses_dir}" ]; then
+  install -dm755 "%{buildroot}%{_licensedir}/mpmb-reader/licenses"
+  cp -a "%{_pdfium_licenses_dir}/." "%{buildroot}%{_licensedir}/mpmb-reader/licenses/"
+fi
 install -Dm644 "%{_assets_dir}/io.github.afaskar.MpmbReader.desktop" \
   "%{buildroot}%{_datadir}/applications/io.github.afaskar.MpmbReader.desktop"
 install -Dm644 "%{_assets_dir}/io.github.afaskar.MpmbReader.metainfo.xml" \
@@ -36,6 +40,7 @@ install -Dm644 "%{_assets_dir}/io.github.afaskar.MpmbReader.svg" \
 %dir %{_libdir}/mpmb-reader
 %{_libdir}/mpmb-reader/libpdfium.so
 %license %{_licensedir}/mpmb-reader/LICENSE-PDFIUM.txt
+%license %{_licensedir}/mpmb-reader/licenses
 %{_datadir}/applications/io.github.afaskar.MpmbReader.desktop
 %{_datadir}/metainfo/io.github.afaskar.MpmbReader.metainfo.xml
 %{_datadir}/icons/hicolor/scalable/apps/io.github.afaskar.MpmbReader.svg

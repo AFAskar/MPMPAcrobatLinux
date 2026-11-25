@@ -25,10 +25,10 @@ if (-not (Test-Path (Join-Path $DepsDir "bin\pdfium.dll"))) {
     if ($LASTEXITCODE -ne 0) { throw "Failed to extract $PdfiumArchive" }
 }
 
-# 2. Pinned DejaVu Sans 2.37 TrueType fonts (for Unicode appearance streams & tests)
-$FontUrl = "https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-sans-ttf-2.37.zip"
-$FontSha = "5C6E497A2F36552CB5FFB112C413A6AF39C0F3C47653662B90B4FA6499822FD7"
-$FontArchive = Join-Path $DepsDir "dejavu-sans-ttf-2.37.zip"
+# 2. Pinned DejaVu Fonts 2.37 TrueType bundle (includes DejaVuSans.ttf & DejaVuSans-Bold.ttf)
+$FontUrl = "https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.zip"
+$FontSha = "7576310B219E04159D35FF61DD4A4EC4CDBA4F35C00E002A136F00E96A908B0A"
+$FontArchive = Join-Path $DepsDir "dejavu-fonts-ttf-2.37.zip"
 
 if (-not (Test-Path (Join-Path $DepsDir "fonts\DejaVuSans.ttf")) -or -not (Test-Path (Join-Path $DepsDir "fonts\DejaVuSans-Bold.ttf"))) {
     Write-Host "Downloading pinned DejaVu Sans 2.37..."

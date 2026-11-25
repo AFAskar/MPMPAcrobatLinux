@@ -20,6 +20,7 @@ modules:
       - install -Dm755 mpmb-reader /app/bin/mpmb-reader
       - install -Dm644 libpdfium.so /app/lib/libpdfium.so
       - install -Dm644 LICENSE-PDFIUM.txt /app/share/licenses/mpmb-reader/LICENSE-PDFIUM.txt
+      - cp -r licenses /app/share/licenses/mpmb-reader/licenses
       - install -Dm644 DejaVuSans.ttf /app/share/mpmb-reader/fonts/DejaVuSans.ttf
       - install -Dm644 io.github.afaskar.MpmbReader.desktop /app/share/applications/io.github.afaskar.MpmbReader.desktop
       - install -Dm644 io.github.afaskar.MpmbReader.metainfo.xml /app/share/metainfo/io.github.afaskar.MpmbReader.metainfo.xml
@@ -31,6 +32,9 @@ modules:
         path: libpdfium.so
       - type: file
         path: LICENSE-PDFIUM.txt
+      - type: dir
+        path: licenses
+        dest: licenses
       - type: file
         path: DejaVuSans.ttf
       - type: file

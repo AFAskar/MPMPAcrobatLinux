@@ -46,6 +46,10 @@ if [[ -f "$PDFIUM_DIR/LICENSE" ]]; then
 else
   echo "PDFium (Chromium BSD-3-Clause)" > "$STAGE/LICENSE-PDFIUM.txt"
 fi
+mkdir -p "$STAGE/licenses"
+if [[ -d "$PDFIUM_DIR/licenses" ]]; then
+  cp -r "$PDFIUM_DIR/licenses/." "$STAGE/licenses/"
+fi
 cp "$FONT_SRC" "$STAGE/DejaVuSans.ttf"
 cp "$ROOT/packaging/assets/io.github.afaskar.MpmbReader.desktop" "$STAGE/"
 cp "$ROOT/packaging/assets/io.github.afaskar.MpmbReader.metainfo.xml" "$STAGE/"

@@ -27,6 +27,12 @@ if [[ ! -f "$LICENSE_FILE" ]]; then
   echo "PDFium (Chromium BSD-3-Clause)" > "$LICENSE_FILE"
 fi
 
+LICENSES_DIR="$PDFIUM_DIR/licenses"
+if [[ ! -d "$LICENSES_DIR" ]]; then
+  LICENSES_DIR="$TOPDIR/empty-licenses"
+  mkdir -p "$LICENSES_DIR"
+fi
+
 # RPM version cannot contain hyphens; convert pre-release hyphens to tildes.
 RPM_VERSION="${VERSION//-/\~}"
 
@@ -36,6 +42,7 @@ rpmbuild -bb \
   --define "_binary_path $BIN" \
   --define "_pdfium_lib $PDFIUM_DIR/lib/libpdfium.so" \
   --define "_pdfium_license $LICENSE_FILE" \
+  --define "_pdfium_licenses_dir $LICENSES_DIR" \
   --define "_assets_dir $ROOT/packaging/assets" \
   "$ROOT/packaging/rpm/mpmb-reader.spec"
 
