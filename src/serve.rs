@@ -1231,6 +1231,31 @@ impl SheetWorker {
         discard: Option<&DiscardTarget>,
         expected_session: Option<&str>,
     ) -> Result<Value> {
+        self.create_and_open_from_template_with_rollback(
+            template_rel,
+            character_name,
+            overwrite,
+            force,
+            discard,
+            expected_session,
+            |store, path, sha| store.remove_sheet_if_sha(path, sha),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn create_and_open_from_template_with_rollback<F>(
+        &mut self,
+        template_rel: &str,
+        character_name: &str,
+        overwrite: bool,
+        force: bool,
+        discard: Option<&DiscardTarget>,
+        expected_session: Option<&str>,
+        rollback_fn: F,
+    ) -> Result<Value>
+    where
+        F: FnOnce(&SheetStore, &str, &str) -> Result<bool>,
+    {
         if let Some(conflict) = self.check_discard_guard(
             "creating and opening a new character",
             force,
@@ -1249,7 +1274,7 @@ impl SheetWorker {
             }
             Err(err) => {
                 if !existed_before {
-                    match self.store.remove_sheet_if_sha(&entry.path, &entry.sha256) {
+                    match rollback_fn(&self.store, &entry.path, &entry.sha256) {
                         Ok(true) => return Err(err),
                         Ok(false) => {
                             self.sync_tracker.mark_dirty();
@@ -6625,6 +6650,129 @@ mod tests {
             "previous active session Bryn.pdf must be preserved after failed open"
         );
         assert!(base.join("Bryn.pdf").is_file());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn template_open_rollback_ok_false_and_err_set_dirty_and_surface_recovery_error() {
+        let base = std::env::temp_dir().join(format!(
+            "mpmb-serve-template-rollback-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(base.join("templates")).unwrap();
+        make_scripted_hp_pdf(
+            &base.join("templates/Broken-Startup.pdf"),
+            "10",
+            "throw new Error('broken startup');",
+            None,
+        );
+
+        let store = Arc::new(
+            SheetStore::open(StoreConfig {
+                root: base.clone(),
+                git: None,
+            })
+            .unwrap(),
+        );
+        let (events_tx, _) = broadcast::channel(8);
+        let (interaction_tx, _) = watch::channel(None);
+        let bridge = InteractionBridge::new("srv-test-rollback".into(), interaction_tx, events_tx);
+        let sync_tracker = Arc::new(StoreSyncTracker::default());
+        let mut worker = SheetWorker {
+            store: Arc::clone(&store),
+            bridge,
+            sync_tracker: Arc::clone(&sync_tracker),
+            job_seq: Arc::new(AtomicU64::new(1)),
+            server_instance_id: "srv-test-rollback".into(),
+            session_seq: 0,
+            renderer: None,
+            autosave: false,
+            capabilities: HostCapabilities::server_restricted(),
+            active: None,
+            last_save_conflict: None,
+        };
+
+        // 1. Clean rollback (Ok(true)) removes the copy and keeps sync_tracker clean.
+        let err_clean = worker
+            .create_and_open_from_template(
+                "templates/Broken-Startup.pdf",
+                "Cora",
+                false,
+                false,
+                None,
+                None,
+            )
+            .unwrap_err();
+        assert!(format!("{err_clean:#}").contains("broken startup"));
+        assert!(!base.join("Cora.pdf").exists());
+        assert!(
+            !sync_tracker.is_dirty(),
+            "clean rollback must not mark sync_tracker dirty"
+        );
+
+        // 2. Hash-mismatch rollback (Ok(false) via real remove_sheet_if_sha) preserves
+        //    the modified file, marks sync_tracker dirty, and names Eve.pdf in the error.
+        let external_bytes = b"%PDF-1.4\n% externally replaced\n".to_vec();
+        let external_copy = external_bytes.clone();
+        let err_mismatch = worker
+            .create_and_open_from_template_with_rollback(
+                "templates/Broken-Startup.pdf",
+                "Eve",
+                false,
+                false,
+                None,
+                None,
+                move |s, path, sha| {
+                    std::fs::write(s.root().join(path), &external_copy)?;
+                    s.remove_sheet_if_sha(path, sha)
+                },
+            )
+            .unwrap_err();
+        let msg_mismatch = format!("{err_mismatch:#}");
+        assert!(
+            msg_mismatch.contains("Eve.pdf")
+                && msg_mismatch.contains("could not roll back because the file on disk changed"),
+            "unexpected mismatch rollback error: {msg_mismatch}"
+        );
+        assert!(
+            sync_tracker.is_dirty(),
+            "Ok(false) rollback must mark sync_tracker dirty"
+        );
+        assert_eq!(std::fs::read(base.join("Eve.pdf")).unwrap(), external_bytes);
+
+        // 3. I/O rollback failure (Err) leaves Frank.pdf on disk, marks sync_tracker dirty,
+        //    and surfaces both Frank.pdf and the removal error for recovery.
+        let gen = sync_tracker.snapshot_gen();
+        assert!(sync_tracker.clear_if_unchanged(gen));
+        assert!(!sync_tracker.is_dirty());
+
+        let err_io = worker
+            .create_and_open_from_template_with_rollback(
+                "templates/Broken-Startup.pdf",
+                "Frank",
+                false,
+                false,
+                None,
+                None,
+                |_s, _path, _sha| bail!("simulated disk removal error"),
+            )
+            .unwrap_err();
+        let msg_io = format!("{err_io:#}");
+        assert!(
+            msg_io.contains("Frank.pdf")
+                && msg_io.contains("failed to roll back")
+                && msg_io.contains("simulated disk removal error"),
+            "unexpected Err rollback error: {msg_io}"
+        );
+        assert!(
+            sync_tracker.is_dirty(),
+            "Err rollback must mark sync_tracker dirty"
+        );
+        assert!(base.join("Frank.pdf").is_file());
 
         let _ = std::fs::remove_dir_all(&base);
     }
