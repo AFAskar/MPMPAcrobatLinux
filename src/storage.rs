@@ -303,9 +303,22 @@ impl SheetStore {
     fn commit_staged_upload_with_existed(
         &self,
         rel: &str,
-        mut staged: StagedUpload,
+        staged: StagedUpload,
         overwrite: bool,
     ) -> Result<(SheetEntry, bool)> {
+        self.commit_staged_upload_with_existed_and_hook(rel, staged, overwrite, || {})
+    }
+
+    fn commit_staged_upload_with_existed_and_hook<F>(
+        &self,
+        rel: &str,
+        mut staged: StagedUpload,
+        overwrite: bool,
+        before_hash_capture: F,
+    ) -> Result<(SheetEntry, bool)>
+    where
+        F: FnOnce(),
+    {
         staged.finish()?;
         // Fully parse the staged PDF before acquiring the store lock or touching
         // any existing PDF/sidecar so truncated or corrupted uploads can never
@@ -361,6 +374,7 @@ impl SheetStore {
             sync_parent_dir(&abs);
             false
         };
+        before_hash_capture();
         Ok((sheet_entry_from_path(&self.root, &abs)?, existed_before))
     }
 
@@ -3390,6 +3404,84 @@ mod tests {
             .remove_sheet_if_sha(&fresh.path, &fresh.sha256)
             .unwrap());
         assert!(!dir.join("Fresh.pdf").exists());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn store_lock_remains_held_through_rollback_hash_capture_against_competing_writer() {
+        let dir = temp_dir("rollback-hash-lock");
+        let store1 = SheetStore::open(StoreConfig {
+            root: dir.clone(),
+            git: None,
+        })
+        .unwrap();
+        let store2 = SheetStore::open(StoreConfig {
+            root: dir.clone(),
+            git: None,
+        })
+        .unwrap();
+
+        let pdf_v1 = valid_test_pdf("CreatorCopy");
+        let pdf_v2 = valid_test_pdf("CompetingReplacement");
+        assert_ne!(sha256_hex(&pdf_v1), sha256_hex(&pdf_v2));
+
+        let (norm, mut staged1) = store1.start_staged_upload("Aelar.pdf").unwrap();
+        staged1.write_chunk(&pdf_v1).unwrap();
+
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let pdf_v2_clone = pdf_v2.clone();
+        let dir_for_hook = dir.clone();
+        let mut competing_handle = None;
+
+        let (entry1, existed_before) = store1
+            .commit_staged_upload_with_existed_and_hook(&norm, staged1, false, || {
+                // 1. Deterministic check: the cross-process store lock file must still
+                //    be exclusively held before sheet_entry_from_path() hashes the file.
+                let probe = fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(dir_for_hook.join(".mpmb-store.lock"))
+                    .unwrap();
+                assert!(
+                    matches!(probe.try_lock(), Err(fs::TryLockError::WouldBlock)),
+                    "store lock must remain held until rollback SHA-256 is captured"
+                );
+
+                // 2. Competing store instance attempting an overwrite must stay blocked
+                //    until store1 finishes capturing entry1.sha256 and releases the lock.
+                competing_handle = Some(std::thread::spawn(move || {
+                    let _ = started_tx.send(());
+                    let res = store2.upload_sheet("Aelar.pdf", &pdf_v2_clone, true);
+                    let _ = done_tx.send(res);
+                }));
+                started_rx.recv().unwrap();
+                assert!(
+                    matches!(
+                        done_rx.recv_timeout(std::time::Duration::from_millis(75)),
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                    ),
+                    "competing writer must not replace the PDF before hash capture finishes"
+                );
+            })
+            .unwrap();
+
+        assert!(!existed_before);
+        // After store1 releases the lock, the competing overwrite completes.
+        let entry2 = done_rx.recv().unwrap().unwrap();
+        competing_handle.unwrap().join().unwrap();
+
+        // Rollback token captured store1's published bytes, NOT store2's replacement.
+        assert_eq!(entry1.sha256, sha256_hex(&pdf_v1));
+        assert_eq!(entry2.sha256, sha256_hex(&pdf_v2));
+        assert!(
+            !store1
+                .remove_sheet_if_sha(&entry1.path, &entry1.sha256)
+                .unwrap(),
+            "rollback must not delete the competing writer's replacement PDF"
+        );
+        assert_eq!(fs::read(dir.join("Aelar.pdf")).unwrap(), pdf_v2);
 
         let _ = fs::remove_dir_all(&dir);
     }
