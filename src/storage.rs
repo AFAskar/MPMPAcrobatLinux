@@ -316,8 +316,11 @@ impl SheetStore {
         if let Some(parent) = abs.parent() {
             fs::create_dir_all(parent)?;
         }
+        // Hold the cross-process store lock until after sheet_entry_from_path()
+        // hashes the published file so another process cannot replace it in the
+        // window between publish and rollback-hash capture.
+        let _commit_lock = acquire_store_lock(&self.root)?;
         let existed_before = if overwrite {
-            let _commit_lock = acquire_store_lock(&self.root)?;
             let existed = match fs::symlink_metadata(&abs) {
                 Ok(meta) => {
                     if meta.file_type().is_symlink() || !meta.is_file() {
@@ -345,7 +348,6 @@ impl SheetStore {
             sync_parent_dir(&abs);
             existed
         } else {
-            let _commit_lock = acquire_store_lock(&self.root)?;
             if let Err(err) = staged.publish_create_new(&abs) {
                 if err
                     .downcast_ref::<std::io::Error>()

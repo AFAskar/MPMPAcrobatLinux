@@ -1454,6 +1454,7 @@
     if (appState.inFlightInteractionKey === interKey) return;
     appState.inFlightInteractionKey = interKey;
     const wasUnopened = !appState.sheet || !appState.sheet.open;
+    const prevSessionId = appState.sheet?.sessionId || null;
     try {
       const res = await api(`/api/session/interaction/${encodeURIComponent(interId)}`, {
         method: 'POST',
@@ -1468,10 +1469,16 @@
       } else {
         closeAcrobatModal(interId, interServerId);
         if (res.state) {
-          applySessionState(res.state);
-          if (wasUnopened && res.state.open) {
+          const switchedToNewSession = Boolean(
+            res.state.open && (wasUnopened || (res.state.sessionId && res.state.sessionId !== prevSessionId))
+          );
+          if (applySessionState(res.state) && switchedToNewSession) {
+            appState.page = 0;
             showBanner(`Loaded ${res.state.path}`, 'ok', 2500);
             switchTab('play');
+            const destFocus = $('btn-classes');
+            if (destFocus && typeof destFocus.focus === 'function') destFocus.focus();
+            refreshLibrary();
           }
         }
       }

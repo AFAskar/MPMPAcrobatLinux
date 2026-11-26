@@ -485,6 +485,32 @@ PWA_HARNESS = textwrap.dedent(
       assert.equal(element('tab-play').classList.contains('active'), true);
       assert.equal(context.document.activeElement, element('btn-classes'));
 
+      // 11. When creating a new character while another sheet is already open triggers a startup dialog,
+      //     completing the dialog switches from Library to Play for the new session.
+      element('tab-play').classList.remove('active');
+      element('tab-library').classList.add('active');
+      const startupInter = { ...alert77, id: 'srv-5-int-99', serverInstanceId: 'srv-5' };
+      fetchHandler = async (path) => {
+        if (path === '/api/sheets/new') {
+          return jsonResp({ status: 'interaction_required', interaction: startupInter }, 202);
+        }
+        if (path === '/api/session/interaction/srv-5-int-99') {
+          return jsonResp({
+            status: 'ok',
+            state: { open: true, serverInstanceId: 'srv-5', sessionId: 'srv-5-s3', stateSeq: 21, path: 'Bryn.pdf', revision: 1, fields: [] },
+          });
+        }
+        if (path === '/api/sheets') {
+          return jsonResp({ sheets: appState.templates, templates: appState.templates, characters: [], git: null });
+        }
+        throw new Error('Unexpected startup-dialog create fetch ' + path);
+      };
+      await createCharacterFromTemplate('templates/MPMB-2024-Blank.pdf', 'Bryn');
+      assert.equal(appState.activeInteraction.id, 'srv-5-int-99');
+      await submitInteraction({ button: 1, checked: false });
+      assert.equal(element('tab-play').classList.contains('active'), true);
+      assert.equal(element('banner').textContent, 'Loaded Bryn.pdf');
+
       console.log('PWA_CLIENT_REGRESSIONS_OK');
     })().catch((err) => {
       console.error(err);
