@@ -1239,21 +1239,43 @@ impl SheetWorker {
         ) {
             return Ok(conflict);
         }
-        let entry =
+        let (entry, existed_before) =
             self.store
-                .create_sheet_from_template(template_rel, character_name, overwrite)?;
+                .create_sheet_from_template_ex(template_rel, character_name, overwrite)?;
         let mut opened = match self.open_sheet_unchecked_inner(&entry.path, false) {
             Ok(val) => {
                 self.sync_tracker.mark_dirty();
                 val
             }
             Err(err) => {
-                if !overwrite {
-                    let _ = self.store.remove_sheet_if_sha(&entry.path, &entry.sha256);
+                if !existed_before {
+                    match self.store.remove_sheet_if_sha(&entry.path, &entry.sha256) {
+                        Ok(true) => return Err(err),
+                        Ok(false) => {
+                            self.sync_tracker.mark_dirty();
+                            bail!(
+                                "created '{}' from template, failed to open ({err:#}), and could not roll back because the file on disk changed; refresh the library to inspect or delete '{}'",
+                                entry.path,
+                                entry.path
+                            );
+                        }
+                        Err(rm_err) => {
+                            self.sync_tracker.mark_dirty();
+                            bail!(
+                                "created '{}' from template, failed to open ({err:#}), and failed to roll back the new file ({rm_err:#}); refresh the library to inspect or delete '{}'",
+                                entry.path,
+                                entry.path
+                            );
+                        }
+                    }
                 } else {
                     self.sync_tracker.mark_dirty();
+                    bail!(
+                        "overwrote '{}' from template, but failed to open it ({err:#}); refresh the library to inspect '{}'",
+                        entry.path,
+                        entry.path
+                    );
                 }
-                return Err(err);
             }
         };
         if let Some(obj) = opened.as_object_mut() {
@@ -1294,6 +1316,8 @@ impl SheetWorker {
             .unwrap_or(0);
         self.session_seq += 1;
         let session_id = format!("{}-s{}", self.server_instance_id, self.session_seq);
+        let prev_active = self.active.take();
+        let prev_conflict = self.last_save_conflict.take();
         self.active = Some(ActiveSheet {
             rel_path: norm,
             session_id,
@@ -1308,8 +1332,14 @@ impl SheetWorker {
             page_pngs: BTreeMap::new(),
             page_sizes: BTreeMap::new(),
         });
-        self.last_save_conflict = None;
-        let state = self.build_state_payload()?;
+        let state = match self.build_state_payload() {
+            Ok(state) => state,
+            Err(err) => {
+                self.active = prev_active;
+                self.last_save_conflict = prev_conflict;
+                return Err(err);
+            }
+        };
         Ok(json!({"status": "ok", "state": state}))
     }
 
@@ -6515,6 +6545,86 @@ mod tests {
             StatusCode::BAD_REQUEST,
             "retry after rollback must not fail with duplicate 409: {fail2}"
         );
+
+        // 7. overwrite: true on a non-existent destination still rolls back when open fails.
+        let (st, fail_ow_new) = post_json(
+            &app,
+            "/api/sheets/new",
+            json!({
+                "template": "templates/Broken-Startup.pdf",
+                "name": "CoraOverwriteNew",
+                "overwrite": true,
+                "open": true
+            }),
+        )
+        .await;
+        assert_eq!(
+            st,
+            StatusCode::BAD_REQUEST,
+            "expected open failure: {fail_ow_new}"
+        );
+        assert!(
+            !base.join("CoraOverwriteNew.pdf").exists(),
+            "overwrite=true on a new destination must still roll back on open failure"
+        );
+
+        // 8. overwrite: true on an existing destination that fails to open names the
+        //    overwritten path in its error response so the caller can recover.
+        let (st, fail_ow_existing) = post_json(
+            &app,
+            "/api/sheets/new",
+            json!({
+                "template": "templates/Broken-Startup.pdf",
+                "name": "existing",
+                "overwrite": true,
+                "open": true
+            }),
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        assert!(
+            fail_ow_existing["error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("existing.pdf"),
+            "overwrite open failure must identify existing.pdf: {fail_ow_existing}"
+        );
+
+        // 9. If build_state_payload() fails AFTER rt.ready() succeeds, the previous
+        //    active session (Bryn.pdf) is restored intact and the new copy (Dax.pdf)
+        //    is rolled back cleanly instead of deleting an active session's PDF.
+        make_scripted_hp_pdf(
+            &base.join("templates/Broken-Extract.pdf"),
+            "10",
+            "globalThis.getField = function() { throw new Error('extract boom'); };",
+            None,
+        );
+        let (st, fail_extract) = post_json(
+            &app,
+            "/api/sheets/new",
+            json!({
+                "template": "templates/Broken-Extract.pdf",
+                "name": "Dax",
+                "open": true
+            }),
+        )
+        .await;
+        assert_eq!(
+            st,
+            StatusCode::BAD_REQUEST,
+            "expected state extraction failure: {fail_extract}"
+        );
+        assert!(
+            !base.join("Dax.pdf").exists(),
+            "failed post-ready state extraction must roll back Dax.pdf"
+        );
+        let (st, after_state) = get_json(&app, "/api/session/state").await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(
+            after_state["path"], "Bryn.pdf",
+            "previous active session Bryn.pdf must be preserved after failed open"
+        );
+        assert!(base.join("Bryn.pdf").is_file());
 
         let _ = std::fs::remove_dir_all(&base);
     }

@@ -293,9 +293,19 @@ impl SheetStore {
     pub fn commit_staged_upload(
         &self,
         rel: &str,
-        mut staged: StagedUpload,
+        staged: StagedUpload,
         overwrite: bool,
     ) -> Result<SheetEntry> {
+        self.commit_staged_upload_with_existed(rel, staged, overwrite)
+            .map(|(entry, _)| entry)
+    }
+
+    fn commit_staged_upload_with_existed(
+        &self,
+        rel: &str,
+        mut staged: StagedUpload,
+        overwrite: bool,
+    ) -> Result<(SheetEntry, bool)> {
         staged.finish()?;
         // Fully parse the staged PDF before acquiring the store lock or touching
         // any existing PDF/sidecar so truncated or corrupted uploads can never
@@ -306,13 +316,18 @@ impl SheetStore {
         if let Some(parent) = abs.parent() {
             fs::create_dir_all(parent)?;
         }
-        if overwrite {
+        let existed_before = if overwrite {
             let _commit_lock = acquire_store_lock(&self.root)?;
-            if let Ok(meta) = fs::symlink_metadata(&abs) {
-                if meta.file_type().is_symlink() || !meta.is_file() {
-                    bail!("cannot overwrite non-regular file at {normalized}");
+            let existed = match fs::symlink_metadata(&abs) {
+                Ok(meta) => {
+                    if meta.file_type().is_symlink() || !meta.is_file() {
+                        bail!("cannot overwrite non-regular file at {normalized}");
+                    }
+                    true
                 }
-            }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+                Err(e) => return Err(e.into()),
+            };
             staged
                 .publish_replace(&abs)
                 .with_context(|| format!("failed replacing {}", abs.display()))?;
@@ -328,6 +343,7 @@ impl SheetStore {
                 }
             }
             sync_parent_dir(&abs);
+            existed
         } else {
             let _commit_lock = acquire_store_lock(&self.root)?;
             if let Err(err) = staged.publish_create_new(&abs) {
@@ -341,8 +357,9 @@ impl SheetStore {
                 return Err(err);
             }
             sync_parent_dir(&abs);
-        }
-        sheet_entry_from_path(&self.root, &abs)
+            false
+        };
+        Ok((sheet_entry_from_path(&self.root, &abs)?, existed_before))
     }
 
     pub fn create_sheet_from_template(
@@ -351,6 +368,16 @@ impl SheetStore {
         character_name: &str,
         overwrite: bool,
     ) -> Result<SheetEntry> {
+        self.create_sheet_from_template_ex(template_rel, character_name, overwrite)
+            .map(|(entry, _)| entry)
+    }
+
+    pub fn create_sheet_from_template_ex(
+        &self,
+        template_rel: &str,
+        character_name: &str,
+        overwrite: bool,
+    ) -> Result<(SheetEntry, bool)> {
         let dest_rel = normalize_new_character_path(character_name)?;
         let (src_norm, _, bytes, _) = self.read_sheet_bytes(template_rel)?;
         if !is_template_path(&src_norm) {
@@ -364,7 +391,7 @@ impl SheetStore {
         }
         let (dest_norm, mut staged) = self.start_staged_upload(&dest_rel)?;
         staged.write_chunk(&bytes)?;
-        self.commit_staged_upload(&dest_norm, staged, overwrite)
+        self.commit_staged_upload_with_existed(&dest_norm, staged, overwrite)
     }
 
     pub fn remove_sheet_if_sha(&self, rel: &str, expected_sha256: &str) -> Result<bool> {
@@ -3342,6 +3369,25 @@ mod tests {
             .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "templates/Clone", false)
             .unwrap_err();
         assert!(format!("{bad_dest:#}").contains("inside templates/"));
+
+        // create_sheet_from_template_ex reports existed_before accurately and
+        // remove_sheet_if_sha refuses to delete when the file hash no longer matches.
+        let (fresh, existed_fresh) = store
+            .create_sheet_from_template_ex("templates/MPMB-2024-Blank.pdf", "Fresh", true)
+            .unwrap();
+        assert!(!existed_fresh);
+        let (replaced, existed_replaced) = store
+            .create_sheet_from_template_ex("templates/MPMB-2024-Blank.pdf", "Fresh", true)
+            .unwrap();
+        assert!(existed_replaced);
+        assert!(!store
+            .remove_sheet_if_sha(&replaced.path, "0000000000000000")
+            .unwrap());
+        assert!(dir.join("Fresh.pdf").is_file());
+        assert!(store
+            .remove_sheet_if_sha(&fresh.path, &fresh.sha256)
+            .unwrap());
+        assert!(!dir.join("Fresh.pdf").exists());
 
         let _ = fs::remove_dir_all(&dir);
     }
