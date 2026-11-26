@@ -367,6 +367,27 @@ impl SheetStore {
         self.commit_staged_upload(&dest_norm, staged, overwrite)
     }
 
+    pub fn remove_sheet_if_sha(&self, rel: &str, expected_sha256: &str) -> Result<bool> {
+        let _guard = self.lock.lock().unwrap();
+        let (_normalized, abs) = self.resolve_safe_pdf_path(rel)?;
+        let _commit_lock = acquire_store_lock(&self.root)?;
+        let meta = match fs::symlink_metadata(&abs) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(e) => return Err(e.into()),
+        };
+        if meta.file_type().is_symlink() || !meta.is_file() {
+            return Ok(false);
+        }
+        let current_sha = sha256_file_bounded(&abs, MAX_PDF_BYTES)?;
+        if !current_sha.eq_ignore_ascii_case(expected_sha256) {
+            return Ok(false);
+        }
+        fs::remove_file(&abs).with_context(|| format!("failed removing {}", abs.display()))?;
+        sync_parent_dir(&abs);
+        Ok(true)
+    }
+
     #[cfg(test)]
     pub fn upload_sheet(&self, rel: &str, bytes: &[u8], overwrite: bool) -> Result<SheetEntry> {
         if bytes.is_empty() || bytes.len() > MAX_PDF_BYTES {

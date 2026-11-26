@@ -1242,8 +1242,20 @@ impl SheetWorker {
         let entry =
             self.store
                 .create_sheet_from_template(template_rel, character_name, overwrite)?;
-        self.sync_tracker.mark_dirty();
-        let mut opened = self.open_sheet_unchecked_inner(&entry.path, false)?;
+        let mut opened = match self.open_sheet_unchecked_inner(&entry.path, false) {
+            Ok(val) => {
+                self.sync_tracker.mark_dirty();
+                val
+            }
+            Err(err) => {
+                if !overwrite {
+                    let _ = self.store.remove_sheet_if_sha(&entry.path, &entry.sha256);
+                } else {
+                    self.sync_tracker.mark_dirty();
+                }
+                return Err(err);
+            }
+        };
         if let Some(obj) = opened.as_object_mut() {
             obj.insert("sheet".into(), serde_json::to_value(&entry)?);
         }
@@ -6460,6 +6472,49 @@ mod tests {
         assert_eq!(st, StatusCode::OK, "unexpected forced create: {ok_bryn}");
         assert_eq!(ok_bryn["state"]["path"], "Bryn.pdf");
         assert!(base.join("Bryn.pdf").is_file());
+
+        // 6. If opening the newly created character fails (e.g. broken template script),
+        //    the newly copied file is rolled back so retries never hit a stale duplicate.
+        make_scripted_hp_pdf(
+            &base.join("templates/Broken-Startup.pdf"),
+            "10",
+            "throw new Error('broken template startup');",
+            None,
+        );
+        let (st, fail1) = post_json(
+            &app,
+            "/api/sheets/new",
+            json!({
+                "template": "templates/Broken-Startup.pdf",
+                "name": "Cora",
+                "open": true
+            }),
+        )
+        .await;
+        assert_eq!(
+            st,
+            StatusCode::BAD_REQUEST,
+            "expected open failure: {fail1}"
+        );
+        assert!(
+            !base.join("Cora.pdf").exists(),
+            "failed create+open must roll back newly copied file"
+        );
+        let (st, fail2) = post_json(
+            &app,
+            "/api/sheets/new",
+            json!({
+                "template": "templates/Broken-Startup.pdf",
+                "name": "Cora",
+                "open": true
+            }),
+        )
+        .await;
+        assert_eq!(
+            st,
+            StatusCode::BAD_REQUEST,
+            "retry after rollback must not fail with duplicate 409: {fail2}"
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }

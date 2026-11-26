@@ -16,19 +16,21 @@ PWA_HARNESS = textwrap.dedent(
 
     const source = fs.readFileSync(process.argv[process.argv.length - 1], 'utf8').replace(
       '  // Boot\n  updateConnDot();\n  connectWs();\n  refreshAll();',
-      '  globalThis.harness = { appState, applySessionState, openFieldEditorByName, enqueueStep, currentSessionRef, editField, activateField, openSheet, openNewCharModal, createCharacterFromTemplate, doGitPull, refreshSession, connectWs, openAcrobatInteraction, closeAcrobatModal, submitInteraction };'
+      '  globalThis.harness = { appState, applySessionState, openFieldEditorByName, enqueueStep, currentSessionRef, editField, activateField, openSheet, openNewCharModal, closeNewCharModal, createCharacterFromTemplate, doGitPull, refreshSession, connectWs, openAcrobatInteraction, closeAcrobatModal, submitInteraction };'
     );
 
     const elements = new Map();
     function element(id) {
       if (!elements.has(id)) {
         const classes = new Set();
-        elements.set(id, {
+        const el = {
+          id,
           listeners: {},
           dataset: {},
           style: {},
           value: '',
           textContent: '',
+          focus() { context.document.activeElement = el; },
           classList: {
             toggle(c, force) {
               if (force === undefined) {
@@ -45,7 +47,8 @@ PWA_HARNESS = textwrap.dedent(
           getAttribute() {},
           setAttribute() {},
           appendChild() {},
-        });
+        };
+        elements.set(id, el);
       }
       return elements.get(id);
     }
@@ -72,10 +75,16 @@ PWA_HARNESS = textwrap.dedent(
       localStorage: { getItem() { return ''; }, setItem() {} },
       window: { addEventListener() {}, open() {}, innerWidth: 1000, devicePixelRatio: 1 },
       document: {
+        activeElement: null,
         getElementById: element,
         documentElement: element('root'),
         querySelector() { return null; },
-        querySelectorAll() { return []; },
+        querySelectorAll(sel) {
+          if (sel === '.tab-panel') {
+            return [element('tab-play'), element('tab-sheet'), element('tab-tools'), element('tab-library')];
+          }
+          return [];
+        },
         createElement() { return element(Symbol()); },
         createTextNode(t) { return { textContent: t }; },
       },
@@ -102,6 +111,7 @@ PWA_HARNESS = textwrap.dedent(
       activateField,
       openSheet,
       openNewCharModal,
+      closeNewCharModal,
       createCharacterFromTemplate,
       doGitPull,
       refreshSession,
@@ -420,15 +430,23 @@ PWA_HARNESS = textwrap.dedent(
       assert.equal(appState.activeInteraction.id, 'srv-5-int-2');
       closeAcrobatModal('srv-5-int-2', 'srv-5');
 
-      // 10. New Character from Template prefers 2024 template and carries discardTarget on 409.
+      // 10. New Character from Template prefers explicit 2024 before v24 fallback,
+      //     restores focus on cancel, carries discardTarget on 409, and reaches success state.
       appState.templates = [
-        { path: 'templates/MPMB-2014-v14.2.0-Blank.pdf', name: 'MPMB-2014-v14.2.0-Blank.pdf', is_template: true, size_bytes: 100 },
-        { path: 'templates/MPMB-2024-v24.2.0-Blank.pdf', name: 'MPMB-2024-v24.2.0-Blank.pdf', is_template: true, size_bytes: 100 },
+        { path: 'templates/MPMB-2014-v24.2.0-Blank.pdf', name: 'MPMB-2014-v24.2.0-Blank.pdf', is_template: true, size_bytes: 100 },
+        { path: 'templates/MPMB-2024-Blank.pdf', name: 'MPMB-2024-Blank.pdf', is_template: true, size_bytes: 100 },
       ];
+      const openerBtn = element('btn-new-char');
+      openerBtn.focus();
       openNewCharModal();
-      assert.equal(element('nc-template').value, 'templates/MPMB-2024-v24.2.0-Blank.pdf');
+      assert.equal(element('nc-template').value, 'templates/MPMB-2024-Blank.pdf');
       assert.equal(element('new-char-modal').classList.contains('hidden'), false);
+      assert.equal(context.document.activeElement, element('nc-name'));
+      closeNewCharModal(true);
+      assert.equal(element('new-char-modal').classList.contains('hidden'), true);
+      assert.equal(context.document.activeElement, openerBtn);
 
+      openNewCharModal();
       const newCalls = [];
       let newConfirms = 0;
       confirmHandler = () => { newConfirms += 1; return true; };
@@ -447,7 +465,7 @@ PWA_HARNESS = textwrap.dedent(
           return jsonResp({
             status: 'ok',
             sheet: { path: 'Aelar.pdf', name: 'Aelar.pdf', is_template: false, size_bytes: 100 },
-            state: { open: true, serverInstanceId: 'srv-5', sessionId: 'srv-5-s2', stateSeq: 20, path: 'Aelar.pdf', revision: 1, fields: {} },
+            state: { open: true, serverInstanceId: 'srv-5', sessionId: 'srv-5-s2', stateSeq: 20, path: 'Aelar.pdf', revision: 1, fields: [] },
           });
         }
         if (path === '/api/sheets') {
@@ -455,13 +473,17 @@ PWA_HARNESS = textwrap.dedent(
         }
         throw new Error('Unexpected template create fetch ' + path);
       };
-      await createCharacterFromTemplate('templates/MPMB-2024-v24.2.0-Blank.pdf', 'Aelar');
+      await createCharacterFromTemplate('templates/MPMB-2024-Blank.pdf', 'Aelar');
       assert.equal(newConfirms, 1);
       assert.equal(newCalls.length, 2);
       assert.equal(newCalls[0].force, false);
       assert.equal(newCalls[1].force, true);
       assert.deepEqual(newCalls[1].discard, { sheet: 'Alpha.pdf', sessionId: 'srv-5-s1', revision: 4 });
       assert.equal(element('new-char-modal').classList.contains('hidden'), true);
+      assert.equal(element('banner').textContent, 'Created and opened Aelar.pdf');
+      assert.equal(element('banner').className, 'banner ok');
+      assert.equal(element('tab-play').classList.contains('active'), true);
+      assert.equal(context.document.activeElement, element('btn-classes'));
 
       console.log('PWA_CLIENT_REGRESSIONS_OK');
     })().catch((err) => {

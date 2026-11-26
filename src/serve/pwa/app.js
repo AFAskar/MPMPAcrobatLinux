@@ -1548,12 +1548,18 @@
   function preferredDefaultTemplate() {
     const tpls = appState.templates || [];
     if (!tpls.length) return null;
-    return tpls.find((t) => /2024|v24/i.test(t.name || t.path)) || tpls[0];
+    return (
+      tpls.find((t) => /2024/i.test(t.name || t.path)) ||
+      tpls.find((t) => /v24/i.test(t.name || t.path)) ||
+      tpls[0]
+    );
   }
 
   function formatTemplateLabel(sh) {
     return String(sh.name || sh.path || '').replace(/\.pdf$/i, '');
   }
+
+  let newCharModalOpener = null;
 
   function updateNewCharPreview() {
     const preview = $('nc-preview');
@@ -1577,6 +1583,7 @@
       switchTab('library');
       return;
     }
+    newCharModalOpener = document.activeElement || null;
     const sel = $('nc-template');
     sel.innerHTML = '';
     tpls.forEach((tpl) => {
@@ -1593,8 +1600,13 @@
     if (typeof $('nc-name').focus === 'function') $('nc-name').focus();
   }
 
-  function closeNewCharModal() {
+  function closeNewCharModal(restoreFocus = false) {
     $('new-char-modal').classList.add('hidden');
+    const opener = newCharModalOpener;
+    newCharModalOpener = null;
+    if (restoreFocus && opener && typeof opener.focus === 'function') {
+      opener.focus();
+    }
   }
 
   async function createCharacterFromTemplate(template, name, force = false, discard = null) {
@@ -1612,7 +1624,7 @@
       const body = { template, name: trimmed, open: true, force };
       if (discard) body.discard = discard;
       const res = await api('/api/sheets/new', { method: 'POST', json: body });
-      closeNewCharModal();
+      closeNewCharModal(false);
       const applied = await handleActionResponse(res);
       await refreshLibrary();
       if (applied && res.status !== 'interaction_required') {
@@ -1620,10 +1632,12 @@
         const createdPath = res.sheet?.path || trimmed;
         showBanner(`Created and opened ${createdPath}`, 'ok', 3000);
         switchTab('play');
+        const destFocus = $('btn-classes');
+        if (destFocus && typeof destFocus.focus === 'function') destFocus.focus();
       }
     } catch (err) {
       if (err.status === 409 && err.data && err.data.status === 'interaction_required' && err.data.interaction) {
-        closeNewCharModal();
+        closeNewCharModal(false);
         openAcrobatInteraction(err.data.interaction);
         showBanner('Finish or cancel the active dialog before creating a new character', 'warn', 5000);
         return;
@@ -1644,8 +1658,14 @@
     }
   }
 
-  $('nc-close').addEventListener('click', closeNewCharModal);
-  $('nc-cancel').addEventListener('click', closeNewCharModal);
+  $('nc-close').addEventListener('click', () => closeNewCharModal(true));
+  $('nc-cancel').addEventListener('click', () => closeNewCharModal(true));
+  $('new-char-modal').addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') {
+      ev.preventDefault();
+      closeNewCharModal(true);
+    }
+  });
   $('nc-name').addEventListener('input', updateNewCharPreview);
   $('nc-template').addEventListener('change', updateNewCharPreview);
   $('nc-name').addEventListener('keydown', (ev) => {
