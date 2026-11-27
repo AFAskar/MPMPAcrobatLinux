@@ -447,26 +447,31 @@ impl SheetStore {
         // so the returned entry describes the exact bytes published by this operation.
         let _commit_lock = acquire_store_lock(&self.root)?;
         if overwrite {
-            match fs::symlink_metadata(&abs) {
+            let dest_absent = match fs::symlink_metadata(&abs) {
                 Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => {
                     bail!("cannot overwrite non-regular file at {normalized}");
                 }
-                Ok(_) => {}
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                    // Creating an absent PDF via overwrite=true must run the same
-                    // sidecar ownership check so it never hides another sheet's metadata.
-                    Self::check_create_sidecar_conflicts(&abs)?;
-                }
+                Ok(_) => false,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => true,
                 Err(err) => {
                     return Err(anyhow::Error::new(err)
                         .context(format!("failed to stat destination {normalized}")));
                 }
+            };
+            if dest_absent {
+                // Creating an absent PDF via overwrite=true uses the same pre-publication
+                // sidecar ownership check and mandatory orphan cleanup as create-only mode
+                // so a locked matching-hash orphan aborts cleanly before publishing `abs`.
+                Self::check_create_sidecar_conflicts(&abs)?;
+                Self::invalidate_sidecars_for(&abs)?;
             }
             staged
                 .publish_replace(&abs)
                 .with_context(|| format!("failed replacing {}", abs.display()))?;
-            // Invalidate any previous sidecar metadata so stale character details are not advertised.
-            let _ = Self::invalidate_sidecars_for(&abs);
+            if !dest_absent {
+                // Invalidate any previous sidecar metadata so stale character details are not advertised.
+                let _ = Self::invalidate_sidecars_for(&abs);
+            }
             sync_parent_dir(&abs);
         } else {
             if fs::symlink_metadata(&abs).is_ok() {
@@ -719,18 +724,20 @@ impl SheetStore {
         if let Some(conflict) = check_expected()? {
             return Ok(conflict);
         }
-        match fs::symlink_metadata(&abs) {
-            Ok(_) => {}
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                // Recreating an absent PDF (even without a sidecar payload) must run
-                // the create-time sidecar conflict check so it cannot hide another
-                // sheet's unstamped or legacy sidecar metadata.
-                Self::check_create_sidecar_conflicts(&abs)?;
-            }
+        let dest_absent = match fs::symlink_metadata(&abs) {
+            Ok(_) => false,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => true,
             Err(err) => {
                 return Err(anyhow::Error::new(err)
                     .context(format!("failed to stat destination {}", abs.display())));
             }
+        };
+        if dest_absent {
+            // Recreating an absent PDF enforces both sidecar ownership conflicts and
+            // mandatory orphan cleanup BEFORE publishing `abs` so an unremovable
+            // matching-hash orphan aborts cleanly instead of attaching stale metadata.
+            Self::check_create_sidecar_conflicts(&abs)?;
+            Self::invalidate_sidecars_for(&abs)?;
         }
         if let Some((_, ref sidecar_path)) = staged_sidecar {
             Self::ensure_primary_sidecar_writable_for(&abs, sidecar_path)?;
@@ -4451,7 +4458,137 @@ mod tests {
         assert_eq!(replaced.path, "Hero.pdf.pdf");
         assert_eq!(replaced.sha256, sha256_hex(&replacement));
 
-        // 3. If post-publish `sheet_entry_from_path` fails after commit, `commit_staged_upload`
+        // 3. Absent-destination overwrite=true upload and sidecarless save_sheet_atomic
+        //    both clear removable matching-hash orphans AND fail cleanly before publishing
+        //    when a matching-hash orphan is locked/unremovable (succeeding on retry).
+        let ov_orphan = dir.join("OverwriteOrphan.pdf.state.json");
+        fs::write(
+            &ov_orphan,
+            serde_json::to_vec_pretty(&json!({
+                "pdfSha256": tpl.sha256,
+                "character": { "name": "Stale Overwrite Orphan", "level": "6" }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let ov_created = store
+            .upload_sheet("OverwriteOrphan.pdf", &tpl_bytes, true)
+            .unwrap();
+        assert!(!ov_created.has_state_sidecar);
+        assert_eq!(ov_created.character_name, None);
+        assert!(!ov_orphan.exists());
+
+        let save_orphan = dir.join("SaveOrphan.pdf.state.json");
+        let save_legacy_orphan = dir.join("SaveOrphan.state.json");
+        for p in [&save_orphan, &save_legacy_orphan] {
+            fs::write(
+                p,
+                serde_json::to_vec_pretty(&json!({
+                    "pdfSha256": tpl.sha256,
+                    "character": { "name": "Stale Save Orphan", "level": "7" }
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        let save_res = store
+            .save_sheet_atomic("SaveOrphan.pdf", &tpl_bytes, None, None, true)
+            .unwrap();
+        assert!(matches!(save_res, SaveResult::Saved { .. }));
+        assert!(!save_orphan.exists());
+        assert!(!save_legacy_orphan.exists());
+        let save_listed = store
+            .list_sheets()
+            .unwrap()
+            .into_iter()
+            .find(|s| s.path == "SaveOrphan.pdf")
+            .unwrap();
+        assert!(!save_listed.has_state_sidecar);
+        assert_eq!(save_listed.character_name, None);
+
+        // Locked/unremovable matching-hash orphans for BOTH overwrite=true upload and
+        // sidecarless save_sheet_atomic abort before publishing and succeed cleanly on retry.
+        for (sheet_name, via_save) in [
+            ("LockedOverwriteOrphan.pdf", false),
+            ("LockedSaveOrphan.pdf", true),
+        ] {
+            let locked_sc = dir.join(format!("{sheet_name}.state.json"));
+            let locked_bytes = serde_json::to_vec_pretty(&json!({
+                "pdfSha256": tpl.sha256,
+                "character": { "name": "Locked Matching Orphan", "level": "9" }
+            }))
+            .unwrap();
+            fs::write(&locked_sc, &locked_bytes).unwrap();
+
+            #[cfg(windows)]
+            let lock_guard = {
+                use std::os::windows::fs::OpenOptionsExt;
+                const FILE_SHARE_READ: u32 = 0x0000_0001;
+                const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+                fs::OpenOptions::new()
+                    .read(true)
+                    .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                    .open(&locked_sc)
+                    .unwrap()
+            };
+            #[cfg(unix)]
+            let lock_guard = {
+                struct ClearRemoveGuard;
+                impl Drop for ClearRemoveGuard {
+                    fn drop(&mut self) {
+                        set_fail_sidecar_remove_path_for_test(None);
+                    }
+                }
+                let canonical_sc = dir
+                    .canonicalize()
+                    .unwrap_or_else(|_| dir.clone())
+                    .join(format!("{sheet_name}.state.json"));
+                set_fail_sidecar_remove_path_for_test(Some(canonical_sc));
+                ClearRemoveGuard
+            };
+
+            let err = if via_save {
+                store
+                    .save_sheet_atomic(sheet_name, &tpl_bytes, None, None, true)
+                    .unwrap_err()
+            } else {
+                store
+                    .upload_sheet(sheet_name, &tpl_bytes, true)
+                    .unwrap_err()
+            };
+            assert!(
+                format!("{err:#}").contains("failed to remove stale sidecar"),
+                "expected stale sidecar removal error for {sheet_name}, got: {err:#}"
+            );
+            assert!(
+                !dir.join(sheet_name).exists(),
+                "{sheet_name} must not be published when orphan removal fails"
+            );
+            assert_eq!(fs::read(&locked_sc).unwrap(), locked_bytes);
+
+            drop(lock_guard);
+            if via_save {
+                let retried = store
+                    .save_sheet_atomic(sheet_name, &tpl_bytes, None, None, true)
+                    .unwrap();
+                assert!(matches!(retried, SaveResult::Saved { .. }));
+            } else {
+                let retried = store.upload_sheet(sheet_name, &tpl_bytes, true).unwrap();
+                assert!(!retried.has_state_sidecar);
+                assert_eq!(retried.character_name, None);
+            }
+            assert!(!locked_sc.exists());
+            let listed_retry = store
+                .list_sheets()
+                .unwrap()
+                .into_iter()
+                .find(|s| s.path == sheet_name)
+                .unwrap();
+            assert!(!listed_retry.has_state_sidecar);
+            assert_eq!(listed_retry.character_name, None);
+        }
+
+        // 4. If post-publish `sheet_entry_from_path` fails after commit, `commit_staged_upload`
         //    must STILL return Ok(committed_entry) with exact size/hash and keep the published file.
         struct ClearPostReadGuard;
         impl Drop for ClearPostReadGuard {
