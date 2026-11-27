@@ -26,6 +26,10 @@ static FAIL_SIDECAR_REMOVE_PATHS: std::sync::LazyLock<
 static FAIL_POST_PUBLISH_READ_PATHS: std::sync::LazyLock<
     Mutex<std::collections::HashMap<PathBuf, usize>>,
 > = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+#[cfg(test)]
+static FAIL_FILE_IDENTITY_PATHS: std::sync::LazyLock<
+    Mutex<std::collections::HashMap<PathBuf, usize>>,
+> = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 
 #[cfg(test)]
 pub(crate) struct ScopedPathFaultGuard {
@@ -69,6 +73,19 @@ pub(crate) fn fail_post_publish_read_for_path(path: PathBuf) -> ScopedPathFaultG
         .or_insert(0) += 1;
     ScopedPathFaultGuard {
         map: &FAIL_POST_PUBLISH_READ_PATHS,
+        path,
+    }
+}
+
+#[cfg(test)]
+fn fail_file_identity_for_path(path: PathBuf) -> ScopedPathFaultGuard {
+    *FAIL_FILE_IDENTITY_PATHS
+        .lock()
+        .unwrap()
+        .entry(path.clone())
+        .or_insert(0) += 1;
+    ScopedPathFaultGuard {
+        map: &FAIL_FILE_IDENTITY_PATHS,
         path,
     }
 }
@@ -2071,35 +2088,160 @@ fn publish_file_create_new_atomic(_src: &Path, _dest: &Path) -> std::io::Result<
     ))
 }
 
-fn same_file_name_str(a: &str, b: &str) -> bool {
-    #[cfg(windows)]
-    {
-        a.eq_ignore_ascii_case(b)
-    }
-    #[cfg(not(windows))]
-    {
-        a == b
-    }
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FileId {
+    dev: u64,
+    ino: u64,
 }
 
-fn same_dir_entry_name(a: &std::ffi::OsStr, b: &std::ffi::OsStr) -> bool {
+#[cfg(unix)]
+fn file_identity_os(path: &Path) -> std::io::Result<FileId> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = fs::symlink_metadata(path)?;
+    Ok(FileId {
+        dev: meta.dev(),
+        ino: meta.ino(),
+    })
+}
+
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FileId {
+    volume_serial: u32,
+    index_high: u32,
+    index_low: u32,
+}
+
+#[cfg(windows)]
+fn file_identity_os(path: &Path) -> std::io::Result<FileId> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+
+    #[repr(C)]
+    #[allow(dead_code)]
+    struct FileTime {
+        low_date_time: u32,
+        high_date_time: u32,
+    }
+
+    #[repr(C)]
+    #[allow(dead_code)]
+    struct ByHandleFileInformation {
+        file_attributes: u32,
+        creation_time: FileTime,
+        last_access_time: FileTime,
+        last_write_time: FileTime,
+        volume_serial_number: u32,
+        file_size_high: u32,
+        file_size_low: u32,
+        number_of_links: u32,
+        file_index_high: u32,
+        file_index_low: u32,
+    }
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetFileInformationByHandle(
+            h_file: *mut std::ffi::c_void,
+            lp_file_information: *mut ByHandleFileInformation,
+        ) -> i32;
+    }
+
+    const FILE_SHARE_READ: u32 = 0x0000_0001;
+    const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+    const FILE_SHARE_DELETE: u32 = 0x0000_0004;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+
+    // Open with zero data access (`access_mode(0)`) so querying identity succeeds
+    // even when another handle holds locks without FILE_SHARE_DELETE, and do not
+    // follow reparse points/symlinks.
+    let file = fs::OpenOptions::new()
+        .access_mode(0)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)?;
+    let mut info = std::mem::MaybeUninit::<ByHandleFileInformation>::zeroed();
+    // SAFETY: `file.as_raw_handle()` is a valid open Win32 HANDLE and `info` points
+    // to a properly aligned `ByHandleFileInformation` buffer for the synchronous call.
+    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle(), info.as_mut_ptr()) };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: `GetFileInformationByHandle` returned nonzero and initialized `info`.
+    let info = unsafe { info.assume_init() };
+    Ok(FileId {
+        volume_serial: info.volume_serial_number,
+        index_high: info.file_index_high,
+        index_low: info.file_index_low,
+    })
+}
+
+#[cfg(all(not(unix), not(windows)))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FileId;
+
+#[cfg(all(not(unix), not(windows)))]
+fn file_identity_os(_path: &Path) -> std::io::Result<FileId> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "file identity queries are unsupported on this platform",
+    ))
+}
+
+fn file_identity(path: &Path) -> std::io::Result<FileId> {
+    #[cfg(test)]
+    if FAIL_FILE_IDENTITY_PATHS.lock().unwrap().contains_key(path) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "injected file identity query failure",
+        ));
+    }
+    file_identity_os(path)
+}
+
+fn owner_name_matches_pdf(owner: &str, pdf_path: &Path) -> bool {
+    let mut comps = Path::new(owner).components();
+    if !matches!(
+        (comps.next(), comps.next()),
+        (Some(std::path::Component::Normal(_)), None)
+    ) {
+        return false;
+    }
+    if let Some(parent) = pdf_path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        let owner_path = parent.join(owner);
+        match (file_identity(&owner_path), file_identity(pdf_path)) {
+            (Ok(owner_id), Ok(pdf_id)) => return owner_id == pdf_id,
+            // If exactly one path resolves to an existing file, they cannot refer to the same file.
+            (Ok(_), Err(err)) | (Err(err), Ok(_)) if err.kind() == std::io::ErrorKind::NotFound => {
+                return false;
+            }
+            // Fail closed on non-NotFound identity errors rather than falling back to name comparison.
+            (Err(err), _) | (_, Err(err)) if err.kind() != std::io::ErrorKind::NotFound => {
+                return false;
+            }
+            _ => {}
+        }
+    }
+    let Some(self_name) = pdf_path.file_name().and_then(|s| s.to_str()) else {
+        return false;
+    };
     #[cfg(windows)]
     {
-        match (a.to_str(), b.to_str()) {
-            (Some(sa), Some(sb)) => sa.eq_ignore_ascii_case(sb),
-            _ => a == b,
-        }
+        owner.eq_ignore_ascii_case(self_name)
     }
     #[cfg(not(windows))]
     {
-        a == b
+        owner == self_name
     }
 }
 
 /// Returns whether any *other* existing regular `.pdf` file in `pdf_path`'s parent
-/// directory derives `sidecar_path` as either its primary (`<name>.state.json`) or
-/// legacy (`<stem>.state.json`) sidecar path. Fails closed (`Err`) if the directory
-/// cannot be enumerated so callers never delete or misattribute an unverified sidecar.
+/// directory derives a primary (`<name>.state.json`) or legacy (`<stem>.state.json`)
+/// sidecar path that resolves to the same underlying filesystem file identity as
+/// `sidecar_path`. Fails closed (`Err`) if the directory cannot be enumerated or if
+/// an existing file's identity cannot be determined.
 fn sidecar_claimed_by_other_pdf(pdf_path: &Path, sidecar_path: &Path) -> Result<bool> {
     let parent = pdf_path
         .parent()
@@ -2110,12 +2252,26 @@ fn sidecar_claimed_by_other_pdf(pdf_path: &Path, sidecar_path: &Path) -> Result<
                 pdf_path.display()
             )
         })?;
-    let self_name = pdf_path
-        .file_name()
-        .ok_or_else(|| anyhow!("cannot determine filename for {}", pdf_path.display()))?;
-    let target_sc_name = sidecar_path
-        .file_name()
-        .ok_or_else(|| anyhow!("cannot determine filename for {}", sidecar_path.display()))?;
+    let target_sc_id = match file_identity(sidecar_path) {
+        Ok(id) => id,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => {
+            return Err(anyhow::Error::new(err).context(format!(
+                "failed to determine file identity of sidecar {}",
+                sidecar_path.display()
+            )));
+        }
+    };
+    let self_id = match file_identity(pdf_path) {
+        Ok(id) => Some(id),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => {
+            return Err(anyhow::Error::new(err).context(format!(
+                "failed to determine file identity of sheet {}",
+                pdf_path.display()
+            )));
+        }
+    };
     let entries = fs::read_dir(parent).with_context(|| {
         format!(
             "failed to inspect directory {} for sidecar ownership",
@@ -2130,9 +2286,6 @@ fn sidecar_claimed_by_other_pdf(pdf_path: &Path, sidecar_path: &Path) -> Result<
             )
         })?;
         let name = entry.file_name();
-        if same_dir_entry_name(&name, self_name) {
-            continue;
-        }
         let Some(name_str) = name.to_str() else {
             continue;
         };
@@ -2149,16 +2302,34 @@ fn sidecar_claimed_by_other_pdf(pdf_path: &Path, sidecar_path: &Path) -> Result<
             continue;
         }
         let other_path = entry.path();
-        let other_primary = SheetStore::sidecar_path_for(&other_path);
-        let other_legacy = SheetStore::legacy_sidecar_path_for(&other_path);
-        if other_primary
-            .file_name()
-            .is_some_and(|n| same_dir_entry_name(n, target_sc_name))
-            || other_legacy
-                .file_name()
-                .is_some_and(|n| same_dir_entry_name(n, target_sc_name))
-        {
-            return Ok(true);
+        let other_id = match file_identity(&other_path) {
+            Ok(id) => id,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => {
+                return Err(anyhow::Error::new(err).context(format!(
+                    "failed to determine file identity of sibling sheet {}",
+                    other_path.display()
+                )));
+            }
+        };
+        if self_id == Some(other_id) {
+            continue;
+        }
+        for cand in [
+            SheetStore::sidecar_path_for(&other_path),
+            SheetStore::legacy_sidecar_path_for(&other_path),
+        ] {
+            match file_identity(&cand) {
+                Ok(cand_id) if cand_id == target_sc_id => return Ok(true),
+                Ok(_) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    return Err(anyhow::Error::new(err).context(format!(
+                        "failed to determine file identity of candidate sidecar {}",
+                        cand.display()
+                    )));
+                }
+            }
         }
     }
     Ok(false)
@@ -2168,7 +2339,6 @@ fn sidecar_claimed_by_other_pdf(pdf_path: &Path, sidecar_path: &Path) -> Result<
 /// `Some(true)` if it matches `pdf_path`, `Some(false)` if it names another PDF, or
 /// `None` if the sidecar is unstamped or unreadable.
 fn sidecar_explicit_owner_matches(sidecar_path: &Path, pdf_path: &Path) -> Option<bool> {
-    let self_name = pdf_path.file_name().and_then(|s| s.to_str())?;
     let sm = fs::symlink_metadata(sidecar_path).ok()?;
     if sm.file_type().is_symlink() || !sm.is_file() || sm.len() as usize > MAX_SIDECAR_BYTES {
         return None;
@@ -2177,7 +2347,7 @@ fn sidecar_explicit_owner_matches(sidecar_path: &Path, pdf_path: &Path) -> Optio
         .ok()
         .and_then(|b| serde_json::from_slice::<Value>(&b).ok())?;
     let owner = parsed.get("pdfFileName").and_then(Value::as_str)?;
-    Some(same_file_name_str(owner, self_name))
+    Some(owner_name_matches_pdf(owner, pdf_path))
 }
 
 impl Drop for StagedUpload {
@@ -2409,10 +2579,9 @@ fn sheet_entry_from_path(root: &Path, abs: &Path) -> Result<SheetEntry> {
         // if unstamped, reject ambiguous sidecars that another existing PDF in the same
         // directory also derives as its primary or legacy sidecar (e.g. `Hero.pdf` vs
         // `Hero.pdf.pdf`, or case-variant siblings sharing `Hero.state.json`).
-        let abs_file_name = abs.file_name().and_then(|s| s.to_str());
         match parsed.get("pdfFileName").and_then(Value::as_str) {
             Some(owner) => {
-                if !abs_file_name.is_some_and(|cur| same_file_name_str(owner, cur)) {
+                if !owner_name_matches_pdf(owner, abs) {
                     return None;
                 }
             }
@@ -4691,6 +4860,141 @@ mod tests {
         assert_eq!(entry.sha256, expected_sha);
         assert!(!entry.has_state_sidecar);
         assert_eq!(fs::read(&post_target).unwrap(), post_bytes);
+
+        // 6. File-identity sidecar ownership checks:
+        //    - On Windows NTFS, non-ASCII case aliases (`Élodie.pdf.pdf` owning
+        //      `Élodie.pdf.state.json` vs creating `élodie.pdf`) share one FileId and
+        //      must conflict without deleting the existing sheet's sidecar.
+        //    - On Unix, two differently named sidecar paths hard-linked to the same
+        //      `(dev, ino)` simulate a case-insensitive mount alias and must conflict.
+        //    - When file identity cannot be determined for an existing sidecar, creation
+        //      must fail closed without deleting the sidecar.
+        #[cfg(windows)]
+        {
+            store
+                .upload_sheet("Élodie.pdf.pdf", &tpl_bytes, false)
+                .unwrap();
+            let ntfs_sc = dir.join("Élodie.pdf.state.json");
+            let ntfs_bytes = serde_json::to_vec_pretty(&json!({
+                "pdfSha256": tpl.sha256,
+                "character": { "name": "Élodie NTFS Owner", "level": "12" }
+            }))
+            .unwrap();
+            fs::write(&ntfs_sc, &ntfs_bytes).unwrap();
+            let err_create = store
+                .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "élodie")
+                .unwrap_err();
+            assert!(
+                format!("{err_create:#}").contains("conflict"),
+                "NTFS non-ASCII case alias must conflict: {err_create:#}"
+            );
+            let err_ov = store
+                .upload_sheet("élodie.pdf", &tpl_bytes, true)
+                .unwrap_err();
+            assert!(
+                format!("{err_ov:#}").contains("conflict"),
+                "NTFS overwrite on absent non-ASCII alias must conflict: {err_ov:#}"
+            );
+            assert!(!dir.join("élodie.pdf").exists());
+            assert_eq!(fs::read(&ntfs_sc).unwrap(), ntfs_bytes);
+            let listed_ntfs = store
+                .list_sheets()
+                .unwrap()
+                .into_iter()
+                .find(|s| s.path == "Élodie.pdf.pdf")
+                .unwrap();
+            assert!(listed_ntfs.has_state_sidecar);
+            assert_eq!(
+                listed_ntfs.character_name.as_deref(),
+                Some("Élodie NTFS Owner")
+            );
+            assert_eq!(listed_ntfs.level.as_deref(), Some("12"));
+
+            // Distinct filename resolving to no shared file still succeeds.
+            let distinct = store
+                .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "ÉlodieOther")
+                .unwrap();
+            assert_eq!(distinct.path, "ÉlodieOther.pdf");
+            assert!(!distinct.has_state_sidecar);
+        }
+        #[cfg(unix)]
+        {
+            store
+                .upload_sheet("AliasOwner.pdf", &tpl_bytes, false)
+                .unwrap();
+            let owner_sc = dir.join("AliasOwner.pdf.state.json");
+            let owner_sc_bytes = serde_json::to_vec_pretty(&json!({
+                "pdfSha256": tpl.sha256,
+                "character": { "name": "Inode Alias Owner", "level": "15" }
+            }))
+            .unwrap();
+            fs::write(&owner_sc, &owner_sc_bytes).unwrap();
+            // Hard-link a differently named sidecar path to the exact same `(dev, ino)`
+            // to exercise case-insensitive-mount aliasing deterministically on Linux ext4.
+            let aliased_sc = dir.join("AliasTarget.pdf.state.json");
+            fs::hard_link(&owner_sc, &aliased_sc).unwrap();
+            let err_create = store
+                .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "AliasTarget")
+                .unwrap_err();
+            assert!(
+                format!("{err_create:#}").contains("conflict"),
+                "same-inode sidecar alias must conflict: {err_create:#}"
+            );
+            let err_ov = store
+                .upload_sheet("AliasTarget.pdf", &tpl_bytes, true)
+                .unwrap_err();
+            assert!(
+                format!("{err_ov:#}").contains("conflict"),
+                "overwrite on absent same-inode alias must conflict: {err_ov:#}"
+            );
+            assert!(!dir.join("AliasTarget.pdf").exists());
+            assert_eq!(fs::read(&owner_sc).unwrap(), owner_sc_bytes);
+            let listed_owner = store
+                .list_sheets()
+                .unwrap()
+                .into_iter()
+                .find(|s| s.path == "AliasOwner.pdf")
+                .unwrap();
+            assert!(listed_owner.has_state_sidecar);
+            assert_eq!(
+                listed_owner.character_name.as_deref(),
+                Some("Inode Alias Owner")
+            );
+            assert_eq!(listed_owner.level.as_deref(), Some("15"));
+
+            // Distinct filename with no aliased sidecar still succeeds.
+            let distinct = store
+                .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "DistinctTarget")
+                .unwrap();
+            assert_eq!(distinct.path, "DistinctTarget.pdf");
+            assert!(!distinct.has_state_sidecar);
+        }
+
+        // Indeterminate file identity on an existing sidecar must fail closed.
+        let indet_sc = dir.join("IndetHero.pdf.state.json");
+        let indet_bytes = serde_json::to_vec_pretty(&json!({
+            "pdfSha256": tpl.sha256,
+            "character": { "name": "Indeterminate Owner" }
+        }))
+        .unwrap();
+        fs::write(&indet_sc, &indet_bytes).unwrap();
+        let indet_guard = fail_file_identity_for_path(canon_dir.join("IndetHero.pdf.state.json"));
+        let indet_err = store
+            .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "IndetHero")
+            .unwrap_err();
+        assert!(
+            format!("{indet_err:#}").contains("failed to determine file identity"),
+            "indeterminate sidecar identity must fail closed: {indet_err:#}"
+        );
+        assert!(!dir.join("IndetHero.pdf").exists());
+        assert_eq!(fs::read(&indet_sc).unwrap(), indet_bytes);
+        drop(indet_guard);
+        let indet_ok = store
+            .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "IndetHero")
+            .unwrap();
+        assert_eq!(indet_ok.path, "IndetHero.pdf");
+        assert!(!indet_ok.has_state_sidecar);
+        assert!(!indet_sc.exists());
 
         let _ = fs::remove_dir_all(&dir);
     }

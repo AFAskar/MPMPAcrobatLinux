@@ -317,7 +317,10 @@
     const prevPath = appState.sheet ? appState.sheet.path : null;
     const prevSessionId = appState.sheet ? (appState.sheet.sessionId || '') : '';
     const nextSessionId = state.sessionId || '';
-    if (typeof state.stateSeq === 'number' && state.stateSeq < appState.lastStateSeq) {
+    const prevLastStateSeq = appState.lastStateSeq;
+    const isDuplicateStateSeq =
+      typeof state.stateSeq === 'number' && state.stateSeq === prevLastStateSeq;
+    if (typeof state.stateSeq === 'number' && state.stateSeq < prevLastStateSeq) {
       return false;
     }
     if (
@@ -356,7 +359,20 @@
     if (state.activeInteraction) {
       openAcrobatInteraction(state.activeInteraction);
     } else if (appState.activeInteraction) {
-      closeAcrobatModal();
+      // Never let a duplicate or earlier-sequenced state reply dismiss an Acrobat
+      // prompt that was opened at or after this state snapshot.
+      const interSeq =
+        typeof appState.activeInteraction.stateSeq === 'number' &&
+        appState.activeInteraction.stateSeq > 0
+          ? appState.activeInteraction.stateSeq
+          : null;
+      const stateNewerThanInteraction =
+        !isDuplicateStateSeq &&
+        (interSeq === null ||
+          (typeof state.stateSeq === 'number' && state.stateSeq > interSeq));
+      if (stateNewerThanInteraction) {
+        closeAcrobatModal();
+      }
     }
     const sheetTabActive = $('tab-sheet').classList.contains('active');
     if (sheetTabActive && (prevRev !== state.revision || sessionChanged)) {
@@ -1475,9 +1491,11 @@
           if (applySessionState(res.state) && switchedToNewSession) {
             appState.page = 0;
             showBanner(`Loaded ${res.state.path}`, 'ok', 2500);
-            switchTab('play');
-            const destFocus = $('btn-classes');
-            if (destFocus && typeof destFocus.focus === 'function') destFocus.focus();
+            if (activeNewCharModalInstance === null) {
+              switchTab('play');
+              const destFocus = $('btn-classes');
+              if (destFocus && typeof destFocus.focus === 'function') destFocus.focus();
+            }
             refreshLibrary();
           }
         }
@@ -1959,7 +1977,11 @@
           body: buf,
         });
       } catch (err) {
-        if (err.status === 409 && confirm(`"${targetName}" already exists. Overwrite it?`)) {
+        const isAlreadyExists =
+          err.status === 409 &&
+          (err.data?.code === 'already_exists' ||
+            (!err.data?.code && /already exists/i.test(err.message || '')));
+        if (isAlreadyExists && confirm(`"${targetName}" already exists. Overwrite it?`)) {
           await api(`/api/sheets/upload?name=${encodeURIComponent(targetName)}&overwrite=true`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/pdf' },

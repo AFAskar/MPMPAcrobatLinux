@@ -16,7 +16,7 @@ PWA_HARNESS = textwrap.dedent(
 
     const source = fs.readFileSync(process.argv[process.argv.length - 1], 'utf8').replace(
       '  // Boot\n  updateConnDot();\n  connectWs();\n  refreshAll();',
-      '  globalThis.harness = { appState, applySessionState, openFieldEditorByName, enqueueStep, currentSessionRef, editField, activateField, openSheet, openNewCharModal, closeNewCharModal, createCharacterFromTemplate, doGitPull, refreshSession, connectWs, openAcrobatInteraction, closeAcrobatModal, submitInteraction };'
+      '  globalThis.harness = { appState, applySessionState, openFieldEditorByName, enqueueStep, currentSessionRef, editField, activateField, openSheet, openNewCharModal, closeNewCharModal, createCharacterFromTemplate, handlePdfUpload, doGitPull, refreshSession, connectWs, openAcrobatInteraction, closeAcrobatModal, submitInteraction };'
     );
 
     const elements = new Map();
@@ -113,6 +113,7 @@ PWA_HARNESS = textwrap.dedent(
       openNewCharModal,
       closeNewCharModal,
       createCharacterFromTemplate,
+      handlePdfUpload,
       doGitPull,
       refreshSession,
       connectWs,
@@ -660,6 +661,143 @@ PWA_HARNESS = textwrap.dedent(
         'obsolete 409 should report that the request is out of date',
       );
       closeNewCharModal(false);
+
+      // 15. When submitInteraction() completes a startup dialog into a new session
+      //     while a newer New Character form is open, preserve the new form's tab and focus.
+      element('tab-play').classList.remove('active');
+      element('tab-library').classList.add('active');
+      const startupInter2 = { ...alert77, id: 'srv-5-int-150', serverInstanceId: 'srv-5', stateSeq: 25 };
+      let resolveInterReply = null;
+      fetchHandler = async (path) => {
+        if (path === '/api/session/interaction/srv-5-int-150') {
+          return new Promise((resolve) => {
+            resolveInterReply = () => resolve(jsonResp({
+              status: 'ok',
+              state: { open: true, serverInstanceId: 'srv-5', sessionId: 'srv-5-s7', stateSeq: 26, path: 'StartupLater.pdf', revision: 1, fields: [] },
+            }));
+          });
+        }
+        if (path === '/api/sheets') {
+          return jsonResp({ sheets: appState.templates, templates: appState.templates, characters: [], git: null });
+        }
+        throw new Error('Unexpected startup-focus fetch ' + path);
+      };
+      openAcrobatInteraction(startupInter2);
+      const interSubmitPromise = submitInteraction({ button: 1, checked: false });
+      assert.ok(resolveInterReply, 'interaction reply POST should be in flight');
+      // User opens a new creation form while the server is finishing the startup reply.
+      openNewCharModal();
+      element('nc-name').value = 'FreshModalDraft';
+      assert.equal(context.document.activeElement, element('nc-name'));
+      resolveInterReply();
+      await interSubmitPromise;
+      assert.equal(appState.sheet.path, 'StartupLater.pdf');
+      assert.equal(element('new-char-modal').classList.contains('hidden'), false);
+      assert.equal(
+        context.document.activeElement,
+        element('nc-name'),
+        'startup reply must not steal focus from a newer New Character form',
+      );
+      assert.equal(element('tab-library').classList.contains('active'), true);
+      assert.equal(element('tab-play').classList.contains('active'), false);
+      closeNewCharModal(false);
+
+      // 16. handlePdfUpload offers overwrite ONLY on already_exists 409, NOT on absent-PDF
+      //     sidecar_conflict 409.
+      const fakePdf = { arrayBuffer: async () => new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d]) };
+      let uploadCalls = [];
+      let uploadConfirms = 0;
+      confirmHandler = () => { uploadConfirms += 1; return true; };
+      fetchHandler = async (path) => {
+        uploadCalls.push(path);
+        if (path.startsWith('/api/sheets/upload?name=RevDouble.pdf&overwrite=false')) {
+          return jsonResp({
+            error: 'conflict: destination sidecar RevDouble.pdf.state.json belongs to another existing sheet',
+            code: 'sidecar_conflict',
+          }, 409);
+        }
+        if (path.startsWith('/api/sheets/upload?name=Existing.pdf&overwrite=false')) {
+          return jsonResp({
+            error: 'sheet already exists: Existing.pdf (pass overwrite=true to replace)',
+            code: 'already_exists',
+          }, 409);
+        }
+        if (path.startsWith('/api/sheets/upload?name=Existing.pdf&overwrite=true')) {
+          return jsonResp({ sheet: { path: 'Existing.pdf' } }, 201);
+        }
+        if (path === '/api/sheets') {
+          return jsonResp({ sheets: appState.templates, templates: appState.templates, characters: [], git: null });
+        }
+        throw new Error('Unexpected upload fetch ' + path);
+      };
+      await handlePdfUpload(fakePdf, 'RevDouble.pdf', 'RevDouble.pdf');
+      assert.equal(uploadConfirms, 0, 'sidecar_conflict 409 must not offer overwrite prompt');
+      assert.equal(uploadCalls.length, 1, 'sidecar_conflict 409 must not retry overwrite=true');
+      assert.ok(element('banner').textContent.includes('belongs to another existing sheet'));
+
+      uploadCalls = [];
+      await handlePdfUpload(fakePdf, 'Existing.pdf', 'Existing.pdf');
+      assert.equal(uploadConfirms, 1, 'already_exists 409 must offer overwrite prompt');
+      assert.ok(uploadCalls.some((p) => p.includes('overwrite=true')));
+
+      // 17. A late creation/state reply arriving after a newer Acrobat prompt was opened
+      //     must NOT dismiss or retire that prompt (both for duplicate stateSeq and when
+      //     the late reply has stateSeq < activeInteraction.stateSeq).
+      applySessionState({
+        open: true,
+        serverInstanceId: 'srv-5',
+        sessionId: 'srv-5-s8',
+        stateSeq: 30,
+        path: 'CreatedA.pdf',
+        revision: 1,
+        fields: [],
+      });
+      const newerPrompt = { ...alert77, id: 'srv-5-int-200', serverInstanceId: 'srv-5', stateSeq: 31 };
+      openAcrobatInteraction(newerPrompt);
+      assert.equal(appState.activeInteraction.id, 'srv-5-int-200');
+      // 17a: Duplicate HTTP replay of stateSeq 30 with activeInteraction=null must NOT close srv-5-int-200.
+      applySessionState({
+        open: true,
+        serverInstanceId: 'srv-5',
+        sessionId: 'srv-5-s8',
+        stateSeq: 30,
+        path: 'CreatedA.pdf',
+        revision: 1,
+        fields: [],
+      });
+      assert.equal(
+        appState.activeInteraction && appState.activeInteraction.id,
+        'srv-5-int-200',
+        'duplicate stateSeq reply must not dismiss newer Acrobat prompt',
+      );
+      // 17b: Even if stateSeq 30 arrives when lastStateSeq was behind (e.g. missed WS state_updated),
+      //      stateSeq 30 < activeInteraction.stateSeq (31) must NOT dismiss srv-5-int-200.
+      appState.lastStateSeq = 29;
+      applySessionState({
+        open: true,
+        serverInstanceId: 'srv-5',
+        sessionId: 'srv-5-s8',
+        stateSeq: 30,
+        path: 'CreatedA.pdf',
+        revision: 1,
+        fields: [],
+      });
+      assert.equal(
+        appState.activeInteraction && appState.activeInteraction.id,
+        'srv-5-int-200',
+        'earlier-sequenced state reply must not dismiss newer Acrobat prompt',
+      );
+      // 17c: A genuinely newer state snapshot (stateSeq 32 > 31) with no activeInteraction DOES close it.
+      applySessionState({
+        open: true,
+        serverInstanceId: 'srv-5',
+        sessionId: 'srv-5-s8',
+        stateSeq: 32,
+        path: 'CreatedA.pdf',
+        revision: 2,
+        fields: [],
+      });
+      assert.equal(appState.activeInteraction, null);
 
       console.log('PWA_CLIENT_REGRESSIONS_OK');
     })().catch((err) => {

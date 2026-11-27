@@ -293,6 +293,8 @@ pub struct PublicInteraction {
     pub id: String,
     #[serde(rename = "serverInstanceId", default)]
     pub server_instance_id: String,
+    #[serde(rename = "stateSeq", default)]
+    pub state_seq: u64,
     pub kind: String,
     pub request: Value,
 }
@@ -441,6 +443,7 @@ impl InteractionBridge {
         let public = PublicInteraction {
             id,
             server_instance_id: self.server_instance_id.clone(),
+            state_seq: self.next_state_seq(),
             kind: kind.to_owned(),
             request: request.clone(),
         };
@@ -2813,9 +2816,21 @@ async fn handle_upload_sheet(
         Ok(Ok(entry)) => (StatusCode::CREATED, Json(json!({"sheet": entry}))).into_response(),
         Ok(Err(e)) => {
             let msg = format!("{e:#}");
-            let status = if msg.contains("already exists") || msg.contains("conflict") {
-                StatusCode::CONFLICT
-            } else if msg.contains("exceeds 64 MiB") {
+            if msg.contains("already exists") {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(json!({"error": msg, "code": "already_exists"})),
+                )
+                    .into_response();
+            }
+            if msg.contains("conflict") {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(json!({"error": msg, "code": "sidecar_conflict"})),
+                )
+                    .into_response();
+            }
+            let status = if msg.contains("exceeds 64 MiB") {
                 StatusCode::PAYLOAD_TOO_LARGE
             } else {
                 StatusCode::BAD_REQUEST
@@ -7447,6 +7462,51 @@ mod tests {
             assert!(retry_body["sheet"]["character_name"].is_null());
             assert!(!locked_sc.exists());
         }
+
+        // Upload conflict responses distinguish existing PDFs (`already_exists`) from
+        // absent-PDF sidecar conflicts (`sidecar_conflict`) so the PWA only prompts to
+        // overwrite when the destination PDF actually exists.
+        let upload_sidecar_conflict_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sheets/upload?name=RevDouble.pdf&overwrite=false")
+                    .header("content-type", "application/pdf")
+                    .body(Body::from(tpl_bytes.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(upload_sidecar_conflict_resp.status(), StatusCode::CONFLICT);
+        let sidecar_conflict_json: Value = serde_json::from_slice(
+            &axum::body::to_bytes(upload_sidecar_conflict_resp.into_body(), 1024 * 1024)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(sidecar_conflict_json["code"], "sidecar_conflict");
+
+        let upload_exists_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sheets/upload?name=DoubleHero.pdf&overwrite=false")
+                    .header("content-type", "application/pdf")
+                    .body(Body::from(tpl_bytes.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(upload_exists_resp.status(), StatusCode::CONFLICT);
+        let exists_json: Value = serde_json::from_slice(
+            &axum::body::to_bytes(upload_exists_resp.into_body(), 1024 * 1024)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(exists_json["code"], "already_exists");
 
         // Upload with overwrite=true on absent RevDouble.pdf (colliding with RevDouble.pdf.pdf's
         // legacy RevDouble.pdf.state.json) must return 409 Conflict via HTTP.
