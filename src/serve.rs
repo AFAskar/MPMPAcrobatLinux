@@ -7233,9 +7233,10 @@ mod tests {
                 .unwrap(),
             )
             .unwrap();
-            let mut perms = std::fs::metadata(&locked_sc).unwrap().permissions();
-            perms.set_readonly(true);
-            std::fs::set_permissions(&locked_sc, perms).unwrap();
+            let orig_perms = std::fs::metadata(&locked_sc).unwrap().permissions();
+            let mut ro_perms = orig_perms.clone();
+            ro_perms.set_readonly(true);
+            std::fs::set_permissions(&locked_sc, ro_perms).unwrap();
 
             let (st_locked, body_locked) = post_json(
                 &app,
@@ -7257,9 +7258,7 @@ mod tests {
             assert_eq!(st_sess, StatusCode::OK);
             assert_eq!(sess["path"], "OrphanPrimary.pdf");
 
-            let mut perms = std::fs::metadata(&locked_sc).unwrap().permissions();
-            perms.set_readonly(false);
-            std::fs::set_permissions(&locked_sc, perms).unwrap();
+            std::fs::set_permissions(&locked_sc, orig_perms).unwrap();
             let (st_retry, retry_body) = post_json(
                 &app,
                 "/api/sheets/new",

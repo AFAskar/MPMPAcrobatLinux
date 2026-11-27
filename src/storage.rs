@@ -3837,6 +3837,14 @@ mod tests {
         }))
         .unwrap();
         fs::write(&pre_pr_sidecar_path, &pre_pr_sidecar_bytes).unwrap();
+        let pre_pr_before = store
+            .list_sheets()
+            .unwrap()
+            .into_iter()
+            .find(|s| s.path == "PrePrHero.pdf")
+            .unwrap();
+        assert!(pre_pr_before.has_state_sidecar);
+        assert_eq!(pre_pr_before.character_name.as_deref(), Some("Pre-PR Hero"));
         let pre_pr_err = store
             .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "PrePrHero.pdf.pdf")
             .unwrap_err();
@@ -3871,6 +3879,17 @@ mod tests {
         }))
         .unwrap();
         fs::write(&reverse_legacy_path, &reverse_legacy_bytes).unwrap();
+        let reverse_before = store
+            .list_sheets()
+            .unwrap()
+            .into_iter()
+            .find(|s| s.path == "Reverse.pdf.pdf")
+            .unwrap();
+        assert!(reverse_before.has_state_sidecar);
+        assert_eq!(
+            reverse_before.character_name.as_deref(),
+            Some("Legacy Double PDF Owner")
+        );
 
         let reverse_err = store
             .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "Reverse")
@@ -3951,6 +3970,18 @@ mod tests {
             }))
             .unwrap();
             fs::write(&sibling_legacy, &sibling_legacy_bytes).unwrap();
+            let sibling_before = store
+                .list_sheets()
+                .unwrap()
+                .into_iter()
+                .find(|s| s.path == "Sibling.PDF")
+                .unwrap();
+            assert!(sibling_before.has_state_sidecar);
+            assert_eq!(
+                sibling_before.character_name.as_deref(),
+                Some("Upper Owner")
+            );
+            assert_eq!(sibling_before.level.as_deref(), Some("11"));
             let sibling_err = store
                 .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "Sibling")
                 .unwrap_err();
@@ -3974,6 +4005,7 @@ mod tests {
                 sibling_upper_listed.character_name.as_deref(),
                 Some("Upper Owner")
             );
+            assert_eq!(sibling_upper_listed.level.as_deref(), Some("11"));
         }
 
         // 10. Unremovable orphaned sidecar fails cleanly before publication AND retrying
@@ -3990,9 +4022,10 @@ mod tests {
                 .unwrap(),
             )
             .unwrap();
-            let mut perms = fs::metadata(&locked_orphan).unwrap().permissions();
-            perms.set_readonly(true);
-            fs::set_permissions(&locked_orphan, perms).unwrap();
+            let orig_perms = fs::metadata(&locked_orphan).unwrap().permissions();
+            let mut ro_perms = orig_perms.clone();
+            ro_perms.set_readonly(true);
+            fs::set_permissions(&locked_orphan, ro_perms).unwrap();
             let locked_err = store
                 .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "LockedOrphan")
                 .unwrap_err();
@@ -4004,9 +4037,7 @@ mod tests {
                 !dir.join("LockedOrphan.pdf").exists(),
                 "destination PDF must not be published when orphaned sidecar cannot be removed"
             );
-            let mut perms = fs::metadata(&locked_orphan).unwrap().permissions();
-            perms.set_readonly(false);
-            fs::set_permissions(&locked_orphan, perms).unwrap();
+            fs::set_permissions(&locked_orphan, orig_perms).unwrap();
             let retried = store
                 .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "LockedOrphan")
                 .unwrap();
