@@ -7381,15 +7381,9 @@ mod tests {
         }
         #[cfg(unix)]
         {
-            // Inject failure specifically at orphan sidecar removal so staging succeeds
-            // and the HTTP test deterministically exercises `invalidate_sidecars_for`
-            // (even when running as root).
-            struct ClearRemoveFaultGuard;
-            impl Drop for ClearRemoveFaultGuard {
-                fn drop(&mut self) {
-                    crate::storage::set_fail_sidecar_remove_path_for_test(None);
-                }
-            }
+            // Inject failure specifically for this test's orphan sidecar path so staging
+            // succeeds and the HTTP test deterministically exercises `invalidate_sidecars_for`
+            // (even when running as root or concurrently with other tests).
             let locked_sc = base.join("LockedApiOrphan.pdf.state.json");
             let locked_sc_bytes = serde_json::to_vec_pretty(&json!({
                 "pdfSha256": tpl_sha,
@@ -7401,8 +7395,7 @@ mod tests {
                 .canonicalize()
                 .unwrap_or_else(|_| base.clone())
                 .join("LockedApiOrphan.pdf.state.json");
-            crate::storage::set_fail_sidecar_remove_path_for_test(Some(canonical_locked_sc));
-            let _fault_guard = ClearRemoveFaultGuard;
+            let fault_guard = crate::storage::fail_sidecar_remove_for_path(canonical_locked_sc);
 
             let (st_locked, body_locked) = post_json(
                 &app,
@@ -7414,7 +7407,7 @@ mod tests {
                 }),
             )
             .await;
-            drop(_fault_guard);
+            drop(fault_guard);
 
             assert_eq!(
                 st_locked,

@@ -19,18 +19,58 @@ static TEMP_SEQ: AtomicU64 = AtomicU64::new(1);
 static CONFLICT_SEQ: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(all(test, unix))]
-static FAIL_SIDECAR_REMOVE_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+static FAIL_SIDECAR_REMOVE_PATHS: std::sync::LazyLock<
+    Mutex<std::collections::HashMap<PathBuf, usize>>,
+> = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 #[cfg(test)]
-static FAIL_POST_PUBLISH_READ_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+static FAIL_POST_PUBLISH_READ_PATHS: std::sync::LazyLock<
+    Mutex<std::collections::HashMap<PathBuf, usize>>,
+> = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 
-#[cfg(all(test, unix))]
-pub(crate) fn set_fail_sidecar_remove_path_for_test(path: Option<PathBuf>) {
-    *FAIL_SIDECAR_REMOVE_PATH.lock().unwrap() = path;
+#[cfg(test)]
+pub(crate) struct ScopedPathFaultGuard {
+    map: &'static Mutex<std::collections::HashMap<PathBuf, usize>>,
+    path: PathBuf,
 }
 
 #[cfg(test)]
-pub(crate) fn set_fail_post_publish_read_path_for_test(path: Option<PathBuf>) {
-    *FAIL_POST_PUBLISH_READ_PATH.lock().unwrap() = path;
+impl Drop for ScopedPathFaultGuard {
+    fn drop(&mut self) {
+        let mut guard = self.map.lock().unwrap();
+        if let Some(count) = guard.get_mut(&self.path) {
+            if *count <= 1 {
+                guard.remove(&self.path);
+            } else {
+                *count -= 1;
+            }
+        }
+    }
+}
+
+#[cfg(all(test, unix))]
+pub(crate) fn fail_sidecar_remove_for_path(path: PathBuf) -> ScopedPathFaultGuard {
+    *FAIL_SIDECAR_REMOVE_PATHS
+        .lock()
+        .unwrap()
+        .entry(path.clone())
+        .or_insert(0) += 1;
+    ScopedPathFaultGuard {
+        map: &FAIL_SIDECAR_REMOVE_PATHS,
+        path,
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn fail_post_publish_read_for_path(path: PathBuf) -> ScopedPathFaultGuard {
+    *FAIL_POST_PUBLISH_READ_PATHS
+        .lock()
+        .unwrap()
+        .entry(path.clone())
+        .or_insert(0) += 1;
+    ScopedPathFaultGuard {
+        map: &FAIL_POST_PUBLISH_READ_PATHS,
+        path,
+    }
 }
 
 pub const MAX_PDF_BYTES: usize = 64 * 1024 * 1024;
@@ -352,11 +392,7 @@ impl SheetStore {
             }
             #[cfg(all(test, unix))]
             let remove_res = {
-                let injected = FAIL_SIDECAR_REMOVE_PATH
-                    .lock()
-                    .unwrap()
-                    .as_ref()
-                    .is_some_and(|target| target == &sc);
+                let injected = FAIL_SIDECAR_REMOVE_PATHS.lock().unwrap().contains_key(&sc);
                 if injected {
                     Err(std::io::Error::new(
                         std::io::ErrorKind::PermissionDenied,
@@ -518,11 +554,10 @@ impl SheetStore {
             level: None,
         };
         #[cfg(test)]
-        if FAIL_POST_PUBLISH_READ_PATH
+        if FAIL_POST_PUBLISH_READ_PATHS
             .lock()
             .unwrap()
-            .as_ref()
-            .is_some_and(|target| target == &abs)
+            .contains_key(&abs)
         {
             return Ok(committed_fallback);
         }
@@ -4533,18 +4568,11 @@ mod tests {
             };
             #[cfg(unix)]
             let lock_guard = {
-                struct ClearRemoveGuard;
-                impl Drop for ClearRemoveGuard {
-                    fn drop(&mut self) {
-                        set_fail_sidecar_remove_path_for_test(None);
-                    }
-                }
                 let canonical_sc = dir
                     .canonicalize()
                     .unwrap_or_else(|_| dir.clone())
                     .join(format!("{sheet_name}.state.json"));
-                set_fail_sidecar_remove_path_for_test(Some(canonical_sc));
-                ClearRemoveGuard
+                fail_sidecar_remove_for_path(canonical_sc)
             };
 
             let err = if via_save {
@@ -4588,23 +4616,76 @@ mod tests {
             assert_eq!(listed_retry.character_name, None);
         }
 
-        // 4. If post-publish `sheet_entry_from_path` fails after commit, `commit_staged_upload`
-        //    must STILL return Ok(committed_entry) with exact size/hash and keep the published file.
-        struct ClearPostReadGuard;
-        impl Drop for ClearPostReadGuard {
-            fn drop(&mut self) {
-                set_fail_post_publish_read_path_for_test(None);
+        // 4. Overlapping path-scoped fault guards never interfere with each other:
+        //    dropping one path's guard clears only its own path while another active
+        //    path remains armed.
+        #[cfg(unix)]
+        {
+            let sc_a = dir.join("OverlapA.pdf.state.json");
+            let sc_b = dir.join("OverlapB.pdf.state.json");
+            for sc in [&sc_a, &sc_b] {
+                fs::write(
+                    sc,
+                    serde_json::to_vec_pretty(&json!({
+                        "pdfSha256": tpl.sha256,
+                        "character": { "name": "Overlap Orphan" }
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
             }
+            let canon_dir = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+            let guard_a = fail_sidecar_remove_for_path(canon_dir.join("OverlapA.pdf.state.json"));
+            let guard_b = fail_sidecar_remove_for_path(canon_dir.join("OverlapB.pdf.state.json"));
+            assert!(store
+                .upload_sheet("OverlapA.pdf", &tpl_bytes, true)
+                .is_err());
+            assert!(store
+                .upload_sheet("OverlapB.pdf", &tpl_bytes, true)
+                .is_err());
+            // Dropping guard_a must NOT disarm guard_b.
+            drop(guard_a);
+            assert!(store.upload_sheet("OverlapA.pdf", &tpl_bytes, true).is_ok());
+            assert!(
+                store
+                    .upload_sheet("OverlapB.pdf", &tpl_bytes, true)
+                    .is_err(),
+                "dropping guard_a must not clear guard_b"
+            );
+            drop(guard_b);
+            assert!(store.upload_sheet("OverlapB.pdf", &tpl_bytes, true).is_ok());
         }
+
+        // 5. If post-publish `sheet_entry_from_path` fails after commit, `commit_staged_upload`
+        //    must STILL return Ok(committed_entry) with exact size/hash and keep the published file.
+        let canon_dir = dir.canonicalize().unwrap_or_else(|_| dir.clone());
         let post_target = dir.join("PostPublishOk.pdf");
+        let post_other = dir.join("PostPublishOther.pdf");
         let post_bytes = valid_test_pdf("PostPublishOk");
         let expected_sha = sha256_hex(&post_bytes);
-        set_fail_post_publish_read_path_for_test(Some(post_target.clone()));
-        let _guard = ClearPostReadGuard;
+        let guard_post_a = fail_post_publish_read_for_path(canon_dir.join("PostPublishOk.pdf"));
+        let guard_post_b = fail_post_publish_read_for_path(canon_dir.join("PostPublishOther.pdf"));
+        assert!(FAIL_POST_PUBLISH_READ_PATHS
+            .lock()
+            .unwrap()
+            .contains_key(&canon_dir.join("PostPublishOk.pdf")));
+        assert!(FAIL_POST_PUBLISH_READ_PATHS
+            .lock()
+            .unwrap()
+            .contains_key(&canon_dir.join("PostPublishOther.pdf")));
+        drop(guard_post_b);
+        assert!(
+            FAIL_POST_PUBLISH_READ_PATHS
+                .lock()
+                .unwrap()
+                .contains_key(&canon_dir.join("PostPublishOk.pdf")),
+            "dropping another path's guard must keep PostPublishOk.pdf armed"
+        );
         let entry = store
             .publish_new_sheet_bytes("PostPublishOk.pdf", &post_bytes)
             .unwrap();
-        drop(_guard);
+        drop(guard_post_a);
+        assert!(!post_other.exists());
         assert_eq!(entry.path, "PostPublishOk.pdf");
         assert_eq!(entry.size_bytes, post_bytes.len() as u64);
         assert_eq!(entry.sha256, expected_sha);
