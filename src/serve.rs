@@ -7223,20 +7223,23 @@ mod tests {
         //    session consistent, AND retrying the same name succeeds once unlocked.
         #[cfg(windows)]
         {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_SHARE_READ: u32 = 0x0000_0001;
+            const FILE_SHARE_WRITE: u32 = 0x0000_0002;
             let locked_sc = base.join("LockedApiOrphan.pdf.state.json");
-            std::fs::write(
-                &locked_sc,
-                serde_json::to_vec_pretty(&json!({
-                    "pdfSha256": tpl_sha,
-                    "character": { "name": "Locked API Hero" }
-                }))
-                .unwrap(),
-            )
+            let locked_sc_bytes = serde_json::to_vec_pretty(&json!({
+                "pdfSha256": tpl_sha,
+                "character": { "name": "Locked API Hero" }
+            }))
             .unwrap();
-            let orig_perms = std::fs::metadata(&locked_sc).unwrap().permissions();
-            let mut ro_perms = orig_perms.clone();
-            ro_perms.set_readonly(true);
-            std::fs::set_permissions(&locked_sc, ro_perms).unwrap();
+            std::fs::write(&locked_sc, &locked_sc_bytes).unwrap();
+            // Hold a real Windows handle denying FILE_SHARE_DELETE (read/write sharing only)
+            // so `fs::remove_file` deterministically fails while the sidecar stays readable.
+            let lock_handle = std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                .open(&locked_sc)
+                .unwrap();
 
             let (st_locked, body_locked) = post_json(
                 &app,
@@ -7254,11 +7257,12 @@ mod tests {
                 "unremovable orphan must fail cleanly: {body_locked}"
             );
             assert!(!base.join("LockedApiOrphan.pdf").exists());
+            assert_eq!(std::fs::read(&locked_sc).unwrap(), locked_sc_bytes);
             let (st_sess, sess) = get_json(&app, "/api/session/state").await;
             assert_eq!(st_sess, StatusCode::OK);
             assert_eq!(sess["path"], "OrphanPrimary.pdf");
 
-            std::fs::set_permissions(&locked_sc, orig_perms).unwrap();
+            drop(lock_handle);
             let (st_retry, retry_body) = post_json(
                 &app,
                 "/api/sheets/new",
@@ -7276,6 +7280,7 @@ mod tests {
             );
             assert_eq!(retry_body["sheet"]["has_state_sidecar"], false);
             assert!(retry_body["sheet"]["character_name"].is_null());
+            assert!(!locked_sc.exists());
         }
         #[cfg(unix)]
         {

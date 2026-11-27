@@ -4045,20 +4045,23 @@ mod tests {
         //     the same name succeeds cleanly once the orphan is unlocked/removable.
         #[cfg(windows)]
         {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_SHARE_READ: u32 = 0x0000_0001;
+            const FILE_SHARE_WRITE: u32 = 0x0000_0002;
             let locked_orphan = dir.join("LockedOrphan.pdf.state.json");
-            fs::write(
-                &locked_orphan,
-                serde_json::to_vec_pretty(&json!({
-                    "pdfSha256": tpl.sha256,
-                    "character": { "name": "Locked Stale Hero" }
-                }))
-                .unwrap(),
-            )
+            let locked_orphan_bytes = serde_json::to_vec_pretty(&json!({
+                "pdfSha256": tpl.sha256,
+                "character": { "name": "Locked Stale Hero" }
+            }))
             .unwrap();
-            let orig_perms = fs::metadata(&locked_orphan).unwrap().permissions();
-            let mut ro_perms = orig_perms.clone();
-            ro_perms.set_readonly(true);
-            fs::set_permissions(&locked_orphan, ro_perms).unwrap();
+            fs::write(&locked_orphan, &locked_orphan_bytes).unwrap();
+            // Hold a real Windows handle denying FILE_SHARE_DELETE (read/write sharing only)
+            // so `fs::remove_file` deterministically fails while the sidecar stays readable.
+            let lock_handle = fs::OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                .open(&locked_orphan)
+                .unwrap();
             let locked_err = store
                 .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "LockedOrphan")
                 .unwrap_err();
@@ -4070,7 +4073,16 @@ mod tests {
                 !dir.join("LockedOrphan.pdf").exists(),
                 "destination PDF must not be published when orphaned sidecar cannot be removed"
             );
-            fs::set_permissions(&locked_orphan, orig_perms).unwrap();
+            assert_eq!(fs::read(&locked_orphan).unwrap(), locked_orphan_bytes);
+            assert!(
+                !store
+                    .list_sheets()
+                    .unwrap()
+                    .iter()
+                    .any(|s| s.path == "LockedOrphan.pdf"),
+                "failed create must not appear in sheet listing"
+            );
+            drop(lock_handle);
             let retried = store
                 .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "LockedOrphan")
                 .unwrap();
