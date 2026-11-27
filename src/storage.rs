@@ -259,7 +259,7 @@ impl SheetStore {
         pdf_path.with_file_name(format!("{stem}.state.json"))
     }
 
-    fn invalidate_sidecars_for(pdf_path: &Path) {
+    fn invalidate_sidecars_for(pdf_path: &Path) -> Result<()> {
         for sc in [
             Self::sidecar_path_for(pdf_path),
             Self::legacy_sidecar_path_for(pdf_path),
@@ -279,8 +279,18 @@ impl SheetStore {
             {
                 continue;
             }
-            let _ = fs::remove_file(&sc);
+            match fs::remove_file(&sc) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    return Err(anyhow::Error::new(err).context(format!(
+                        "failed to remove stale sidecar {}; delete or unlock it before retrying",
+                        sc.display()
+                    )));
+                }
+            }
         }
+        Ok(())
     }
 
     pub fn list_sheets(&self) -> Result<Vec<SheetEntry>> {
@@ -357,9 +367,16 @@ impl SheetStore {
                 .publish_replace(&abs)
                 .with_context(|| format!("failed replacing {}", abs.display()))?;
             // Invalidate any previous sidecar metadata so stale character details are not advertised.
-            Self::invalidate_sidecars_for(&abs);
+            let _ = Self::invalidate_sidecars_for(&abs);
             sync_parent_dir(&abs);
         } else {
+            if fs::symlink_metadata(&abs).is_ok() {
+                bail!("sheet already exists: {normalized} (pass overwrite=true to replace)");
+            }
+            // Clear any orphaned destination sidecar BEFORE atomic publication so if an
+            // orphan cannot be removed (e.g. read-only/locked), creation fails cleanly
+            // without publishing `abs` or attaching stale metadata.
+            Self::invalidate_sidecars_for(&abs)?;
             if let Err(err) = staged.publish_create_new(&abs) {
                 if err
                     .downcast_ref::<std::io::Error>()
@@ -370,10 +387,6 @@ impl SheetStore {
                 }
                 return Err(err);
             }
-            // Invalidate any orphaned destination sidecar metadata (primary or legacy)
-            // left behind after an external deletion so stale character details are never
-            // attached to a newly created sheet.
-            Self::invalidate_sidecars_for(&abs);
             sync_parent_dir(&abs);
         }
         sheet_entry_from_path(&self.root, &abs)
@@ -3834,6 +3847,66 @@ mod tests {
                 .unwrap();
             assert!(!sibling_lower_listed.has_state_sidecar);
             assert_eq!(sibling_lower_listed.character_name, None);
+        }
+
+        // 8. Unremovable orphaned sidecar returns an error instead of silently attaching
+        //    stale metadata to a new character.
+        #[cfg(windows)]
+        {
+            let locked_orphan = dir.join("LockedOrphan.pdf.state.json");
+            fs::write(
+                &locked_orphan,
+                serde_json::to_vec_pretty(&json!({
+                    "pdfSha256": tpl.sha256,
+                    "character": { "name": "Locked Stale Hero" }
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            let mut perms = fs::metadata(&locked_orphan).unwrap().permissions();
+            perms.set_readonly(true);
+            fs::set_permissions(&locked_orphan, perms).unwrap();
+            let locked_err = store
+                .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "LockedOrphan")
+                .unwrap_err();
+            assert!(
+                format!("{locked_err:#}").contains("failed to remove stale sidecar"),
+                "expected stale sidecar removal error, got: {locked_err:#}"
+            );
+            assert!(
+                !dir.join("LockedOrphan.pdf").exists(),
+                "destination PDF must not be published when orphaned sidecar cannot be removed"
+            );
+            let mut perms = fs::metadata(&locked_orphan).unwrap().permissions();
+            perms.set_readonly(false);
+            fs::set_permissions(&locked_orphan, perms).unwrap();
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let ro_dir = dir.join("readonly-orphan-dir");
+            fs::create_dir_all(&ro_dir).unwrap();
+            let locked_orphan = ro_dir.join("LockedOrphan.pdf.state.json");
+            fs::write(
+                &locked_orphan,
+                serde_json::to_vec_pretty(&json!({
+                    "pdfSha256": tpl.sha256,
+                    "character": { "name": "Locked Stale Hero" }
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            fs::set_permissions(&ro_dir, fs::Permissions::from_mode(0o555)).unwrap();
+            // Skip assertion only when running as UID 0 (root bypasses 0555 dir checks).
+            let res = SheetStore::invalidate_sidecars_for(&ro_dir.join("LockedOrphan.pdf"));
+            fs::set_permissions(&ro_dir, fs::Permissions::from_mode(0o755)).unwrap();
+            if locked_orphan.exists() {
+                let err = res.unwrap_err();
+                assert!(
+                    format!("{err:#}").contains("failed to remove stale sidecar"),
+                    "expected stale sidecar removal error, got: {err:#}"
+                );
+            }
         }
 
         let _ = fs::remove_dir_all(&dir);
