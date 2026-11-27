@@ -3887,24 +3887,40 @@ mod tests {
             let ro_dir = dir.join("readonly-orphan-dir");
             fs::create_dir_all(&ro_dir).unwrap();
             let locked_orphan = ro_dir.join("LockedOrphan.pdf.state.json");
-            fs::write(
-                &locked_orphan,
-                serde_json::to_vec_pretty(&json!({
-                    "pdfSha256": tpl.sha256,
-                    "character": { "name": "Locked Stale Hero" }
-                }))
-                .unwrap(),
-            )
+            let locked_orphan_bytes = serde_json::to_vec_pretty(&json!({
+                "pdfSha256": tpl.sha256,
+                "character": { "name": "Locked Stale Hero" }
+            }))
             .unwrap();
+            fs::write(&locked_orphan, &locked_orphan_bytes).unwrap();
+            // Stage the upload while the directory is writable, then make the directory
+            // read-only so `commit_staged_upload` deterministically hits the failed
+            // `remove_file` path inside `invalidate_sidecars_for` BEFORE `publish_create_new`.
+            let (norm, mut staged) = store
+                .start_staged_upload("readonly-orphan-dir/LockedOrphan.pdf")
+                .unwrap();
+            staged.write_chunk(&tpl_bytes).unwrap();
             fs::set_permissions(&ro_dir, fs::Permissions::from_mode(0o555)).unwrap();
-            // Skip assertion only when running as UID 0 (root bypasses 0555 dir checks).
-            let res = SheetStore::invalidate_sidecars_for(&ro_dir.join("LockedOrphan.pdf"));
+            let commit_res = store.commit_staged_upload(&norm, staged, false);
             fs::set_permissions(&ro_dir, fs::Permissions::from_mode(0o755)).unwrap();
+            // Skip failure assertion only when running as UID 0 (root bypasses 0555 dir checks).
             if locked_orphan.exists() {
-                let err = res.unwrap_err();
+                let err = commit_res.unwrap_err();
                 assert!(
                     format!("{err:#}").contains("failed to remove stale sidecar"),
                     "expected stale sidecar removal error, got: {err:#}"
+                );
+                assert!(
+                    !ro_dir.join("LockedOrphan.pdf").exists(),
+                    "destination PDF must not be published when orphaned sidecar removal fails"
+                );
+                assert_eq!(fs::read(&locked_orphan).unwrap(), locked_orphan_bytes);
+                let listed_after_fail = store.list_sheets().unwrap();
+                assert!(
+                    !listed_after_fail
+                        .iter()
+                        .any(|s| s.path == "readonly-orphan-dir/LockedOrphan.pdf"),
+                    "failed create must not appear in sheet listing"
                 );
             }
         }

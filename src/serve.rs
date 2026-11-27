@@ -7113,6 +7113,182 @@ mod tests {
             assert!(entry["level"].is_null());
         }
 
+        // 3. Double-extension ownership in both directions via HTTP API:
+        //    - Creating `DoubleHero.pdf.pdf` preserves `DoubleHero.pdf.state.json` and
+        //      returns clean metadata for `DoubleHero.pdf.pdf`.
+        //    - Creating `RevDouble.pdf` preserves `RevDouble.pdf.pdf`'s legacy
+        //      `RevDouble.pdf.state.json` and returns clean metadata for `RevDouble.pdf`.
+        let tpl_bytes = std::fs::read(&tpl_path).unwrap();
+        std::fs::write(base.join("DoubleHero.pdf"), &tpl_bytes).unwrap();
+        let double_primary_sc = base.join("DoubleHero.pdf.state.json");
+        let double_primary_bytes = serde_json::to_vec_pretty(&json!({
+            "schema": "mpmb-sheet-state/v1",
+            "pdfFileName": "DoubleHero.pdf",
+            "pdfSha256": tpl_sha,
+            "character": { "name": "Existing DoubleHero", "level": "10" }
+        }))
+        .unwrap();
+        std::fs::write(&double_primary_sc, &double_primary_bytes).unwrap();
+
+        let (st_dbl, created_dbl) = post_json(
+            &app,
+            "/api/sheets/new",
+            json!({
+                "template": "templates/MPMB-2024-Blank.pdf",
+                "name": "DoubleHero.pdf.pdf",
+                "open": false
+            }),
+        )
+        .await;
+        assert_eq!(
+            st_dbl,
+            StatusCode::CREATED,
+            "create DoubleHero.pdf.pdf failed: {created_dbl}"
+        );
+        assert_eq!(created_dbl["sheet"]["has_state_sidecar"], false);
+        assert!(created_dbl["sheet"]["character_name"].is_null());
+        assert_eq!(
+            std::fs::read(&double_primary_sc).unwrap(),
+            double_primary_bytes,
+            "DoubleHero.pdf.state.json bytes must remain untouched"
+        );
+
+        std::fs::write(base.join("RevDouble.pdf.pdf"), &tpl_bytes).unwrap();
+        let rev_legacy_sc = base.join("RevDouble.pdf.state.json");
+        let rev_legacy_bytes = serde_json::to_vec_pretty(&json!({
+            "pdfSha256": tpl_sha,
+            "character": { "name": "Existing RevDouble Legacy", "level": "15" }
+        }))
+        .unwrap();
+        std::fs::write(&rev_legacy_sc, &rev_legacy_bytes).unwrap();
+
+        let (st_rev, created_rev) = post_json(
+            &app,
+            "/api/sheets/new",
+            json!({
+                "template": "templates/MPMB-2024-Blank.pdf",
+                "name": "RevDouble",
+                "open": false
+            }),
+        )
+        .await;
+        assert_eq!(
+            st_rev,
+            StatusCode::CREATED,
+            "create RevDouble failed: {created_rev}"
+        );
+        assert_eq!(created_rev["sheet"]["has_state_sidecar"], false);
+        assert!(created_rev["sheet"]["character_name"].is_null());
+        assert_eq!(
+            std::fs::read(&rev_legacy_sc).unwrap(),
+            rev_legacy_bytes,
+            "RevDouble.pdf.state.json bytes must remain untouched"
+        );
+
+        // 4. Unremovable orphaned sidecar via HTTP API keeps disk, listing, and active
+        //    session consistent (Windows read-only sidecar file; Unix read-only subdir).
+        #[cfg(windows)]
+        {
+            let locked_sc = base.join("LockedApiOrphan.pdf.state.json");
+            std::fs::write(
+                &locked_sc,
+                serde_json::to_vec_pretty(&json!({
+                    "pdfSha256": tpl_sha,
+                    "character": { "name": "Locked API Hero" }
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            let mut perms = std::fs::metadata(&locked_sc).unwrap().permissions();
+            perms.set_readonly(true);
+            std::fs::set_permissions(&locked_sc, perms).unwrap();
+
+            let (st_locked, body_locked) = post_json(
+                &app,
+                "/api/sheets/new",
+                json!({
+                    "template": "templates/MPMB-2024-Blank.pdf",
+                    "name": "LockedApiOrphan",
+                    "open": true
+                }),
+            )
+            .await;
+            assert_eq!(
+                st_locked,
+                StatusCode::BAD_REQUEST,
+                "unremovable orphan must fail cleanly: {body_locked}"
+            );
+            assert!(!base.join("LockedApiOrphan.pdf").exists());
+            let (st_sess, sess) = get_json(&app, "/api/session/state").await;
+            assert_eq!(st_sess, StatusCode::OK);
+            assert_eq!(sess["path"], "OrphanPrimary.pdf");
+
+            let mut perms = std::fs::metadata(&locked_sc).unwrap().permissions();
+            perms.set_readonly(false);
+            std::fs::set_permissions(&locked_sc, perms).unwrap();
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let ro_sub = base.join("locked-api-sub");
+            std::fs::create_dir_all(&ro_sub).unwrap();
+            let locked_sc = ro_sub.join("LockedApiOrphan.pdf.state.json");
+            std::fs::write(
+                &locked_sc,
+                serde_json::to_vec_pretty(&json!({
+                    "pdfSha256": tpl_sha,
+                    "character": { "name": "Locked API Hero" }
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            std::fs::set_permissions(&ro_sub, std::fs::Permissions::from_mode(0o555)).unwrap();
+            let (st_locked, body_locked) = post_json(
+                &app,
+                "/api/sheets/new",
+                json!({
+                    "template": "templates/MPMB-2024-Blank.pdf",
+                    "name": "locked-api-sub/LockedApiOrphan",
+                    "open": true
+                }),
+            )
+            .await;
+            std::fs::set_permissions(&ro_sub, std::fs::Permissions::from_mode(0o755)).unwrap();
+            if locked_sc.exists() {
+                assert_eq!(
+                    st_locked,
+                    StatusCode::BAD_REQUEST,
+                    "unremovable orphan must fail cleanly: {body_locked}"
+                );
+                assert!(!ro_sub.join("LockedApiOrphan.pdf").exists());
+                let (st_sess, sess) = get_json(&app, "/api/session/state").await;
+                assert_eq!(st_sess, StatusCode::OK);
+                assert_eq!(sess["path"], "OrphanPrimary.pdf");
+            }
+        }
+
+        let (st_final, list_final) = get_json(&app, "/api/sheets").await;
+        assert_eq!(st_final, StatusCode::OK);
+        let chars_final = list_final["characters"].as_array().unwrap();
+        let double_orig = chars_final
+            .iter()
+            .find(|c| c["path"] == "DoubleHero.pdf")
+            .unwrap();
+        assert_eq!(double_orig["has_state_sidecar"], true);
+        assert_eq!(double_orig["character_name"], "Existing DoubleHero");
+        for clean_name in ["DoubleHero.pdf.pdf", "RevDouble.pdf"] {
+            let entry = chars_final
+                .iter()
+                .find(|c| c["path"] == clean_name)
+                .unwrap();
+            assert_eq!(entry["has_state_sidecar"], false);
+            assert!(entry["character_name"].is_null());
+        }
+        assert!(!chars_final
+            .iter()
+            .any(|c| c["path"] == "LockedApiOrphan.pdf"
+                || c["path"] == "locked-api-sub/LockedApiOrphan.pdf"));
+
         let _ = std::fs::remove_dir_all(&base);
     }
 }
