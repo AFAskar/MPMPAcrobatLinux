@@ -202,7 +202,7 @@
             : msg.interaction;
           openAcrobatInteraction(inter);
         } else if (msg.type === 'interaction_cleared') {
-          if (msg.serverInstanceId && appState.retiredServerInstanceIds.has(msg.serverInstanceId)) {
+          if (msg.serverInstanceId && !adoptServerInstance(msg.serverInstanceId)) {
             return;
           }
           closeAcrobatModal(msg.id || null, msg.serverInstanceId || null);
@@ -288,28 +288,34 @@
       : null;
   }
 
+  function adoptServerInstance(inst) {
+    if (typeof inst !== 'string' || !inst) return true;
+    if (appState.retiredServerInstanceIds.has(inst)) {
+      return false;
+    }
+    if (appState.lastServerInstanceId && appState.lastServerInstanceId !== inst) {
+      appState.retiredServerInstanceIds.add(appState.lastServerInstanceId);
+      appState.lastStateSeq = 0;
+    }
+    if (appState.activeInteraction) {
+      const activeInst = interactionServerInst(appState.activeInteraction);
+      if (activeInst && activeInst !== inst) {
+        appState.retiredServerInstanceIds.add(activeInst);
+        closeAcrobatModal();
+      }
+    }
+    appState.lastServerInstanceId = inst;
+    return true;
+  }
+
   function applySessionState(state) {
     if (!state) return false;
     const nextServerInst =
       typeof state.serverInstanceId === 'string' && state.serverInstanceId
         ? state.serverInstanceId
         : '';
-    if (nextServerInst) {
-      if (appState.retiredServerInstanceIds.has(nextServerInst)) {
-        return false;
-      }
-      if (appState.lastServerInstanceId && appState.lastServerInstanceId !== nextServerInst) {
-        appState.retiredServerInstanceIds.add(appState.lastServerInstanceId);
-        appState.lastStateSeq = 0;
-      }
-      if (appState.activeInteraction) {
-        const activeInst = interactionServerInst(appState.activeInteraction);
-        if (activeInst && activeInst !== nextServerInst) {
-          appState.retiredServerInstanceIds.add(activeInst);
-          closeAcrobatModal();
-        }
-      }
-      appState.lastServerInstanceId = nextServerInst;
+    if (!adoptServerInstance(nextServerInst)) {
+      return false;
     }
     if (state.busy && !state.path) {
       const busySeq =
@@ -1101,10 +1107,8 @@
 
   function openAcrobatInteraction(interaction) {
     if (!interaction || !interaction.id) return false;
-    if (
-      interaction.serverInstanceId &&
-      appState.retiredServerInstanceIds.has(interaction.serverInstanceId)
-    ) {
+    const nextInst = interactionServerInst(interaction);
+    if (nextInst && appState.retiredServerInstanceIds.has(nextInst)) {
       return false;
     }
     const key = interactionKey(interaction);
@@ -1114,12 +1118,12 @@
     // Preserve in-progress user input if a duplicate delivery arrives for the
     // exact same active interaction ID (e.g. HTTP 202 arriving after WS).
     if (appState.activeInteraction && interactionKey(appState.activeInteraction) === key) {
+      adoptServerInstance(nextInst);
       $('acrobat-modal').classList.remove('hidden');
       return true;
     }
     if (appState.activeInteraction) {
       const curInst = interactionServerInst(appState.activeInteraction);
-      const nextInst = interactionServerInst(interaction);
       const sameInst = !curInst || !nextInst || curInst === nextInst;
       const curSeq = interactionSeq(appState.activeInteraction);
       const nextSeq = interactionSeq(interaction);
@@ -1128,9 +1132,14 @@
       if (sameInst && curSeq !== null && nextSeq !== null && nextSeq <= curSeq) {
         return false;
       }
-      if (curInst && nextInst && curInst !== nextInst) {
-        appState.retiredServerInstanceIds.add(curInst);
-      }
+    }
+    // Adopt the interaction's server instance consistently so an authoritative WS
+    // interaction from a new server retires the previous server before any delayed
+    // state response from the old server can arrive and retire the new one.
+    if (!adoptServerInstance(nextInst)) {
+      return false;
+    }
+    if (appState.activeInteraction) {
       retireInteraction(appState.activeInteraction.id, appState.activeInteraction.serverInstanceId);
     }
     appState.activeInteraction = interaction;

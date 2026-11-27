@@ -2273,17 +2273,26 @@ fn canonical_dir_entry_name(path: &Path) -> std::io::Result<std::ffi::OsString> 
 
     const INVALID_HANDLE_VALUE: *mut std::ffi::c_void = -1isize as *mut std::ffi::c_void;
 
-    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
-    if wide
-        .iter()
-        .any(|&c| c == u16::from(b'*') || c == u16::from(b'?'))
-    {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "path contains wildcard characters",
-        ));
+    // Validate wildcards ONLY in actual path components — never in the Win32
+    // verbatim prefix (`\\?\` or `\\?\UNC\...`) produced by `Path::canonicalize()`.
+    for comp in path.components() {
+        if let std::path::Component::Normal(seg) = comp {
+            if seg
+                .encode_wide()
+                .any(|c| c == u16::from(b'*') || c == u16::from(b'?'))
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "path component contains wildcard characters",
+                ));
+            }
+        }
     }
-    wide.push(0);
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
 
     let mut data = std::mem::MaybeUninit::<Win32FindDataW>::zeroed();
     // SAFETY: `wide` is null-terminated UTF-16 and `data` is a valid `Win32FindDataW` buffer.
@@ -5167,6 +5176,33 @@ mod tests {
                 file_identity(&ntfs_sc).unwrap(),
                 file_identity(&alias_sc).unwrap(),
                 "aliased sidecar paths must report identical 128-bit FileIdInfo"
+            );
+            // Verify `canonical_dir_entry_name` works with canonicalized Win32 verbatim
+            // paths (`\\?\...`) produced by `SheetStore::open`'s `root.canonicalize()`,
+            // while still rejecting wildcard characters in actual filename components.
+            let canon_ntfs_sc = canon_dir.join("Élodie.pdf.state.json");
+            let canon_alias_sc = canon_dir.join("élodie.pdf.state.json");
+            assert_eq!(
+                canonical_dir_entry_name(&canon_ntfs_sc).unwrap(),
+                std::ffi::OsStr::new("Élodie.pdf.state.json")
+            );
+            if has_case_alias {
+                assert_eq!(
+                    canonical_dir_entry_name(&canon_alias_sc).unwrap(),
+                    std::ffi::OsStr::new("Élodie.pdf.state.json")
+                );
+            }
+            assert_eq!(
+                canonical_dir_entry_name(&canon_dir.join("bad?name.pdf"))
+                    .unwrap_err()
+                    .kind(),
+                std::io::ErrorKind::InvalidInput
+            );
+            assert_eq!(
+                canonical_dir_entry_name(&canon_dir.join("bad*name.pdf"))
+                    .unwrap_err()
+                    .kind(),
+                std::io::ErrorKind::InvalidInput
             );
             let err_create = store
                 .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "élodie")

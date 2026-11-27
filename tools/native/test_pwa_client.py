@@ -941,6 +941,101 @@ PWA_HARNESS = textwrap.dedent(
       });
       assert.equal(appState.activeInteraction, null);
 
+      // 20: Restart ordering — client has lastServerInstanceId = srv-6 and no active modal,
+      // receives an authoritative interaction from new server srv-7 BEFORE srv-7's first state
+      // snapshot, then a delayed state snapshot from old server srv-6 arrives.
+      // Adopting srv-7 on interaction delivery must retire srv-6 so delayed state from srv-6
+      // is rejected and NEVER retires srv-7 or dismisses srv-7's prompt; subsequent srv-7
+      // state and answering srv-7's prompt must succeed cleanly.
+      assert.equal(appState.lastServerInstanceId, 'srv-6');
+      assert.equal(appState.activeInteraction, null);
+      assert.equal(
+        openAcrobatInteraction({
+          id: 'srv-7-int-2',
+          serverInstanceId: 'srv-7',
+          stateSeq: 2,
+          kind: 'alert',
+          request: { cTitle: 'Server B Prompt', cMsg: 'Arrived over WS before B state' },
+        }),
+        true,
+      );
+      assert.equal(appState.lastServerInstanceId, 'srv-7');
+      assert.equal(appState.retiredServerInstanceIds.has('srv-6'), true);
+      assert.equal(appState.retiredServerInstanceIds.has('srv-7'), false);
+      assert.equal(appState.activeInteraction && appState.activeInteraction.id, 'srv-7-int-2');
+
+      // Delayed GET /api/session/state from old server srv-6 must be rejected without retiring srv-7.
+      assert.equal(
+        applySessionState({
+          open: true,
+          serverInstanceId: 'srv-6',
+          sessionId: 'srv-6-s1',
+          stateSeq: 22,
+          path: 'CreatedA.pdf',
+          revision: 4,
+          fields: [],
+        }),
+        false,
+        'delayed state from retired server srv-6 must be ignored',
+      );
+      assert.equal(
+        appState.retiredServerInstanceIds.has('srv-7'),
+        false,
+        'delayed srv-6 state must NEVER retire new server srv-7',
+      );
+      assert.equal(
+        appState.activeInteraction && appState.activeInteraction.id,
+        'srv-7-int-2',
+        'delayed srv-6 state must NOT close srv-7 prompt',
+      );
+
+      // Subsequent legitimate state snapshot from srv-7 (stateSeq 1 < prompt 2) applies and keeps prompt open.
+      assert.equal(
+        applySessionState({
+          open: true,
+          serverInstanceId: 'srv-7',
+          sessionId: 'srv-7-s1',
+          stateSeq: 1,
+          path: 'ServerB.pdf',
+          revision: 1,
+          fields: [],
+        }),
+        true,
+      );
+      assert.equal(appState.sheet && appState.sheet.path, 'ServerB.pdf');
+      assert.equal(appState.activeInteraction && appState.activeInteraction.id, 'srv-7-int-2');
+
+      // Answering srv-7's prompt succeeds and applies srv-7's post-prompt state (stateSeq 3).
+      let answeredSrv7 = false;
+      fetchHandler = async (path, opts) => {
+        if (path === '/api/session/interaction/srv-7-int-2') {
+          const body = JSON.parse(opts.body);
+          assert.equal(body.button, 1);
+          answeredSrv7 = true;
+          return jsonResp({
+            status: 'ok',
+            state: {
+              open: true,
+              serverInstanceId: 'srv-7',
+              sessionId: 'srv-7-s1',
+              stateSeq: 3,
+              path: 'ServerB.pdf',
+              revision: 2,
+              fields: [],
+            },
+          });
+        }
+        if (path === '/api/sheets') {
+          return jsonResp({ sheets: [], templates: [], characters: [], git: null });
+        }
+        return jsonResp({ status: 'ok' });
+      };
+      await submitInteraction({ button: 1 });
+      assert.equal(answeredSrv7, true, 'srv-7 prompt answer must be submitted');
+      assert.equal(appState.activeInteraction, null);
+      assert.equal(appState.sheet && appState.sheet.sessionId, 'srv-7-s1');
+      assert.equal(appState.lastStateSeq, 3);
+
       console.log('PWA_CLIENT_REGRESSIONS_OK');
     })().catch((err) => {
       console.error(err);
