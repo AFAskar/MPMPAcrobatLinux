@@ -505,7 +505,6 @@ enum WorkerCommand {
         done: watch::Sender<Option<JobOutcome>>,
         template: String,
         name: String,
-        overwrite: bool,
         force: bool,
         discard: Option<DiscardTarget>,
         expected_session: Option<String>,
@@ -852,7 +851,6 @@ impl SheetWorker {
                 done,
                 template,
                 name,
-                overwrite,
                 force,
                 discard,
                 expected_session,
@@ -861,7 +859,6 @@ impl SheetWorker {
                     w.create_and_open_from_template(
                         &template,
                         &name,
-                        overwrite,
                         force,
                         discard.as_ref(),
                         expected_session.as_deref(),
@@ -1226,36 +1223,10 @@ impl SheetWorker {
         &mut self,
         template_rel: &str,
         character_name: &str,
-        overwrite: bool,
         force: bool,
         discard: Option<&DiscardTarget>,
         expected_session: Option<&str>,
     ) -> Result<Value> {
-        self.create_and_open_from_template_with_rollback(
-            template_rel,
-            character_name,
-            overwrite,
-            force,
-            discard,
-            expected_session,
-            |store, path, sha| store.remove_sheet_if_sha(path, sha),
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn create_and_open_from_template_with_rollback<F>(
-        &mut self,
-        template_rel: &str,
-        character_name: &str,
-        overwrite: bool,
-        force: bool,
-        discard: Option<&DiscardTarget>,
-        expected_session: Option<&str>,
-        rollback_fn: F,
-    ) -> Result<Value>
-    where
-        F: FnOnce(&SheetStore, &str, &str) -> Result<bool>,
-    {
         if let Some(conflict) = self.check_discard_guard(
             "creating and opening a new character",
             force,
@@ -1264,58 +1235,72 @@ impl SheetWorker {
         ) {
             return Ok(conflict);
         }
-        let (entry, existed_before) =
-            self.store
-                .create_sheet_from_template_ex(template_rel, character_name, overwrite)?;
-        let mut opened = match self.open_sheet_unchecked_inner(&entry.path, false) {
-            Ok(val) => {
-                self.sync_tracker.mark_dirty();
-                val
-            }
-            Err(err) => {
-                if !existed_before {
-                    match rollback_fn(&self.store, &entry.path, &entry.sha256) {
-                        Ok(true) => return Err(err),
-                        Ok(false) => {
-                            self.sync_tracker.mark_dirty();
-                            bail!(
-                                "created '{}' from template, failed to open ({err:#}), and could not roll back because the file on disk changed; refresh the library to inspect or delete '{}'",
-                                entry.path,
-                                entry.path
-                            );
-                        }
-                        Err(rm_err) => {
-                            self.sync_tracker.mark_dirty();
-                            bail!(
-                                "created '{}' from template, failed to open ({err:#}), and failed to roll back the new file ({rm_err:#}); refresh the library to inspect or delete '{}'",
-                                entry.path,
-                                entry.path
-                            );
-                        }
-                    }
-                } else {
-                    self.sync_tracker.mark_dirty();
-                    bail!(
-                        "overwrote '{}' from template, but failed to open it ({err:#}); refresh the library to inspect '{}'",
-                        entry.path,
-                        entry.path
-                    );
-                }
-            }
-        };
-        if let Some(obj) = opened.as_object_mut() {
-            obj.insert("sheet".into(), serde_json::to_value(&entry)?);
+        // Validate template + destination and fast-fail if the destination already exists
+        // BEFORE running startup scripts or publishing anything to disk.
+        let (dest_norm, dest_abs, bytes, sha) = self
+            .store
+            .prepare_template_copy(template_rel, character_name)?;
+
+        // Run PDF parse, QuickJS startup, readiness check, and initial state extraction
+        // completely in memory BEFORE publishing the file to disk. That way failed
+        // startup or aborted dialogs never leave an orphaned file on disk and never need
+        // conditional rollback (avoiding any same-content concurrent-writer deletion race).
+        let pdf = Arc::new(Pdf::open_bytes(dest_abs, &bytes)?);
+        let rt = Runtime::new_with_capabilities(
+            &pdf,
+            vec![],
+            vec![],
+            true,
+            None,
+            None,
+            Some(self.bridge.clone()),
+            self.capabilities,
+        )?;
+        rt.ready()?;
+        let revision = rt
+            .eval("__host.revision")
+            .ok()
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let extracted = rt.eval(EXTRACT_STATE_JS)?;
+        if !extracted.is_object() {
+            bail!("state extraction did not return an object");
         }
-        Ok(opened)
+
+        // Only now atomically publish with create-only semantics (O_CREAT|O_EXCL).
+        // If another writer created the destination while startup was pending, this
+        // fails with 409 Conflict without touching their file or mutating self.active.
+        let entry = self.store.publish_new_sheet_bytes(&dest_norm, &bytes)?;
+        self.session_seq += 1;
+        let session_id = format!("{}-s{}", self.server_instance_id, self.session_seq);
+        let active_sheet = ActiveSheet {
+            rel_path: entry.path.clone(),
+            session_id,
+            pdf,
+            rt,
+            disk_sha256: sha,
+            revision,
+            dirty_since_save: false,
+            sidecar_dirty: false,
+            last_tick: Instant::now(),
+            projected: None,
+            page_pngs: BTreeMap::new(),
+            page_sizes: BTreeMap::new(),
+        };
+        self.active = Some(active_sheet);
+        self.last_save_conflict = None;
+        self.sync_tracker.mark_dirty();
+        let state = self.assemble_active_state_payload(extracted)?;
+        Ok(json!({
+            "status": "ok",
+            "sheet": entry,
+            "state": state,
+        }))
     }
 
     fn open_sheet_unchecked(&mut self, rel_path: &str) -> Result<Value> {
-        self.open_sheet_unchecked_inner(rel_path, true)
-    }
-
-    fn open_sheet_unchecked_inner(&mut self, rel_path: &str, pull_if_git: bool) -> Result<Value> {
         // Pull latest changes opportunistically if Git is enabled and clean.
-        if pull_if_git && self.store.git_enabled() {
+        if self.store.git_enabled() {
             let _ = self.store.git_pull();
         }
         let (norm, abs, bytes, sha) = self.store.read_sheet_bytes(rel_path)?;
@@ -1369,11 +1354,11 @@ impl SheetWorker {
     }
 
     fn build_state_payload(&self) -> Result<Value> {
-        let git = self.store.git_status()?;
-        let active_interaction = self.bridge.active_public();
-        let state_seq = self.bridge.next_state_seq();
-        let dirty_since_sync = self.sync_tracker.is_dirty();
         let Some(sh) = &self.active else {
+            let git = self.store.git_status()?;
+            let active_interaction = self.bridge.active_public();
+            let state_seq = self.bridge.next_state_seq();
+            let dirty_since_sync = self.sync_tracker.is_dirty();
             return Ok(json!({
                 "open": false,
                 "serverInstanceId": self.server_instance_id,
@@ -1384,7 +1369,16 @@ impl SheetWorker {
                 "activeInteraction": active_interaction,
             }));
         };
-        let mut extracted = sh.rt.eval(EXTRACT_STATE_JS)?;
+        let extracted = sh.rt.eval(EXTRACT_STATE_JS)?;
+        self.assemble_active_state_payload(extracted)
+    }
+
+    fn assemble_active_state_payload(&self, mut extracted: Value) -> Result<Value> {
+        let sh = self.active.as_ref().context("no sheet is open")?;
+        let git = self.store.git_status()?;
+        let active_interaction = self.bridge.active_public();
+        let state_seq = self.bridge.next_state_seq();
+        let dirty_since_sync = self.sync_tracker.is_dirty();
         let diagnostics = sh.rt.diagnostics().unwrap_or(Value::Null);
         let obj = extracted
             .as_object_mut()
@@ -2625,13 +2619,18 @@ async fn handle_create_from_template(
     if !state.check_auth(&headers, None) {
         return err_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
+    if req.overwrite {
+        return err_response(
+            StatusCode::BAD_REQUEST,
+            "creating a new character from a template is create-only and does not support overwrite=true; choose a new character name or use /api/sheets/upload",
+        );
+    }
     if !req.open {
         let store = Arc::clone(&state.store);
         let template = req.template;
         let name = req.name;
-        let overwrite = req.overwrite;
         return match tokio::task::spawn_blocking(move || {
-            store.create_sheet_from_template(&template, &name, overwrite)
+            store.create_sheet_from_template(&template, &name)
         })
         .await
         {
@@ -2664,7 +2663,6 @@ async fn handle_create_from_template(
             done,
             template: req.template,
             name: req.name,
-            overwrite: req.overwrite,
             force: req.force,
             discard: req.discard,
             expected_session: req.session,
@@ -6529,7 +6527,7 @@ mod tests {
         assert!(base.join("Bryn.pdf").is_file());
 
         // 6. If opening the newly created character fails (e.g. broken template script),
-        //    the newly copied file is rolled back so retries never hit a stale duplicate.
+        //    nothing is published to disk so retries never hit a stale duplicate.
         make_scripted_hp_pdf(
             &base.join("templates/Broken-Startup.pdf"),
             "10",
@@ -6553,7 +6551,7 @@ mod tests {
         );
         assert!(
             !base.join("Cora.pdf").exists(),
-            "failed create+open must roll back newly copied file"
+            "failed create+open must not publish Cora.pdf to disk"
         );
         let (st, fail2) = post_json(
             &app,
@@ -6568,56 +6566,96 @@ mod tests {
         assert_eq!(
             st,
             StatusCode::BAD_REQUEST,
-            "retry after rollback must not fail with duplicate 409: {fail2}"
+            "retry after failed startup must not fail with duplicate 409: {fail2}"
         );
 
-        // 7. overwrite: true on a non-existent destination still rolls back when open fails.
-        let (st, fail_ow_new) = post_json(
+        // 7. POST /api/sheets/new is unconditionally create-only: overwrite:true is rejected
+        //    with 400 BEFORE touching disk or active session, for both open:true and open:false,
+        //    preserving preexisting PDF bytes and sidecars intact.
+        let existing_bytes_before = std::fs::read(base.join("existing.pdf")).unwrap();
+        let sidecar_path = base.join("existing.pdf.state.json");
+        let sidecar_before = serde_json::to_vec_pretty(&json!({
+            "schema": 1,
+            "character": {"name": "Existing Hero", "level": "5"}
+        }))
+        .unwrap();
+        std::fs::write(&sidecar_path, &sidecar_before).unwrap();
+
+        // Open existing.pdf so we also verify the active session stays intact.
+        let (st, _) = post_json(&app, "/api/session/open", json!({"path": "existing.pdf"})).await;
+        assert_eq!(st, StatusCode::OK);
+
+        for open_mode in [true, false] {
+            let (st, reject_ow) = post_json(
+                &app,
+                "/api/sheets/new",
+                json!({
+                    "template": "templates/Broken-Startup.pdf",
+                    "name": "existing",
+                    "overwrite": true,
+                    "open": open_mode
+                }),
+            )
+            .await;
+            assert_eq!(
+                st,
+                StatusCode::BAD_REQUEST,
+                "overwrite:true (open={open_mode}) must be rejected: {reject_ow}"
+            );
+            assert!(
+                reject_ow["error"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("create-only"),
+                "expected create-only rejection message: {reject_ow}"
+            );
+            assert_eq!(
+                std::fs::read(base.join("existing.pdf")).unwrap(),
+                existing_bytes_before,
+                "existing.pdf bytes must remain unchanged for open={open_mode}"
+            );
+            assert_eq!(
+                std::fs::read(&sidecar_path).unwrap(),
+                sidecar_before,
+                "existing.pdf.state.json sidecar must remain unchanged for open={open_mode}"
+            );
+        }
+
+        // overwrite:true on a non-existent destination is also rejected without creating a file.
+        let (st, reject_ow_new) = post_json(
             &app,
             "/api/sheets/new",
             json!({
-                "template": "templates/Broken-Startup.pdf",
-                "name": "CoraOverwriteNew",
+                "template": "templates/MPMB-2024-Blank.pdf",
+                "name": "NeverCreated",
                 "overwrite": true,
                 "open": true
             }),
         )
         .await;
-        assert_eq!(
-            st,
-            StatusCode::BAD_REQUEST,
-            "expected open failure: {fail_ow_new}"
-        );
-        assert!(
-            !base.join("CoraOverwriteNew.pdf").exists(),
-            "overwrite=true on a new destination must still roll back on open failure"
-        );
+        assert_eq!(st, StatusCode::BAD_REQUEST, "{reject_ow_new}");
+        assert!(!base.join("NeverCreated.pdf").exists());
 
-        // 8. overwrite: true on an existing destination that fails to open names the
-        //    overwritten path in its error response so the caller can recover.
-        let (st, fail_ow_existing) = post_json(
+        // open:false against an existing character (without overwrite) returns 409 and preserves PDF + sidecar.
+        let (st, dup_closed) = post_json(
             &app,
             "/api/sheets/new",
             json!({
-                "template": "templates/Broken-Startup.pdf",
+                "template": "templates/MPMB-2024-Blank.pdf",
                 "name": "existing",
-                "overwrite": true,
-                "open": true
+                "open": false
             }),
         )
         .await;
-        assert_eq!(st, StatusCode::BAD_REQUEST);
-        assert!(
-            fail_ow_existing["error"]
-                .as_str()
-                .unwrap_or("")
-                .contains("existing.pdf"),
-            "overwrite open failure must identify existing.pdf: {fail_ow_existing}"
+        assert_eq!(st, StatusCode::CONFLICT, "{dup_closed}");
+        assert_eq!(
+            std::fs::read(base.join("existing.pdf")).unwrap(),
+            existing_bytes_before
         );
+        assert_eq!(std::fs::read(&sidecar_path).unwrap(), sidecar_before);
 
-        // 9. If build_state_payload() fails AFTER rt.ready() succeeds, the previous
-        //    active session (Bryn.pdf) is restored intact and the new copy (Dax.pdf)
-        //    is rolled back cleanly instead of deleting an active session's PDF.
+        // 8. If EXTRACT_STATE_JS fails AFTER rt.ready() succeeds, nothing is published to disk
+        //    and the previous active session (existing.pdf) remains intact.
         make_scripted_hp_pdf(
             &base.join("templates/Broken-Extract.pdf"),
             "10",
@@ -6641,138 +6679,185 @@ mod tests {
         );
         assert!(
             !base.join("Dax.pdf").exists(),
-            "failed post-ready state extraction must roll back Dax.pdf"
+            "failed post-ready state extraction must not publish Dax.pdf"
         );
         let (st, after_state) = get_json(&app, "/api/session/state").await;
         assert_eq!(st, StatusCode::OK);
         assert_eq!(
-            after_state["path"], "Bryn.pdf",
-            "previous active session Bryn.pdf must be preserved after failed open"
+            after_state["path"], "existing.pdf",
+            "previous active session existing.pdf must be preserved after failed open"
         );
-        assert!(base.join("Bryn.pdf").is_file());
+        assert!(base.join("existing.pdf").is_file());
 
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    #[test]
-    fn template_open_rollback_ok_false_and_err_set_dirty_and_surface_recovery_error() {
+    #[tokio::test]
+    async fn template_create_does_not_publish_before_startup_and_protects_concurrent_same_content_writer(
+    ) {
         let base = std::env::temp_dir().join(format!(
-            "mpmb-serve-template-rollback-{}",
+            "mpmb-serve-template-race-{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
         ));
         std::fs::create_dir_all(base.join("templates")).unwrap();
+        make_scripted_hp_pdf(&base.join("baseline.pdf"), "20", "", None);
         make_scripted_hp_pdf(
-            &base.join("templates/Broken-Startup.pdf"),
+            &base.join("templates/Dialog-Then-Fail.pdf"),
             "10",
-            "throw new Error('broken startup');",
+            "app.alert('pause-fail'); throw new Error('startup failed after dialog');",
+            None,
+        );
+        make_scripted_hp_pdf(
+            &base.join("templates/Dialog-Then-Ok.pdf"),
+            "10",
+            "app.alert('pause-ok');",
             None,
         );
 
-        let store = Arc::new(
-            SheetStore::open(StoreConfig {
+        let cfg = ServeConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            store: StoreConfig {
                 root: base.clone(),
                 git: None,
-            })
-            .unwrap(),
-        );
-        let (events_tx, _) = broadcast::channel(8);
-        let (interaction_tx, _) = watch::channel(None);
-        let bridge = InteractionBridge::new("srv-test-rollback".into(), interaction_tx, events_tx);
-        let sync_tracker = Arc::new(StoreSyncTracker::default());
-        let mut worker = SheetWorker {
-            store: Arc::clone(&store),
-            bridge,
-            sync_tracker: Arc::clone(&sync_tracker),
-            job_seq: Arc::new(AtomicU64::new(1)),
-            server_instance_id: "srv-test-rollback".into(),
-            session_seq: 0,
-            renderer: None,
+            },
+            auth_token: None,
+            allow_unauthenticated: false,
+            git_auto_sync_secs: 0,
             autosave: false,
-            capabilities: HostCapabilities::server_restricted(),
-            active: None,
-            last_save_conflict: None,
+            default_sheet: None,
         };
+        let state = AppState::start(&cfg).unwrap();
+        let app = build_router(state);
 
-        // 1. Clean rollback (Ok(true)) removes the copy and keeps sync_tracker clean.
-        let err_clean = worker
-            .create_and_open_from_template(
-                "templates/Broken-Startup.pdf",
-                "Cora",
-                false,
-                false,
-                None,
-                None,
+        // Open baseline.pdf first so we verify active session preservation across both races.
+        let (st, _) = post_json(&app, "/api/session/open", json!({"path": "baseline.pdf"})).await;
+        assert_eq!(st, StatusCode::OK);
+
+        // A. Same-content replacement during pending startup that subsequently fails:
+        //    1) Start POST /api/sheets/new -> pauses on app.alert (202 Accepted) WITHOUT
+        //       publishing RaceFail.pdf to disk yet.
+        let (st, paused_fail) = post_json(
+            &app,
+            "/api/sheets/new",
+            json!({
+                "template": "templates/Dialog-Then-Fail.pdf",
+                "name": "RaceFail",
+                "open": true
+            }),
+        )
+        .await;
+        assert_eq!(
+            st,
+            StatusCode::ACCEPTED,
+            "expected 202 dialog pause: {paused_fail}"
+        );
+        assert!(
+            !base.join("RaceFail.pdf").exists(),
+            "destination must NOT be published before template startup finishes"
+        );
+
+        //    2) While startup is paused, a second authorized writer uploads RaceFail.pdf
+        //       with IDENTICAL template bytes.
+        let same_bytes = std::fs::read(base.join("templates/Dialog-Then-Fail.pdf")).unwrap();
+        let upload_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sheets/upload?name=RaceFail.pdf&overwrite=false")
+                    .header("content-type", "application/pdf")
+                    .body(Body::from(same_bytes.clone()))
+                    .unwrap(),
             )
-            .unwrap_err();
-        assert!(format!("{err_clean:#}").contains("broken startup"));
-        assert!(!base.join("Cora.pdf").exists());
-        assert!(
-            !sync_tracker.is_dirty(),
-            "clean rollback must not mark sync_tracker dirty"
+            .await
+            .unwrap();
+        assert_eq!(upload_resp.status(), StatusCode::CREATED);
+
+        //    3) Resume the startup dialog so the first job fails startup. Because it never
+        //       published RaceFail.pdf and performs no blind SHA-based delete, the second
+        //       writer's identical-bytes RaceFail.pdf survives intact!
+        let fail_id = paused_fail["interaction"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let (st, fail_res) = post_json(
+            &app,
+            &format!("/api/session/interaction/{fail_id}"),
+            json!({"button": 1}),
+        )
+        .await;
+        assert_eq!(
+            st,
+            StatusCode::BAD_REQUEST,
+            "expected startup failure: {fail_res}"
+        );
+        assert!(base.join("RaceFail.pdf").is_file());
+        assert_eq!(
+            std::fs::read(base.join("RaceFail.pdf")).unwrap(),
+            same_bytes,
+            "second writer's identical-content file must survive failed startup"
         );
 
-        // 2. Hash-mismatch rollback (Ok(false) via real remove_sheet_if_sha) preserves
-        //    the modified file, marks sync_tracker dirty, and names Eve.pdf in the error.
-        let external_bytes = b"%PDF-1.4\n% externally replaced\n".to_vec();
-        let external_copy = external_bytes.clone();
-        let err_mismatch = worker
-            .create_and_open_from_template_with_rollback(
-                "templates/Broken-Startup.pdf",
-                "Eve",
-                false,
-                false,
-                None,
-                None,
-                move |s, path, sha| {
-                    std::fs::write(s.root().join(path), &external_copy)?;
-                    s.remove_sheet_if_sha(path, sha)
-                },
+        // B. Competing writer during pending startup that subsequently succeeds:
+        //    1) Start POST /api/sheets/new -> pauses on app.alert (202 Accepted), no file yet.
+        let (st, paused_ok) = post_json(
+            &app,
+            "/api/sheets/new",
+            json!({
+                "template": "templates/Dialog-Then-Ok.pdf",
+                "name": "RaceOk",
+                "open": true
+            }),
+        )
+        .await;
+        assert_eq!(
+            st,
+            StatusCode::ACCEPTED,
+            "expected 202 dialog pause: {paused_ok}"
+        );
+        assert!(!base.join("RaceOk.pdf").exists());
+
+        //    2) Second authorized writer uploads RaceOk.pdf while startup is paused.
+        let writer2_bytes = std::fs::read(base.join("baseline.pdf")).unwrap();
+        let upload_resp2 = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sheets/upload?name=RaceOk.pdf&overwrite=false")
+                    .header("content-type", "application/pdf")
+                    .body(Body::from(writer2_bytes.clone()))
+                    .unwrap(),
             )
-            .unwrap_err();
-        let msg_mismatch = format!("{err_mismatch:#}");
-        assert!(
-            msg_mismatch.contains("Eve.pdf")
-                && msg_mismatch.contains("could not roll back because the file on disk changed"),
-            "unexpected mismatch rollback error: {msg_mismatch}"
-        );
-        assert!(
-            sync_tracker.is_dirty(),
-            "Ok(false) rollback must mark sync_tracker dirty"
-        );
-        assert_eq!(std::fs::read(base.join("Eve.pdf")).unwrap(), external_bytes);
+            .await
+            .unwrap();
+        assert_eq!(upload_resp2.status(), StatusCode::CREATED);
 
-        // 3. I/O rollback failure (Err) leaves Frank.pdf on disk, marks sync_tracker dirty,
-        //    and surfaces both Frank.pdf and the removal error for recovery.
-        let gen = sync_tracker.snapshot_gen();
-        assert!(sync_tracker.clear_if_unchanged(gen));
-        assert!(!sync_tracker.is_dirty());
-
-        let err_io = worker
-            .create_and_open_from_template_with_rollback(
-                "templates/Broken-Startup.pdf",
-                "Frank",
-                false,
-                false,
-                None,
-                None,
-                |_s, _path, _sha| bail!("simulated disk removal error"),
-            )
-            .unwrap_err();
-        let msg_io = format!("{err_io:#}");
-        assert!(
-            msg_io.contains("Frank.pdf")
-                && msg_io.contains("failed to roll back")
-                && msg_io.contains("simulated disk removal error"),
-            "unexpected Err rollback error: {msg_io}"
+        //    3) Resume startup dialog -> atomic create-only publish fails with 409 Conflict
+        //       without overwriting writer 2's RaceOk.pdf or switching away from baseline.pdf!
+        let ok_id = paused_ok["interaction"]["id"].as_str().unwrap().to_owned();
+        let (st, ok_conflict) = post_json(
+            &app,
+            &format!("/api/session/interaction/{ok_id}"),
+            json!({"button": 1}),
+        )
+        .await;
+        assert_eq!(
+            st,
+            StatusCode::CONFLICT,
+            "atomic create-only publish must reject racing file with 409: {ok_conflict}"
         );
-        assert!(
-            sync_tracker.is_dirty(),
-            "Err rollback must mark sync_tracker dirty"
+        assert_eq!(
+            std::fs::read(base.join("RaceOk.pdf")).unwrap(),
+            writer2_bytes,
+            "second writer's RaceOk.pdf must not be overwritten"
         );
-        assert!(base.join("Frank.pdf").is_file());
+        let (st, active_state) = get_json(&app, "/api/session/state").await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(active_state["path"], "baseline.pdf");
 
         let _ = std::fs::remove_dir_all(&base);
     }

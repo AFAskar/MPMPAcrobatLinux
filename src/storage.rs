@@ -293,32 +293,9 @@ impl SheetStore {
     pub fn commit_staged_upload(
         &self,
         rel: &str,
-        staged: StagedUpload,
-        overwrite: bool,
-    ) -> Result<SheetEntry> {
-        self.commit_staged_upload_with_existed(rel, staged, overwrite)
-            .map(|(entry, _)| entry)
-    }
-
-    fn commit_staged_upload_with_existed(
-        &self,
-        rel: &str,
-        staged: StagedUpload,
-        overwrite: bool,
-    ) -> Result<(SheetEntry, bool)> {
-        self.commit_staged_upload_with_existed_and_hook(rel, staged, overwrite, || {})
-    }
-
-    fn commit_staged_upload_with_existed_and_hook<F>(
-        &self,
-        rel: &str,
         mut staged: StagedUpload,
         overwrite: bool,
-        before_hash_capture: F,
-    ) -> Result<(SheetEntry, bool)>
-    where
-        F: FnOnce(),
-    {
+    ) -> Result<SheetEntry> {
         staged.finish()?;
         // Fully parse the staged PDF before acquiring the store lock or touching
         // any existing PDF/sidecar so truncated or corrupted uploads can never
@@ -330,20 +307,15 @@ impl SheetStore {
             fs::create_dir_all(parent)?;
         }
         // Hold the cross-process store lock until after sheet_entry_from_path()
-        // hashes the published file so another process cannot replace it in the
-        // window between publish and rollback-hash capture.
+        // hashes the published file so the returned entry describes the exact bytes
+        // published by this operation.
         let _commit_lock = acquire_store_lock(&self.root)?;
-        let existed_before = if overwrite {
-            let existed = match fs::symlink_metadata(&abs) {
-                Ok(meta) => {
-                    if meta.file_type().is_symlink() || !meta.is_file() {
-                        bail!("cannot overwrite non-regular file at {normalized}");
-                    }
-                    true
+        if overwrite {
+            if let Ok(meta) = fs::symlink_metadata(&abs) {
+                if meta.file_type().is_symlink() || !meta.is_file() {
+                    bail!("cannot overwrite non-regular file at {normalized}");
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-                Err(e) => return Err(e.into()),
-            };
+            }
             staged
                 .publish_replace(&abs)
                 .with_context(|| format!("failed replacing {}", abs.display()))?;
@@ -359,7 +331,6 @@ impl SheetStore {
                 }
             }
             sync_parent_dir(&abs);
-            existed
         } else {
             if let Err(err) = staged.publish_create_new(&abs) {
                 if err
@@ -372,30 +343,27 @@ impl SheetStore {
                 return Err(err);
             }
             sync_parent_dir(&abs);
-            false
-        };
-        before_hash_capture();
-        Ok((sheet_entry_from_path(&self.root, &abs)?, existed_before))
+        }
+        sheet_entry_from_path(&self.root, &abs)
     }
 
-    pub fn create_sheet_from_template(
+    pub fn prepare_template_copy(
         &self,
         template_rel: &str,
         character_name: &str,
-        overwrite: bool,
-    ) -> Result<SheetEntry> {
-        self.create_sheet_from_template_ex(template_rel, character_name, overwrite)
-            .map(|(entry, _)| entry)
-    }
-
-    pub fn create_sheet_from_template_ex(
-        &self,
-        template_rel: &str,
-        character_name: &str,
-        overwrite: bool,
-    ) -> Result<(SheetEntry, bool)> {
+    ) -> Result<(String, PathBuf, Vec<u8>, String)> {
         let dest_rel = normalize_new_character_path(character_name)?;
-        let (src_norm, _, bytes, _) = self.read_sheet_bytes(template_rel)?;
+        let (dest_norm, dest_abs) = {
+            let _guard = self.lock.lock().unwrap();
+            let (norm, abs) = self.resolve_safe_pdf_path(&dest_rel)?;
+            // Fast-fail before running any template startup/JavaScript when a sheet
+            // already exists at the destination path.
+            if fs::symlink_metadata(&abs).is_ok() {
+                bail!("sheet already exists: {norm}");
+            }
+            (norm, abs)
+        };
+        let (src_norm, _, bytes, sha) = self.read_sheet_bytes(template_rel)?;
         if !is_template_path(&src_norm) {
             bail!("source sheet must be a template inside templates/: {src_norm}");
         }
@@ -405,30 +373,30 @@ impl SheetStore {
         if !bytes.starts_with(b"%PDF-") {
             bail!("template file does not start with %PDF- header");
         }
-        let (dest_norm, mut staged) = self.start_staged_upload(&dest_rel)?;
-        staged.write_chunk(&bytes)?;
-        self.commit_staged_upload_with_existed(&dest_norm, staged, overwrite)
+        Ok((dest_norm, dest_abs, bytes, sha))
     }
 
-    pub fn remove_sheet_if_sha(&self, rel: &str, expected_sha256: &str) -> Result<bool> {
-        let _guard = self.lock.lock().unwrap();
-        let (_normalized, abs) = self.resolve_safe_pdf_path(rel)?;
-        let _commit_lock = acquire_store_lock(&self.root)?;
-        let meta = match fs::symlink_metadata(&abs) {
-            Ok(m) => m,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-            Err(e) => return Err(e.into()),
-        };
-        if meta.file_type().is_symlink() || !meta.is_file() {
-            return Ok(false);
+    pub fn publish_new_sheet_bytes(&self, rel: &str, bytes: &[u8]) -> Result<SheetEntry> {
+        if bytes.is_empty() || bytes.len() > MAX_PDF_BYTES {
+            bail!("PDF upload must be between 1 byte and 64 MiB");
         }
-        let current_sha = sha256_file_bounded(&abs, MAX_PDF_BYTES)?;
-        if !current_sha.eq_ignore_ascii_case(expected_sha256) {
-            return Ok(false);
+        if !bytes.starts_with(b"%PDF-") {
+            bail!("PDF file does not start with %PDF- header");
         }
-        fs::remove_file(&abs).with_context(|| format!("failed removing {}", abs.display()))?;
-        sync_parent_dir(&abs);
-        Ok(true)
+        let (dest_norm, mut staged) = self.start_staged_upload(rel)?;
+        staged.write_chunk(bytes)?;
+        // Unconditionally create-only (overwrite = false) so a racing writer's file
+        // is never overwritten or deleted.
+        self.commit_staged_upload(&dest_norm, staged, false)
+    }
+
+    pub fn create_sheet_from_template(
+        &self,
+        template_rel: &str,
+        character_name: &str,
+    ) -> Result<SheetEntry> {
+        let (dest_norm, _, bytes, _) = self.prepare_template_copy(template_rel, character_name)?;
+        self.publish_new_sheet_bytes(&dest_norm, &bytes)
     }
 
     #[cfg(test)]
@@ -3361,127 +3329,52 @@ mod tests {
             .unwrap();
 
         let created = store
-            .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "Aelar", false)
+            .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "Aelar")
             .unwrap();
         assert_eq!(created.path, "Aelar.pdf");
         assert!(!created.is_template);
         assert_eq!(created.sha256, tpl.sha256);
         assert!(!created.has_state_sidecar);
 
-        // Duplicate creation without overwrite fails cleanly.
+        // Duplicate creation always fails cleanly (create-only).
         let dup = store
-            .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "Aelar", false)
+            .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "Aelar")
             .unwrap_err();
         assert!(format!("{dup:#}").contains("already exists"));
 
         // Non-template source is rejected.
         let non_tpl = store
-            .create_sheet_from_template("Aelar.pdf", "Clone", false)
+            .create_sheet_from_template("Aelar.pdf", "Clone")
             .unwrap_err();
         assert!(format!("{non_tpl:#}").contains("must be a template"));
 
         // Destination inside templates/ is rejected.
         let bad_dest = store
-            .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "templates/Clone", false)
+            .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "templates/Clone")
             .unwrap_err();
         assert!(format!("{bad_dest:#}").contains("inside templates/"));
 
-        // create_sheet_from_template_ex reports existed_before accurately and
-        // remove_sheet_if_sha refuses to delete when the file hash no longer matches.
-        let (fresh, existed_fresh) = store
-            .create_sheet_from_template_ex("templates/MPMB-2024-Blank.pdf", "Fresh", true)
+        // prepare_template_copy fast-fails on existing destination without touching disk,
+        // and publish_new_sheet_bytes atomically refuses to overwrite an existing file.
+        let prep_dup = store
+            .prepare_template_copy("templates/MPMB-2024-Blank.pdf", "Aelar")
+            .unwrap_err();
+        assert!(format!("{prep_dup:#}").contains("already exists"));
+        let (dest_norm, _, bytes, _) = store
+            .prepare_template_copy("templates/MPMB-2024-Blank.pdf", "RaceDest")
             .unwrap();
-        assert!(!existed_fresh);
-        let (replaced, existed_replaced) = store
-            .create_sheet_from_template_ex("templates/MPMB-2024-Blank.pdf", "Fresh", true)
+        assert_eq!(dest_norm, "RaceDest.pdf");
+        assert!(!dir.join("RaceDest.pdf").exists());
+        // Simulate a competing writer creating RaceDest.pdf before publish_new_sheet_bytes.
+        let competing = valid_test_pdf("Competing");
+        store
+            .upload_sheet("RaceDest.pdf", &competing, false)
             .unwrap();
-        assert!(existed_replaced);
-        assert!(!store
-            .remove_sheet_if_sha(&replaced.path, "0000000000000000")
-            .unwrap());
-        assert!(dir.join("Fresh.pdf").is_file());
-        assert!(store
-            .remove_sheet_if_sha(&fresh.path, &fresh.sha256)
-            .unwrap());
-        assert!(!dir.join("Fresh.pdf").exists());
-
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn store_lock_remains_held_through_rollback_hash_capture_against_competing_writer() {
-        let dir = temp_dir("rollback-hash-lock");
-        let store1 = SheetStore::open(StoreConfig {
-            root: dir.clone(),
-            git: None,
-        })
-        .unwrap();
-        let store2 = SheetStore::open(StoreConfig {
-            root: dir.clone(),
-            git: None,
-        })
-        .unwrap();
-
-        let pdf_v1 = valid_test_pdf("CreatorCopy");
-        let pdf_v2 = valid_test_pdf("CompetingReplacement");
-        assert_ne!(sha256_hex(&pdf_v1), sha256_hex(&pdf_v2));
-
-        let (norm, mut staged1) = store1.start_staged_upload("Aelar.pdf").unwrap();
-        staged1.write_chunk(&pdf_v1).unwrap();
-
-        let (started_tx, started_rx) = std::sync::mpsc::channel();
-        let (done_tx, done_rx) = std::sync::mpsc::channel();
-        let pdf_v2_clone = pdf_v2.clone();
-        let dir_for_hook = dir.clone();
-        let mut competing_handle = None;
-
-        let (entry1, existed_before) = store1
-            .commit_staged_upload_with_existed_and_hook(&norm, staged1, false, || {
-                // 1. Deterministic check: the cross-process store lock file must still
-                //    be exclusively held before sheet_entry_from_path() hashes the file.
-                let probe = fs::OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .open(dir_for_hook.join(".mpmb-store.lock"))
-                    .unwrap();
-                assert!(
-                    matches!(probe.try_lock(), Err(fs::TryLockError::WouldBlock)),
-                    "store lock must remain held until rollback SHA-256 is captured"
-                );
-
-                // 2. Competing store instance attempting an overwrite must stay blocked
-                //    until store1 finishes capturing entry1.sha256 and releases the lock.
-                competing_handle = Some(std::thread::spawn(move || {
-                    let _ = started_tx.send(());
-                    let res = store2.upload_sheet("Aelar.pdf", &pdf_v2_clone, true);
-                    let _ = done_tx.send(res);
-                }));
-                started_rx.recv().unwrap();
-                assert!(
-                    matches!(
-                        done_rx.recv_timeout(std::time::Duration::from_millis(75)),
-                        Err(std::sync::mpsc::RecvTimeoutError::Timeout)
-                    ),
-                    "competing writer must not replace the PDF before hash capture finishes"
-                );
-            })
-            .unwrap();
-
-        assert!(!existed_before);
-        // After store1 releases the lock, the competing overwrite completes.
-        let entry2 = done_rx.recv().unwrap().unwrap();
-        competing_handle.unwrap().join().unwrap();
-
-        // Rollback token captured store1's published bytes, NOT store2's replacement.
-        assert_eq!(entry1.sha256, sha256_hex(&pdf_v1));
-        assert_eq!(entry2.sha256, sha256_hex(&pdf_v2));
-        assert!(
-            !store1
-                .remove_sheet_if_sha(&entry1.path, &entry1.sha256)
-                .unwrap(),
-            "rollback must not delete the competing writer's replacement PDF"
-        );
-        assert_eq!(fs::read(dir.join("Aelar.pdf")).unwrap(), pdf_v2);
+        let pub_err = store
+            .publish_new_sheet_bytes(&dest_norm, &bytes)
+            .unwrap_err();
+        assert!(format!("{pub_err:#}").contains("already exists"));
+        assert_eq!(fs::read(dir.join("RaceDest.pdf")).unwrap(), competing);
 
         let _ = fs::remove_dir_all(&dir);
     }
