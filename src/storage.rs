@@ -259,6 +259,61 @@ impl SheetStore {
         pdf_path.with_file_name(format!("{stem}.state.json"))
     }
 
+    fn check_create_sidecar_conflicts(pdf_path: &Path) -> Result<()> {
+        let primary = Self::sidecar_path_for(pdf_path);
+        let legacy = Self::legacy_sidecar_path_for(pdf_path);
+        for (sc, is_primary) in [(primary, true), (legacy, false)] {
+            let Ok(meta) = fs::symlink_metadata(&sc) else {
+                continue;
+            };
+            if !meta.is_file() || meta.file_type().is_symlink() {
+                continue;
+            }
+            if !sidecar_claimed_by_other_pdf(pdf_path, &sc) {
+                continue;
+            }
+            let owner_matches = sidecar_explicit_owner_matches(&sc, pdf_path);
+            if owner_matches == Some(true) {
+                continue;
+            }
+            // Reject whenever creating `pdf_path` would either:
+            // - claim another existing sheet's legacy sidecar as `pdf_path`'s primary sidecar
+            //   (which would also collide on future saves), or
+            // - turn a pre-existing unstamped sidecar owned by another sheet ambiguous and
+            //   hide that sheet's metadata.
+            if is_primary || owner_matches.is_none() {
+                bail!(
+                    "conflict: destination sidecar {} belongs to another existing sheet; choose a different character name",
+                    sc.file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("sidecar")
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn ensure_primary_sidecar_writable_for(pdf_path: &Path, sidecar_path: &Path) -> Result<()> {
+        let Ok(meta) = fs::symlink_metadata(sidecar_path) else {
+            return Ok(());
+        };
+        if meta.file_type().is_symlink() || !meta.is_file() {
+            bail!(
+                "sidecar destination is not a regular file: {}",
+                sidecar_path.display()
+            );
+        }
+        if sidecar_claimed_by_other_pdf(pdf_path, sidecar_path)
+            && sidecar_explicit_owner_matches(sidecar_path, pdf_path) != Some(true)
+        {
+            bail!(
+                "conflict: sidecar destination {} is shared with another existing sheet and will not be overwritten",
+                sidecar_path.display()
+            );
+        }
+        Ok(())
+    }
+
     fn invalidate_sidecars_for(pdf_path: &Path) -> Result<()> {
         for sc in [
             Self::sidecar_path_for(pdf_path),
@@ -373,9 +428,11 @@ impl SheetStore {
             if fs::symlink_metadata(&abs).is_ok() {
                 bail!("sheet already exists: {normalized} (pass overwrite=true to replace)");
             }
-            // Clear any orphaned destination sidecar BEFORE atomic publication so if an
-            // orphan cannot be removed (e.g. read-only/locked), creation fails cleanly
-            // without publishing `abs` or attaching stale metadata.
+            // Reject destinations whose sidecar path would collide with another existing
+            // sheet's sidecar (e.g. pre-PR unstamped sidecar or shared legacy sidecar),
+            // and clear true orphaned destination sidecars BEFORE atomic publication so
+            // any removal error aborts cleanly without creating `abs` or attaching stale metadata.
+            Self::check_create_sidecar_conflicts(&abs)?;
             Self::invalidate_sidecars_for(&abs)?;
             if let Err(err) = staged.publish_create_new(&abs) {
                 if err
@@ -402,10 +459,11 @@ impl SheetStore {
             let _guard = self.lock.lock().unwrap();
             let (norm, abs) = self.resolve_safe_pdf_path(&dest_rel)?;
             // Fast-fail before running any template startup/JavaScript when a sheet
-            // already exists at the destination path.
+            // already exists or its sidecar path collides with another existing sheet.
             if fs::symlink_metadata(&abs).is_ok() {
                 bail!("sheet already exists: {norm}");
             }
+            Self::check_create_sidecar_conflicts(&abs)?;
             let (src_norm, _) = self.resolve_safe_pdf_path(template_rel)?;
             if !is_template_path(&src_norm) {
                 bail!("source sheet must be a template inside templates/: {src_norm}");
@@ -479,20 +537,14 @@ impl SheetStore {
         let _guard = self.lock.lock().unwrap();
         let (_normalized, abs) = self.resolve_safe_pdf_path(rel)?;
         let sidecar_path = Self::sidecar_path_for(&abs);
-        if let Ok(meta) = fs::symlink_metadata(&sidecar_path) {
-            if meta.file_type().is_symlink() || !meta.is_file() {
-                bail!(
-                    "sidecar destination is not a regular file: {}",
-                    sidecar_path.display()
-                );
-            }
-        }
+        Self::ensure_primary_sidecar_writable_for(&abs, &sidecar_path)?;
         let stamped = stamp_sidecar_meta(state_sidecar, expected_pdf_sha256, &abs);
         let mut pretty = serde_json::to_vec_pretty(&stamped)?;
         pretty.push(b'\n');
         let staged_sidecar = StagedFile::create(&sidecar_path, &pretty)?;
 
         let _commit_lock = acquire_store_lock(&self.root)?;
+        Self::ensure_primary_sidecar_writable_for(&abs, &sidecar_path)?;
         let meta = match fs::symlink_metadata(&abs) {
             Ok(m) => m,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -573,14 +625,7 @@ impl SheetStore {
         // ensure staged files are always removed on any early return or error.
         let staged_sidecar = if let Some(sidecar) = state_sidecar {
             let sidecar_path = Self::sidecar_path_for(&abs);
-            if let Ok(meta) = fs::symlink_metadata(&sidecar_path) {
-                if meta.file_type().is_symlink() || !meta.is_file() {
-                    bail!(
-                        "sidecar destination is not a regular file: {}",
-                        sidecar_path.display()
-                    );
-                }
-            }
+            Self::ensure_primary_sidecar_writable_for(&abs, &sidecar_path)?;
             let stamped = stamp_sidecar_meta(sidecar, &new_sha, &abs);
             let mut pretty = serde_json::to_vec_pretty(&stamped)?;
             pretty.push(b'\n');
@@ -598,6 +643,9 @@ impl SheetStore {
         let _commit_lock = acquire_store_lock(&self.root)?;
         if let Some(conflict) = check_expected()? {
             return Ok(conflict);
+        }
+        if let Some((_, ref sidecar_path)) = staged_sidecar {
+            Self::ensure_primary_sidecar_writable_for(&abs, sidecar_path)?;
         }
 
         staged_pdf
@@ -3773,11 +3821,46 @@ mod tests {
         assert!(!double_listed.has_state_sidecar);
         assert_eq!(double_listed.character_name, None);
 
-        // 6. Reverse direction: when `Reverse.pdf.pdf` already exists with an unstamped
-        //    legacy sidecar `Reverse.pdf.state.json` matching the template hash, creating
-        //    `Reverse.pdf` must preserve `Reverse.pdf.state.json` bytes verbatim and must
-        //    NOT attach it as `Reverse.pdf`'s primary metadata.
+        // 6. Real pre-PR upgrade case: when `PrePrHero.pdf` exists with an UNSTAMPED
+        //    primary sidecar `PrePrHero.pdf.state.json` (no `pdfFileName`), creating
+        //    `PrePrHero.pdf.pdf` is rejected with a conflict BEFORE publishing so the
+        //    preexisting character's metadata is never hidden by ambiguity.
         let tpl_bytes = fs::read(dir.join("templates/MPMB-2024-Blank.pdf")).unwrap();
+        store
+            .upload_sheet("PrePrHero.pdf", &tpl_bytes, false)
+            .unwrap();
+        let pre_pr_sidecar_path = dir.join("PrePrHero.pdf.state.json");
+        let pre_pr_sidecar_bytes = serde_json::to_vec_pretty(&json!({
+            "schema": "mpmb-sheet-state/v1",
+            "pdfSha256": tpl.sha256,
+            "character": { "name": "Pre-PR Hero", "level": "13" }
+        }))
+        .unwrap();
+        fs::write(&pre_pr_sidecar_path, &pre_pr_sidecar_bytes).unwrap();
+        let pre_pr_err = store
+            .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "PrePrHero.pdf.pdf")
+            .unwrap_err();
+        assert!(
+            format!("{pre_pr_err:#}").contains("conflict"),
+            "creating sibling that makes pre-PR unstamped sidecar ambiguous must conflict: {pre_pr_err:#}"
+        );
+        assert!(!dir.join("PrePrHero.pdf.pdf").exists());
+        assert_eq!(
+            fs::read(&pre_pr_sidecar_path).unwrap(),
+            pre_pr_sidecar_bytes
+        );
+        let listed_pre_pr = store.list_sheets().unwrap();
+        let pre_pr_listed = listed_pre_pr
+            .iter()
+            .find(|s| s.path == "PrePrHero.pdf")
+            .unwrap();
+        assert!(pre_pr_listed.has_state_sidecar);
+        assert_eq!(pre_pr_listed.character_name.as_deref(), Some("Pre-PR Hero"));
+
+        // 7. Reverse direction: when `Reverse.pdf.pdf` already exists with a legacy
+        //    sidecar `Reverse.pdf.state.json`, creating `Reverse.pdf` is rejected with
+        //    conflict BEFORE publishing so `Reverse.pdf.state.json` is neither deleted
+        //    nor clobbered, and `Reverse.pdf.pdf` keeps its metadata.
         store
             .upload_sheet("Reverse.pdf.pdf", &tpl_bytes, false)
             .unwrap();
@@ -3789,33 +3872,74 @@ mod tests {
         .unwrap();
         fs::write(&reverse_legacy_path, &reverse_legacy_bytes).unwrap();
 
-        let reverse_new = store
+        let reverse_err = store
             .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "Reverse")
-            .unwrap();
-        assert_eq!(reverse_new.path, "Reverse.pdf");
+            .unwrap_err();
         assert!(
-            !reverse_new.has_state_sidecar,
-            "new Reverse.pdf must not attach Reverse.pdf.pdf's legacy sidecar"
+            format!("{reverse_err:#}").contains("conflict"),
+            "creating Reverse.pdf over Reverse.pdf.pdf's legacy sidecar must conflict: {reverse_err:#}"
         );
-        assert_eq!(reverse_new.character_name, None);
-        assert_eq!(reverse_new.level, None);
+        assert!(!dir.join("Reverse.pdf").exists());
         assert_eq!(
             fs::read(&reverse_legacy_path).unwrap(),
             reverse_legacy_bytes,
-            "creating Reverse.pdf must not delete or modify Reverse.pdf.pdf's legacy sidecar"
+            "Reverse.pdf.state.json bytes must remain untouched"
         );
         let listed_after_reverse = store.list_sheets().unwrap();
-        let reverse_listed = listed_after_reverse
+        let reverse_dbl_listed = listed_after_reverse
             .iter()
-            .find(|s| s.path == "Reverse.pdf")
+            .find(|s| s.path == "Reverse.pdf.pdf")
             .unwrap();
-        assert!(!reverse_listed.has_state_sidecar);
-        assert_eq!(reverse_listed.character_name, None);
+        assert!(reverse_dbl_listed.has_state_sidecar);
+        assert_eq!(
+            reverse_dbl_listed.character_name.as_deref(),
+            Some("Legacy Double PDF Owner")
+        );
 
-        // 7. On case-sensitive filesystems, when `Sibling.PDF` exists with identical
-        //    template bytes and a legacy `Sibling.state.json` matching the template hash,
-        //    creating `Sibling.pdf` must preserve `Sibling.state.json` bytes verbatim and
-        //    must NOT attach `Sibling.PDF`'s metadata to `Sibling.pdf`.
+        // 8. Later saves cannot clobber a shared legacy sidecar even if both PDFs
+        //    already coexist externally on disk.
+        let extern_pdf = dir.join("Extern.pdf");
+        fs::write(&extern_pdf, &tpl_bytes).unwrap();
+        fs::write(dir.join("Extern.pdf.pdf"), &tpl_bytes).unwrap();
+        let extern_legacy_sc = dir.join("Extern.pdf.state.json");
+        let extern_legacy_bytes = serde_json::to_vec_pretty(&json!({
+            "pdfSha256": tpl.sha256,
+            "character": { "name": "Extern Double Owner", "level": "16" }
+        }))
+        .unwrap();
+        fs::write(&extern_legacy_sc, &extern_legacy_bytes).unwrap();
+        let new_pdf_bytes = valid_test_pdf("ExternEdited");
+        let save_err = store
+            .save_sheet_atomic(
+                "Extern.pdf",
+                &new_pdf_bytes,
+                Some(&tpl.sha256),
+                Some(&json!({"character": {"name": "Clobber Attempt"}})),
+                false,
+            )
+            .unwrap_err();
+        assert!(
+            format!("{save_err:#}").contains("conflict"),
+            "save_sheet_atomic must not clobber shared legacy sidecar: {save_err:#}"
+        );
+        assert_eq!(fs::read(&extern_pdf).unwrap(), tpl_bytes);
+        assert_eq!(fs::read(&extern_legacy_sc).unwrap(), extern_legacy_bytes);
+        let sc_err = store
+            .write_sidecar_atomic(
+                "Extern.pdf",
+                &tpl.sha256,
+                &json!({"character": {"name": "Clobber Attempt"}}),
+            )
+            .unwrap_err();
+        assert!(
+            format!("{sc_err:#}").contains("conflict"),
+            "write_sidecar_atomic must not clobber shared legacy sidecar: {sc_err:#}"
+        );
+        assert_eq!(fs::read(&extern_legacy_sc).unwrap(), extern_legacy_bytes);
+
+        // 9. On case-sensitive filesystems, when `Sibling.PDF` exists with an unstamped
+        //    legacy `Sibling.state.json`, creating `Sibling.pdf` is rejected with conflict
+        //    BEFORE publishing so `Sibling.PDF` keeps its metadata and sidecar bytes.
         let sibling_upper = dir.join("Sibling.PDF");
         let sibling_lower = dir.join("Sibling.pdf");
         fs::write(&sibling_upper, &tpl_bytes).unwrap();
@@ -3827,30 +3951,33 @@ mod tests {
             }))
             .unwrap();
             fs::write(&sibling_legacy, &sibling_legacy_bytes).unwrap();
-            let created_sibling = store
+            let sibling_err = store
                 .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "Sibling")
-                .unwrap();
+                .unwrap_err();
+            assert!(
+                format!("{sibling_err:#}").contains("conflict"),
+                "creating case-variant sibling over shared unstamped legacy sidecar must conflict: {sibling_err:#}"
+            );
+            assert!(!sibling_lower.exists());
             assert_eq!(
                 fs::read(&sibling_legacy).unwrap(),
                 sibling_legacy_bytes,
                 "legacy sidecar belonging to Sibling.PDF must not be deleted or modified"
             );
-            assert!(
-                !created_sibling.has_state_sidecar,
-                "new Sibling.pdf must not attach ambiguous Sibling.state.json"
-            );
-            assert_eq!(created_sibling.character_name, None);
             let listed_after_sibling = store.list_sheets().unwrap();
-            let sibling_lower_listed = listed_after_sibling
+            let sibling_upper_listed = listed_after_sibling
                 .iter()
-                .find(|s| s.path == "Sibling.pdf")
+                .find(|s| s.path == "Sibling.PDF")
                 .unwrap();
-            assert!(!sibling_lower_listed.has_state_sidecar);
-            assert_eq!(sibling_lower_listed.character_name, None);
+            assert!(sibling_upper_listed.has_state_sidecar);
+            assert_eq!(
+                sibling_upper_listed.character_name.as_deref(),
+                Some("Upper Owner")
+            );
         }
 
-        // 8. Unremovable orphaned sidecar returns an error instead of silently attaching
-        //    stale metadata to a new character.
+        // 10. Unremovable orphaned sidecar fails cleanly before publication AND retrying
+        //     the same name succeeds cleanly once the orphan is unlocked/removable.
         #[cfg(windows)]
         {
             let locked_orphan = dir.join("LockedOrphan.pdf.state.json");
@@ -3880,6 +4007,13 @@ mod tests {
             let mut perms = fs::metadata(&locked_orphan).unwrap().permissions();
             perms.set_readonly(false);
             fs::set_permissions(&locked_orphan, perms).unwrap();
+            let retried = store
+                .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "LockedOrphan")
+                .unwrap();
+            assert_eq!(retried.path, "LockedOrphan.pdf");
+            assert!(!retried.has_state_sidecar);
+            assert_eq!(retried.character_name, None);
+            assert!(!locked_orphan.exists());
         }
         #[cfg(unix)]
         {
@@ -3922,6 +4056,17 @@ mod tests {
                         .any(|s| s.path == "readonly-orphan-dir/LockedOrphan.pdf"),
                     "failed create must not appear in sheet listing"
                 );
+                // Once directory is writable again, retrying the exact same destination succeeds cleanly.
+                let retried = store
+                    .create_sheet_from_template(
+                        "templates/MPMB-2024-Blank.pdf",
+                        "readonly-orphan-dir/LockedOrphan",
+                    )
+                    .unwrap();
+                assert_eq!(retried.path, "readonly-orphan-dir/LockedOrphan.pdf");
+                assert!(!retried.has_state_sidecar);
+                assert_eq!(retried.character_name, None);
+                assert!(!locked_orphan.exists());
             }
         }
 

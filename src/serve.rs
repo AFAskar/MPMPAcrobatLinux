@@ -2651,7 +2651,7 @@ async fn handle_create_from_template(
                     .is_some()
                 {
                     StatusCode::NOT_FOUND
-                } else if msg.contains("already exists") {
+                } else if msg.contains("already exists") || msg.contains("conflict") {
                     StatusCode::CONFLICT
                 } else {
                     StatusCode::BAD_REQUEST
@@ -7113,11 +7113,15 @@ mod tests {
             assert!(entry["level"].is_null());
         }
 
-        // 3. Double-extension ownership in both directions via HTTP API:
-        //    - Creating `DoubleHero.pdf.pdf` preserves `DoubleHero.pdf.state.json` and
-        //      returns clean metadata for `DoubleHero.pdf.pdf`.
-        //    - Creating `RevDouble.pdf` preserves `RevDouble.pdf.pdf`'s legacy
-        //      `RevDouble.pdf.state.json` and returns clean metadata for `RevDouble.pdf`.
+        // 3. Double-extension ownership via HTTP API:
+        //    - Stamped `DoubleHero.pdf` -> creating `DoubleHero.pdf.pdf` succeeds, preserves
+        //      `DoubleHero.pdf.state.json` and `DoubleHero.pdf` metadata, and gives
+        //      `DoubleHero.pdf.pdf` clean metadata.
+        //    - Pre-PR unstamped `PrePrDouble.pdf` -> creating `PrePrDouble.pdf.pdf` conflicts
+        //      (409) in both open modes without hiding `PrePrDouble.pdf`'s metadata.
+        //    - Reverse: `RevDouble.pdf.pdf` with legacy `RevDouble.pdf.state.json` -> creating
+        //      `RevDouble` conflicts (409) in both open modes without deleting or clobbering
+        //      `RevDouble.pdf.state.json`.
         let tpl_bytes = std::fs::read(&tpl_path).unwrap();
         std::fs::write(base.join("DoubleHero.pdf"), &tpl_bytes).unwrap();
         let double_primary_sc = base.join("DoubleHero.pdf.state.json");
@@ -7153,6 +7157,35 @@ mod tests {
             "DoubleHero.pdf.state.json bytes must remain untouched"
         );
 
+        std::fs::write(base.join("PrePrDouble.pdf"), &tpl_bytes).unwrap();
+        let pre_pr_sc = base.join("PrePrDouble.pdf.state.json");
+        let pre_pr_bytes = serde_json::to_vec_pretty(&json!({
+            "schema": "mpmb-sheet-state/v1",
+            "pdfSha256": tpl_sha,
+            "character": { "name": "Pre-PR Unstamped Hero", "level": "11" }
+        }))
+        .unwrap();
+        std::fs::write(&pre_pr_sc, &pre_pr_bytes).unwrap();
+        for open_flag in [false, true] {
+            let (st_pre, body_pre) = post_json(
+                &app,
+                "/api/sheets/new",
+                json!({
+                    "template": "templates/MPMB-2024-Blank.pdf",
+                    "name": "PrePrDouble.pdf.pdf",
+                    "open": open_flag
+                }),
+            )
+            .await;
+            assert_eq!(
+                st_pre,
+                StatusCode::CONFLICT,
+                "pre-PR unstamped sidecar collision must return 409 (open={open_flag}): {body_pre}"
+            );
+        }
+        assert!(!base.join("PrePrDouble.pdf.pdf").exists());
+        assert_eq!(std::fs::read(&pre_pr_sc).unwrap(), pre_pr_bytes);
+
         std::fs::write(base.join("RevDouble.pdf.pdf"), &tpl_bytes).unwrap();
         let rev_legacy_sc = base.join("RevDouble.pdf.state.json");
         let rev_legacy_bytes = serde_json::to_vec_pretty(&json!({
@@ -7162,23 +7195,24 @@ mod tests {
         .unwrap();
         std::fs::write(&rev_legacy_sc, &rev_legacy_bytes).unwrap();
 
-        let (st_rev, created_rev) = post_json(
-            &app,
-            "/api/sheets/new",
-            json!({
-                "template": "templates/MPMB-2024-Blank.pdf",
-                "name": "RevDouble",
-                "open": false
-            }),
-        )
-        .await;
-        assert_eq!(
-            st_rev,
-            StatusCode::CREATED,
-            "create RevDouble failed: {created_rev}"
-        );
-        assert_eq!(created_rev["sheet"]["has_state_sidecar"], false);
-        assert!(created_rev["sheet"]["character_name"].is_null());
+        for open_flag in [false, true] {
+            let (st_rev, body_rev) = post_json(
+                &app,
+                "/api/sheets/new",
+                json!({
+                    "template": "templates/MPMB-2024-Blank.pdf",
+                    "name": "RevDouble",
+                    "open": open_flag
+                }),
+            )
+            .await;
+            assert_eq!(
+                st_rev,
+                StatusCode::CONFLICT,
+                "creating RevDouble over RevDouble.pdf.pdf legacy sidecar must return 409 (open={open_flag}): {body_rev}"
+            );
+        }
+        assert!(!base.join("RevDouble.pdf").exists());
         assert_eq!(
             std::fs::read(&rev_legacy_sc).unwrap(),
             rev_legacy_bytes,
@@ -7186,7 +7220,7 @@ mod tests {
         );
 
         // 4. Unremovable orphaned sidecar via HTTP API keeps disk, listing, and active
-        //    session consistent (Windows read-only sidecar file; Unix read-only subdir).
+        //    session consistent, AND retrying the same name succeeds once unlocked.
         #[cfg(windows)]
         {
             let locked_sc = base.join("LockedApiOrphan.pdf.state.json");
@@ -7226,6 +7260,23 @@ mod tests {
             let mut perms = std::fs::metadata(&locked_sc).unwrap().permissions();
             perms.set_readonly(false);
             std::fs::set_permissions(&locked_sc, perms).unwrap();
+            let (st_retry, retry_body) = post_json(
+                &app,
+                "/api/sheets/new",
+                json!({
+                    "template": "templates/MPMB-2024-Blank.pdf",
+                    "name": "LockedApiOrphan",
+                    "open": true
+                }),
+            )
+            .await;
+            assert_eq!(
+                st_retry,
+                StatusCode::OK,
+                "retry after unlocking orphan should succeed: {retry_body}"
+            );
+            assert_eq!(retry_body["sheet"]["has_state_sidecar"], false);
+            assert!(retry_body["sheet"]["character_name"].is_null());
         }
         #[cfg(unix)]
         {
@@ -7264,6 +7315,24 @@ mod tests {
                 let (st_sess, sess) = get_json(&app, "/api/session/state").await;
                 assert_eq!(st_sess, StatusCode::OK);
                 assert_eq!(sess["path"], "OrphanPrimary.pdf");
+
+                let (st_retry, retry_body) = post_json(
+                    &app,
+                    "/api/sheets/new",
+                    json!({
+                        "template": "templates/MPMB-2024-Blank.pdf",
+                        "name": "locked-api-sub/LockedApiOrphan",
+                        "open": true
+                    }),
+                )
+                .await;
+                assert_eq!(
+                    st_retry,
+                    StatusCode::OK,
+                    "retry after restoring permissions should succeed: {retry_body}"
+                );
+                assert_eq!(retry_body["sheet"]["has_state_sidecar"], false);
+                assert!(retry_body["sheet"]["character_name"].is_null());
             }
         }
 
@@ -7276,18 +7345,30 @@ mod tests {
             .unwrap();
         assert_eq!(double_orig["has_state_sidecar"], true);
         assert_eq!(double_orig["character_name"], "Existing DoubleHero");
-        for clean_name in ["DoubleHero.pdf.pdf", "RevDouble.pdf"] {
-            let entry = chars_final
-                .iter()
-                .find(|c| c["path"] == clean_name)
-                .unwrap();
-            assert_eq!(entry["has_state_sidecar"], false);
-            assert!(entry["character_name"].is_null());
-        }
+        let double_new = chars_final
+            .iter()
+            .find(|c| c["path"] == "DoubleHero.pdf.pdf")
+            .unwrap();
+        assert_eq!(double_new["has_state_sidecar"], false);
+        assert!(double_new["character_name"].is_null());
+        let pre_pr_listed = chars_final
+            .iter()
+            .find(|c| c["path"] == "PrePrDouble.pdf")
+            .unwrap();
+        assert_eq!(pre_pr_listed["has_state_sidecar"], true);
+        assert_eq!(pre_pr_listed["character_name"], "Pre-PR Unstamped Hero");
+        let rev_dbl_listed = chars_final
+            .iter()
+            .find(|c| c["path"] == "RevDouble.pdf.pdf")
+            .unwrap();
+        assert_eq!(rev_dbl_listed["has_state_sidecar"], true);
+        assert_eq!(
+            rev_dbl_listed["character_name"],
+            "Existing RevDouble Legacy"
+        );
         assert!(!chars_final
             .iter()
-            .any(|c| c["path"] == "LockedApiOrphan.pdf"
-                || c["path"] == "locked-api-sub/LockedApiOrphan.pdf"));
+            .any(|c| c["path"] == "PrePrDouble.pdf.pdf" || c["path"] == "RevDouble.pdf"));
 
         let _ = std::fs::remove_dir_all(&base);
     }
