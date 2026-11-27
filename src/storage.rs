@@ -521,8 +521,18 @@ impl SheetStore {
     pub fn commit_staged_upload(
         &self,
         rel: &str,
+        staged: StagedUpload,
+        overwrite: bool,
+    ) -> Result<SheetEntry> {
+        self.commit_staged_upload_inner(rel, staged, overwrite, true)
+    }
+
+    fn commit_staged_upload_inner(
+        &self,
+        rel: &str,
         mut staged: StagedUpload,
         overwrite: bool,
+        allow_overwrite_hint: bool,
     ) -> Result<SheetEntry> {
         staged.finish()?;
         // Fully parse the staged PDF before acquiring the store lock or touching
@@ -569,7 +579,7 @@ impl SheetStore {
             if fs::symlink_metadata(&abs).is_ok() {
                 return Err(anyhow::Error::new(SheetAlreadyExistsError {
                     path: normalized,
-                    allow_overwrite_hint: true,
+                    allow_overwrite_hint,
                 }));
             }
             // Reject destinations whose sidecar path would collide with another existing
@@ -586,7 +596,7 @@ impl SheetStore {
                 {
                     return Err(anyhow::Error::new(SheetAlreadyExistsError {
                         path: normalized,
-                        allow_overwrite_hint: true,
+                        allow_overwrite_hint,
                     }));
                 }
                 return Err(err);
@@ -682,8 +692,9 @@ impl SheetStore {
         let (dest_norm, mut staged) = self.start_staged_upload(rel)?;
         staged.write_chunk(bytes)?;
         // Unconditionally create-only (overwrite = false) so a racing writer's file
-        // is never overwritten or deleted.
-        self.commit_staged_upload(&dest_norm, staged, false)
+        // is never overwritten or deleted, and suppress the `overwrite=true` hint
+        // because template creation does not accept overwrite.
+        self.commit_staged_upload_inner(&dest_norm, staged, false, false)
     }
 
     pub fn create_sheet_from_template(
@@ -2156,15 +2167,78 @@ fn file_identity_os(path: &Path) -> std::io::Result<FileId> {
 #[cfg(windows)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FileId {
-    volume_serial: u32,
-    index_high: u32,
-    index_low: u32,
+    volume_serial: u64,
+    file_id: [u8; 16],
 }
 
 #[cfg(windows)]
 fn file_identity_os(path: &Path) -> std::io::Result<FileId> {
     use std::os::windows::fs::OpenOptionsExt;
     use std::os::windows::io::AsRawHandle;
+
+    #[repr(C)]
+    struct FileIdInfo {
+        volume_serial_number: u64,
+        file_id: [u8; 16],
+    }
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetFileInformationByHandleEx(
+            h_file: *mut std::ffi::c_void,
+            file_information_class: i32,
+            lp_file_information: *mut std::ffi::c_void,
+            dw_buffer_size: u32,
+        ) -> i32;
+    }
+
+    const FILE_ID_INFO_CLASS: i32 = 18;
+    const FILE_SHARE_READ: u32 = 0x0000_0001;
+    const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+    const FILE_SHARE_DELETE: u32 = 0x0000_0004;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+
+    // Open with zero data access (`access_mode(0)`) so querying identity succeeds
+    // even when another handle holds locks without FILE_SHARE_DELETE, and do not
+    // follow reparse points/symlinks. Use 128-bit `FileIdInfo` (unique on both
+    // NTFS and ReFS) and fail closed when a reliable ID cannot be obtained.
+    let file = fs::OpenOptions::new()
+        .access_mode(0)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)?;
+    let mut info = std::mem::MaybeUninit::<FileIdInfo>::zeroed();
+    // SAFETY: `file.as_raw_handle()` is a valid open Win32 HANDLE and `info` points
+    // to a properly aligned `FileIdInfo` buffer of exact size `size_of::<FileIdInfo>()`.
+    let ok = unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FILE_ID_INFO_CLASS,
+            info.as_mut_ptr().cast(),
+            std::mem::size_of::<FileIdInfo>() as u32,
+        )
+    };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: `GetFileInformationByHandleEx` returned nonzero and initialized `info`.
+    let info = unsafe { info.assume_init() };
+    if info.file_id == [0u8; 16] {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "filesystem returned an unreliable all-zero file ID",
+        ));
+    }
+    Ok(FileId {
+        volume_serial: info.volume_serial_number,
+        file_id: info.file_id,
+    })
+}
+
+#[cfg(windows)]
+fn canonical_dir_entry_name(path: &Path) -> std::io::Result<std::ffi::OsString> {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
 
     #[repr(C)]
     #[allow(dead_code)]
@@ -2175,55 +2249,99 @@ fn file_identity_os(path: &Path) -> std::io::Result<FileId> {
 
     #[repr(C)]
     #[allow(dead_code)]
-    struct ByHandleFileInformation {
-        file_attributes: u32,
-        creation_time: FileTime,
-        last_access_time: FileTime,
-        last_write_time: FileTime,
-        volume_serial_number: u32,
-        file_size_high: u32,
-        file_size_low: u32,
-        number_of_links: u32,
-        file_index_high: u32,
-        file_index_low: u32,
+    struct Win32FindDataW {
+        dw_file_attributes: u32,
+        ft_creation_time: FileTime,
+        ft_last_access_time: FileTime,
+        ft_last_write_time: FileTime,
+        n_file_size_high: u32,
+        n_file_size_low: u32,
+        dw_reserved0: u32,
+        dw_reserved1: u32,
+        c_file_name: [u16; 260],
+        c_alternate_file_name: [u16; 14],
     }
 
     #[link(name = "kernel32")]
     extern "system" {
-        fn GetFileInformationByHandle(
-            h_file: *mut std::ffi::c_void,
-            lp_file_information: *mut ByHandleFileInformation,
-        ) -> i32;
+        fn FindFirstFileW(
+            lp_file_name: *const u16,
+            lp_find_file_data: *mut Win32FindDataW,
+        ) -> *mut std::ffi::c_void;
+        fn FindClose(h_find_file: *mut std::ffi::c_void) -> i32;
     }
 
-    const FILE_SHARE_READ: u32 = 0x0000_0001;
-    const FILE_SHARE_WRITE: u32 = 0x0000_0002;
-    const FILE_SHARE_DELETE: u32 = 0x0000_0004;
-    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const INVALID_HANDLE_VALUE: *mut std::ffi::c_void = -1isize as *mut std::ffi::c_void;
 
-    // Open with zero data access (`access_mode(0)`) so querying identity succeeds
-    // even when another handle holds locks without FILE_SHARE_DELETE, and do not
-    // follow reparse points/symlinks.
-    let file = fs::OpenOptions::new()
-        .access_mode(0)
-        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
-        .open(path)?;
-    let mut info = std::mem::MaybeUninit::<ByHandleFileInformation>::zeroed();
-    // SAFETY: `file.as_raw_handle()` is a valid open Win32 HANDLE and `info` points
-    // to a properly aligned `ByHandleFileInformation` buffer for the synchronous call.
-    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle(), info.as_mut_ptr()) };
-    if ok == 0 {
+    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    if wide
+        .iter()
+        .any(|&c| c == u16::from(b'*') || c == u16::from(b'?'))
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "path contains wildcard characters",
+        ));
+    }
+    wide.push(0);
+
+    let mut data = std::mem::MaybeUninit::<Win32FindDataW>::zeroed();
+    // SAFETY: `wide` is null-terminated UTF-16 and `data` is a valid `Win32FindDataW` buffer.
+    let handle = unsafe { FindFirstFileW(wide.as_ptr(), data.as_mut_ptr()) };
+    if handle == INVALID_HANDLE_VALUE {
         return Err(std::io::Error::last_os_error());
     }
-    // SAFETY: `GetFileInformationByHandle` returned nonzero and initialized `info`.
-    let info = unsafe { info.assume_init() };
-    Ok(FileId {
-        volume_serial: info.volume_serial_number,
-        index_high: info.file_index_high,
-        index_low: info.file_index_low,
-    })
+    // SAFETY: `handle` is a valid search handle returned by `FindFirstFileW`.
+    unsafe {
+        FindClose(handle);
+    }
+    // SAFETY: `FindFirstFileW` succeeded and initialized `data`.
+    let data = unsafe { data.assume_init() };
+    let nul = data
+        .c_file_name
+        .iter()
+        .position(|&c| c == 0)
+        .unwrap_or(data.c_file_name.len());
+    Ok(std::ffi::OsString::from_wide(&data.c_file_name[..nul]))
+}
+
+#[cfg(unix)]
+fn resolve_unix_dir_entry_name(
+    entries: &[(std::ffi::OsString, FileId)],
+    target_name: &std::ffi::OsStr,
+    target_id: FileId,
+) -> Option<std::ffi::OsString> {
+    let matching: Vec<&std::ffi::OsString> = entries
+        .iter()
+        .filter(|(_, id)| *id == target_id)
+        .map(|(name, _)| name)
+        .collect();
+    if matching.is_empty() {
+        return None;
+    }
+    if matching.len() == 1 {
+        // Only one directory entry in `parent` points to `target_id`; any alternate
+        // spelling resolving to `target_id` (e.g. case-insensitive mount) maps to it.
+        return Some(matching[0].clone());
+    }
+    // Multiple hard-linked entries share `target_id`: match the exact entry name first,
+    // or a unique case-folded match if on a case-insensitive filesystem with hard links.
+    if let Some(exact) = matching.iter().find(|n| n.as_os_str() == target_name) {
+        return Some((*exact).clone());
+    }
+    let target_folded = target_name.to_str()?.to_lowercase();
+    let folded: Vec<&std::ffi::OsString> = matching
+        .into_iter()
+        .filter(|n| {
+            n.to_str()
+                .is_some_and(|s| s.to_lowercase() == target_folded)
+        })
+        .collect();
+    if folded.len() == 1 {
+        Some(folded[0].clone())
+    } else {
+        None
+    }
 }
 
 #[cfg(all(not(unix), not(windows)))]
@@ -2257,11 +2375,67 @@ fn owner_name_matches_pdf(owner: &str, pdf_path: &Path) -> bool {
     ) {
         return false;
     }
+    let Some(self_name) = pdf_path.file_name() else {
+        return false;
+    };
+    if std::ffi::OsStr::new(owner) == self_name {
+        return true;
+    }
     if let Some(parent) = pdf_path.parent().filter(|p| !p.as_os_str().is_empty()) {
         let owner_path = parent.join(owner);
         match (file_identity(&owner_path), file_identity(pdf_path)) {
-            (Ok(owner_id), Ok(pdf_id)) => return owner_id == pdf_id,
-            // If exactly one path resolves to an existing file, they cannot refer to the same file.
+            (Ok(owner_id), Ok(pdf_id)) => {
+                if owner_id != pdf_id {
+                    return false;
+                }
+                // Same underlying file object: distinguish a case-insensitive alias of
+                // the same directory entry from two distinct hard-linked sibling PDFs.
+                #[cfg(windows)]
+                {
+                    return matches!(
+                        (
+                            canonical_dir_entry_name(&owner_path),
+                            canonical_dir_entry_name(pdf_path)
+                        ),
+                        (Ok(owner_entry), Ok(pdf_entry)) if owner_entry == pdf_entry
+                    );
+                }
+                #[cfg(unix)]
+                {
+                    let Ok(entries_iter) = fs::read_dir(parent) else {
+                        return false;
+                    };
+                    let mut dir_entries = Vec::new();
+                    for entry_res in entries_iter {
+                        let Ok(entry) = entry_res else {
+                            return false;
+                        };
+                        let Ok(ty) = entry.file_type() else {
+                            return false;
+                        };
+                        if !ty.is_file() {
+                            continue;
+                        }
+                        match file_identity(&entry.path()) {
+                            Ok(id) => dir_entries.push((entry.file_name(), id)),
+                            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                            Err(_) => return false,
+                        }
+                    }
+                    let owner_entry = resolve_unix_dir_entry_name(
+                        &dir_entries,
+                        std::ffi::OsStr::new(owner),
+                        owner_id,
+                    );
+                    let self_entry = resolve_unix_dir_entry_name(&dir_entries, self_name, pdf_id);
+                    return matches!((owner_entry, self_entry), (Some(a), Some(b)) if a == b);
+                }
+                #[cfg(all(not(unix), not(windows)))]
+                {
+                    return false;
+                }
+            }
+            // If exactly one path resolves to an existing file, they cannot refer to the same entry.
             (Ok(_), Err(err)) | (Err(err), Ok(_)) if err.kind() == std::io::ErrorKind::NotFound => {
                 return false;
             }
@@ -2272,24 +2446,26 @@ fn owner_name_matches_pdf(owner: &str, pdf_path: &Path) -> bool {
             _ => {}
         }
     }
-    let Some(self_name) = pdf_path.file_name().and_then(|s| s.to_str()) else {
+    let Some(self_name_str) = self_name.to_str() else {
         return false;
     };
     #[cfg(windows)]
     {
-        owner.eq_ignore_ascii_case(self_name)
+        owner.eq_ignore_ascii_case(self_name_str)
     }
     #[cfg(not(windows))]
     {
-        owner == self_name
+        owner == self_name_str
     }
 }
 
-/// Returns whether any *other* existing regular `.pdf` file in `pdf_path`'s parent
-/// directory derives a primary (`<name>.state.json`) or legacy (`<stem>.state.json`)
+/// Returns whether any *other* existing regular `.pdf` directory entry in `pdf_path`'s
+/// parent directory derives a primary (`<name>.state.json`) or legacy (`<stem>.state.json`)
 /// sidecar path that resolves to the same underlying filesystem file identity as
-/// `sidecar_path`. Fails closed (`Err`) if the directory cannot be enumerated or if
-/// an existing file's identity cannot be determined.
+/// `sidecar_path`. Hard-linked sibling `.pdf` entries are checked as distinct siblings,
+/// while alternate spellings of `pdf_path`'s own single directory entry are skipped.
+/// Fails closed (`Err`) if the directory cannot be enumerated or if an existing file's
+/// identity cannot be determined.
 fn sidecar_claimed_by_other_pdf(pdf_path: &Path, sidecar_path: &Path) -> Result<bool> {
     let parent = pdf_path
         .parent()
@@ -2300,6 +2476,11 @@ fn sidecar_claimed_by_other_pdf(pdf_path: &Path, sidecar_path: &Path) -> Result<
                 pdf_path.display()
             )
         })?;
+    let self_name = pdf_path
+        .file_name()
+        .ok_or_else(|| anyhow!("cannot determine filename for {}", pdf_path.display()))?;
+    #[cfg(windows)]
+    let _ = self_name;
     let target_sc_id = match file_identity(sidecar_path) {
         Ok(id) => id,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
@@ -2320,12 +2501,28 @@ fn sidecar_claimed_by_other_pdf(pdf_path: &Path, sidecar_path: &Path) -> Result<
             )));
         }
     };
+    #[cfg(windows)]
+    let self_dir_entry_name = if self_id.is_some() {
+        match canonical_dir_entry_name(pdf_path) {
+            Ok(name) => Some(name),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+            Err(err) => {
+                return Err(anyhow::Error::new(err).context(format!(
+                    "failed to determine directory entry name of sheet {}",
+                    pdf_path.display()
+                )));
+            }
+        }
+    } else {
+        None
+    };
     let entries = fs::read_dir(parent).with_context(|| {
         format!(
             "failed to inspect directory {} for sidecar ownership",
             parent.display()
         )
     })?;
+    let mut pdf_entries: Vec<(std::ffi::OsString, PathBuf, FileId)> = Vec::new();
     for entry_res in entries {
         let entry = entry_res.with_context(|| {
             format!(
@@ -2360,7 +2557,21 @@ fn sidecar_claimed_by_other_pdf(pdf_path: &Path, sidecar_path: &Path) -> Result<
                 )));
             }
         };
-        if self_id == Some(other_id) {
+        pdf_entries.push((name, other_path, other_id));
+    }
+    #[cfg(unix)]
+    let self_dir_entry_name = self_id.and_then(|sid| {
+        let name_ids: Vec<(std::ffi::OsString, FileId)> = pdf_entries
+            .iter()
+            .map(|(n, _, id)| (n.clone(), *id))
+            .collect();
+        resolve_unix_dir_entry_name(&name_ids, self_name, sid)
+    });
+    #[cfg(all(not(unix), not(windows)))]
+    let self_dir_entry_name: Option<std::ffi::OsString> = self_id.map(|_| self_name.to_os_string());
+
+    for (entry_name, other_path, _other_id) in pdf_entries {
+        if self_dir_entry_name.as_deref() == Some(entry_name.as_os_str()) {
             continue;
         }
         for cand in [
@@ -4042,7 +4253,20 @@ mod tests {
         let pub_err = store
             .publish_new_sheet_bytes(&dest_norm, &bytes)
             .unwrap_err();
-        assert!(format!("{pub_err:#}").contains("already exists"));
+        let pub_err_msg = format!("{pub_err:#}");
+        assert!(pub_err_msg.contains("already exists"));
+        assert!(
+            !pub_err_msg.contains("overwrite=true"),
+            "template publication conflict must not suggest overwrite=true: {pub_err_msg}"
+        );
+        // Upload duplicate conflicts must still include the overwrite=true hint.
+        let upload_dup = store
+            .upload_sheet("RaceDest.pdf", &bytes, false)
+            .unwrap_err();
+        assert!(
+            format!("{upload_dup:#}").contains("overwrite=true"),
+            "upload duplicate conflict should keep overwrite=true hint: {upload_dup:#}"
+        );
         assert_eq!(fs::read(dir.join("RaceDest.pdf")).unwrap(), competing);
 
         let _ = fs::remove_dir_all(&dir);
@@ -4929,6 +5153,21 @@ mod tests {
             }))
             .unwrap();
             fs::write(&ntfs_sc, &ntfs_bytes).unwrap();
+            let alias_sc = dir.join("élodie.pdf.state.json");
+            let has_case_alias = matches!(
+                (file_identity(&ntfs_sc), file_identity(&alias_sc)),
+                (Ok(a), Ok(b)) if a == b
+            );
+            if !has_case_alias {
+                // If the temp directory is case-sensitive NTFS, create a hard link so
+                // file-identity alias detection is still exercised deterministically.
+                fs::hard_link(&ntfs_sc, &alias_sc).unwrap();
+            }
+            assert_eq!(
+                file_identity(&ntfs_sc).unwrap(),
+                file_identity(&alias_sc).unwrap(),
+                "aliased sidecar paths must report identical 128-bit FileIdInfo"
+            );
             let err_create = store
                 .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "élodie")
                 .unwrap_err();
@@ -4958,12 +5197,18 @@ mod tests {
             );
             assert_eq!(listed_ntfs.level.as_deref(), Some("12"));
 
-            // Distinct filename resolving to no shared file still succeeds.
+            // Distinct filename resolving to no shared file still succeeds and reports a
+            // distinct 128-bit FileIdInfo.
             let distinct = store
                 .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "ÉlodieOther")
                 .unwrap();
             assert_eq!(distinct.path, "ÉlodieOther.pdf");
             assert!(!distinct.has_state_sidecar);
+            assert_ne!(
+                file_identity(&dir.join("Élodie.pdf.pdf")).unwrap(),
+                file_identity(&dir.join("ÉlodieOther.pdf")).unwrap(),
+                "distinct files must report distinct 128-bit FileIdInfo"
+            );
         }
         #[cfg(unix)]
         {
@@ -4981,6 +5226,10 @@ mod tests {
             // to exercise case-insensitive-mount aliasing deterministically on Linux ext4.
             let aliased_sc = dir.join("AliasTarget.pdf.state.json");
             fs::hard_link(&owner_sc, &aliased_sc).unwrap();
+            assert_eq!(
+                file_identity(&owner_sc).unwrap(),
+                file_identity(&aliased_sc).unwrap()
+            );
             let err_create = store
                 .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "AliasTarget")
                 .unwrap_err();
@@ -5010,12 +5259,119 @@ mod tests {
             );
             assert_eq!(listed_owner.level.as_deref(), Some("15"));
 
-            // Distinct filename with no aliased sidecar still succeeds.
+            // Distinct filename with no aliased sidecar still succeeds and has distinct ID.
             let distinct = store
                 .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "DistinctTarget")
                 .unwrap();
             assert_eq!(distinct.path, "DistinctTarget.pdf");
             assert!(!distinct.has_state_sidecar);
+            assert_ne!(
+                file_identity(&dir.join("AliasOwner.pdf")).unwrap(),
+                file_identity(&dir.join("DistinctTarget.pdf")).unwrap()
+            );
+        }
+
+        // 7. Hard-linked sibling PDFs (`HardHero.pdf` and `HardHero.pdf.pdf` sharing one
+        //    underlying file identity) remain distinct directory entries:
+        //    - `sidecar_claimed_by_other_pdf` must NOT skip `HardHero.pdf.pdf` when
+        //      checking writes for `HardHero.pdf`; writing `HardHero.pdf`'s sidecar must
+        //      fail with conflict and leave `HardHero.pdf.pdf`'s legacy sidecar bytes intact.
+        //    - `owner_name_matches_pdf` must NOT treat a hard-linked sibling as the stamped
+        //      sheet in Library listing (in either stamp direction).
+        {
+            store
+                .upload_sheet("HardHero.pdf.pdf", &tpl_bytes, false)
+                .unwrap();
+            fs::hard_link(dir.join("HardHero.pdf.pdf"), dir.join("HardHero.pdf")).unwrap();
+            assert_eq!(
+                file_identity(&dir.join("HardHero.pdf.pdf")).unwrap(),
+                file_identity(&dir.join("HardHero.pdf")).unwrap(),
+                "fixture expects HardHero.pdf and HardHero.pdf.pdf to share FileId"
+            );
+            let shared_sc = dir.join("HardHero.pdf.state.json");
+            let sibling_sc_bytes = serde_json::to_vec_pretty(&json!({
+                "pdfFileName": "HardHero.pdf.pdf",
+                "pdfSha256": tpl.sha256,
+                "character": { "name": "Hard-Linked Sibling Owner", "level": "19" }
+            }))
+            .unwrap();
+            fs::write(&shared_sc, &sibling_sc_bytes).unwrap();
+
+            // Library attributes the sidecar ONLY to `HardHero.pdf.pdf`, not `HardHero.pdf`.
+            let listed = store.list_sheets().unwrap();
+            let listed_dbl = listed
+                .iter()
+                .find(|s| s.path == "HardHero.pdf.pdf")
+                .unwrap();
+            assert!(listed_dbl.has_state_sidecar);
+            assert_eq!(
+                listed_dbl.character_name.as_deref(),
+                Some("Hard-Linked Sibling Owner")
+            );
+            assert_eq!(listed_dbl.level.as_deref(), Some("19"));
+            let listed_single = listed.iter().find(|s| s.path == "HardHero.pdf").unwrap();
+            assert!(!listed_single.has_state_sidecar);
+            assert_eq!(listed_single.character_name, None);
+
+            // Writing a sidecar for `HardHero.pdf` must fail with conflict and preserve
+            // `HardHero.pdf.pdf`'s original sidecar bytes verbatim.
+            let sc_err = store
+                .write_sidecar_atomic(
+                    "HardHero.pdf",
+                    &tpl.sha256,
+                    &json!({ "character": { "name": "Clobber Attempt", "level": "1" } }),
+                )
+                .unwrap_err();
+            assert!(
+                sc_err
+                    .chain()
+                    .any(|c| c.downcast_ref::<SidecarConflictError>().is_some()),
+                "hard-linked sibling sidecar write must fail with SidecarConflictError: {sc_err:#}"
+            );
+            assert_eq!(fs::read(&shared_sc).unwrap(), sibling_sc_bytes);
+
+            let save_err = store
+                .save_sheet_atomic(
+                    "HardHero.pdf",
+                    &tpl_bytes,
+                    Some(&tpl.sha256),
+                    Some(&json!({ "character": { "name": "Clobber Save", "level": "2" } })),
+                    false,
+                )
+                .unwrap_err();
+            assert!(
+                save_err
+                    .chain()
+                    .any(|c| c.downcast_ref::<SidecarConflictError>().is_some()),
+                "save_sheet_atomic on hard-linked sibling must reject clobbering sidecar: {save_err:#}"
+            );
+            assert_eq!(fs::read(&shared_sc).unwrap(), sibling_sc_bytes);
+
+            // Reverse stamp direction: stamped for `HardHero.pdf`, `HardHero.pdf.pdf` must
+            // NOT adopt `HardHero.pdf`'s metadata even though both share one PDF FileId.
+            let single_sc_bytes = serde_json::to_vec_pretty(&json!({
+                "pdfFileName": "HardHero.pdf",
+                "pdfSha256": tpl.sha256,
+                "character": { "name": "Hard-Linked Primary Owner", "level": "7" }
+            }))
+            .unwrap();
+            fs::write(&shared_sc, &single_sc_bytes).unwrap();
+            let listed_rev = store.list_sheets().unwrap();
+            let listed_rev_single = listed_rev
+                .iter()
+                .find(|s| s.path == "HardHero.pdf")
+                .unwrap();
+            assert!(listed_rev_single.has_state_sidecar);
+            assert_eq!(
+                listed_rev_single.character_name.as_deref(),
+                Some("Hard-Linked Primary Owner")
+            );
+            let listed_rev_dbl = listed_rev
+                .iter()
+                .find(|s| s.path == "HardHero.pdf.pdf")
+                .unwrap();
+            assert!(!listed_rev_dbl.has_state_sidecar);
+            assert_eq!(listed_rev_dbl.character_name, None);
         }
 
         // Indeterminate file identity on an existing sidecar must fail closed.

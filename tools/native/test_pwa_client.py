@@ -799,6 +799,148 @@ PWA_HARNESS = textwrap.dedent(
       });
       assert.equal(appState.activeInteraction, null);
 
+      // 18: Server restart / instance switch clears old-server prompts even when the new
+      // server starts at a lower stateSeq (e.g. srv-5 prompt at 50 -> srv-6 state at 1),
+      // while still protecting newer same-server prompts against delayed snapshots.
+      openAcrobatInteraction({
+        id: 'srv-5-int-50',
+        serverInstanceId: 'srv-5',
+        stateSeq: 50,
+        kind: 'alert',
+        request: { cTitle: 'Old Server Prompt', cMsg: 'Before restart' },
+      });
+      assert.equal(appState.activeInteraction && appState.activeInteraction.id, 'srv-5-int-50');
+      assert.equal(
+        applySessionState({
+          open: true,
+          serverInstanceId: 'srv-6',
+          sessionId: 'srv-6-s1',
+          stateSeq: 1,
+          path: 'CreatedA.pdf',
+          revision: 1,
+          fields: [],
+        }),
+        true,
+      );
+      assert.equal(
+        appState.activeInteraction,
+        null,
+        'prompt from retired server instance must be cleared on instance switch',
+      );
+      assert.equal(
+        appState.retiredServerInstanceIds.has('srv-5'),
+        true,
+        'previous server instance must be marked retired',
+      );
+      // Delayed busy snapshot from retired server srv-5 must be rejected.
+      assert.equal(
+        applySessionState({
+          open: true,
+          busy: true,
+          serverInstanceId: 'srv-5',
+          stateSeq: 51,
+          activeInteraction: {
+            id: 'srv-5-int-51',
+            serverInstanceId: 'srv-5',
+            stateSeq: 51,
+            kind: 'alert',
+            request: { cTitle: 'Zombie Prompt', cMsg: 'Retired server' },
+          },
+        }),
+        false,
+      );
+      assert.equal(appState.activeInteraction, null);
+
+      // 19: Delayed busy snapshot on the SAME server instance must never replace or retire
+      // a newer displayed Acrobat prompt, while duplicate delivery of the same prompt still works.
+      openAcrobatInteraction({
+        id: 'srv-6-int-20',
+        serverInstanceId: 'srv-6',
+        stateSeq: 20,
+        kind: 'alert',
+        request: { cTitle: 'Prompt B', cMsg: 'Newer active prompt' },
+      });
+      assert.equal(appState.activeInteraction && appState.activeInteraction.id, 'srv-6-int-20');
+      assert.equal(
+        applySessionState({
+          open: true,
+          busy: true,
+          serverInstanceId: 'srv-6',
+          stateSeq: 10,
+          activeInteraction: {
+            id: 'srv-6-int-10',
+            serverInstanceId: 'srv-6',
+            stateSeq: 10,
+            kind: 'alert',
+            request: { cTitle: 'Prompt A', cMsg: 'Stale busy prompt' },
+          },
+        }),
+        false,
+        'delayed busy snapshot older than active prompt must be ignored',
+      );
+      assert.equal(
+        appState.activeInteraction && appState.activeInteraction.id,
+        'srv-6-int-20',
+        'newer prompt B must remain displayed',
+      );
+      assert.equal(
+        appState.retiredInteractionKeys.has('srv-6:srv-6-int-20'),
+        false,
+        'newer prompt B must NOT be retired by delayed older busy snapshot',
+      );
+      // Direct openAcrobatInteraction with older same-server prompt also refuses to replace B.
+      assert.equal(
+        openAcrobatInteraction({
+          id: 'srv-6-int-10',
+          serverInstanceId: 'srv-6',
+          stateSeq: 10,
+          kind: 'alert',
+          request: { cTitle: 'Prompt A', cMsg: 'Stale direct prompt' },
+        }),
+        false,
+      );
+      assert.equal(appState.activeInteraction && appState.activeInteraction.id, 'srv-6-int-20');
+      // Redelivery of prompt B itself (same key) is still accepted cleanly.
+      assert.equal(
+        applySessionState({
+          open: true,
+          busy: true,
+          serverInstanceId: 'srv-6',
+          stateSeq: 20,
+          activeInteraction: {
+            id: 'srv-6-int-20',
+            serverInstanceId: 'srv-6',
+            stateSeq: 20,
+            kind: 'alert',
+            request: { cTitle: 'Prompt B', cMsg: 'Newer active prompt' },
+          },
+        }),
+        true,
+      );
+      assert.equal(appState.activeInteraction && appState.activeInteraction.id, 'srv-6-int-20');
+      // Same-server delayed open snapshot (stateSeq 19 < 20) still keeps prompt B open.
+      applySessionState({
+        open: true,
+        serverInstanceId: 'srv-6',
+        sessionId: 'srv-6-s1',
+        stateSeq: 19,
+        path: 'CreatedA.pdf',
+        revision: 2,
+        fields: [],
+      });
+      assert.equal(appState.activeInteraction && appState.activeInteraction.id, 'srv-6-int-20');
+      // Same-server genuinely newer open snapshot (stateSeq 21 > 20) closes prompt B.
+      applySessionState({
+        open: true,
+        serverInstanceId: 'srv-6',
+        sessionId: 'srv-6-s1',
+        stateSeq: 21,
+        path: 'CreatedA.pdf',
+        revision: 3,
+        fields: [],
+      });
+      assert.equal(appState.activeInteraction, null);
+
       console.log('PWA_CLIENT_REGRESSIONS_OK');
     })().catch((err) => {
       console.error(err);

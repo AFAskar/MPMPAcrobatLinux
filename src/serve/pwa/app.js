@@ -278,19 +278,57 @@
     }
   }
 
+  function interactionServerInst(inter) {
+    return inter && typeof inter.serverInstanceId === 'string' ? inter.serverInstanceId : '';
+  }
+
+  function interactionSeq(inter) {
+    return inter && typeof inter.stateSeq === 'number' && inter.stateSeq > 0
+      ? inter.stateSeq
+      : null;
+  }
+
   function applySessionState(state) {
     if (!state) return false;
-    if (typeof state.serverInstanceId === 'string' && state.serverInstanceId) {
-      if (appState.retiredServerInstanceIds.has(state.serverInstanceId)) {
+    const nextServerInst =
+      typeof state.serverInstanceId === 'string' && state.serverInstanceId
+        ? state.serverInstanceId
+        : '';
+    if (nextServerInst) {
+      if (appState.retiredServerInstanceIds.has(nextServerInst)) {
         return false;
       }
-      if (appState.lastServerInstanceId && appState.lastServerInstanceId !== state.serverInstanceId) {
+      if (appState.lastServerInstanceId && appState.lastServerInstanceId !== nextServerInst) {
         appState.retiredServerInstanceIds.add(appState.lastServerInstanceId);
         appState.lastStateSeq = 0;
       }
-      appState.lastServerInstanceId = state.serverInstanceId;
+      if (appState.activeInteraction) {
+        const activeInst = interactionServerInst(appState.activeInteraction);
+        if (activeInst && activeInst !== nextServerInst) {
+          appState.retiredServerInstanceIds.add(activeInst);
+          closeAcrobatModal();
+        }
+      }
+      appState.lastServerInstanceId = nextServerInst;
     }
     if (state.busy && !state.path) {
+      const busySeq =
+        typeof state.stateSeq === 'number' && state.stateSeq > 0
+          ? state.stateSeq
+          : interactionSeq(state.activeInteraction);
+      if (busySeq !== null) {
+        if (appState.activeInteraction) {
+          const activeInst = interactionServerInst(appState.activeInteraction);
+          const activeSeq = interactionSeq(appState.activeInteraction);
+          const sameInst = !nextServerInst || !activeInst || activeInst === nextServerInst;
+          if (sameInst && activeSeq !== null && busySeq < activeSeq) {
+            return false;
+          }
+        }
+        if (busySeq < appState.lastStateSeq) {
+          return false;
+        }
+      }
       if (state.git) {
         appState.git = state.git;
         renderGit();
@@ -299,7 +337,10 @@
       return true;
     }
     if (!state.open) {
-      if (typeof state.stateSeq === 'number' && state.stateSeq < appState.lastStateSeq) {
+      const prevLastStateSeq = appState.lastStateSeq;
+      const isDuplicateStateSeq =
+        typeof state.stateSeq === 'number' && state.stateSeq === prevLastStateSeq;
+      if (typeof state.stateSeq === 'number' && state.stateSeq < prevLastStateSeq) {
         return false;
       }
       if (typeof state.stateSeq === 'number') {
@@ -308,6 +349,22 @@
       closeFieldModal();
       appState.sheet = null;
       if (state.git) appState.git = state.git;
+      if (appState.activeInteraction) {
+        const activeInst = interactionServerInst(appState.activeInteraction);
+        const interSeq = interactionSeq(appState.activeInteraction);
+        const activeFromDifferentOrRetiredInst =
+          !!activeInst &&
+          (appState.retiredServerInstanceIds.has(activeInst) ||
+            (!!nextServerInst && activeInst !== nextServerInst));
+        const stateNewerThanInteraction =
+          activeFromDifferentOrRetiredInst ||
+          (!isDuplicateStateSeq &&
+            (interSeq === null ||
+              (typeof state.stateSeq === 'number' && state.stateSeq > interSeq)));
+        if (stateNewerThanInteraction) {
+          closeAcrobatModal();
+        }
+      }
       renderTopbar();
       renderPlay();
       renderGit();
@@ -359,17 +416,19 @@
     if (state.activeInteraction) {
       openAcrobatInteraction(state.activeInteraction);
     } else if (appState.activeInteraction) {
-      // Never let a duplicate or earlier-sequenced state reply dismiss an Acrobat
-      // prompt that was opened at or after this state snapshot.
-      const interSeq =
-        typeof appState.activeInteraction.stateSeq === 'number' &&
-        appState.activeInteraction.stateSeq > 0
-          ? appState.activeInteraction.stateSeq
-          : null;
+      // Clear prompts from retired/different server instances unconditionally, and
+      // compare state sequences only within the same server instance.
+      const activeInst = interactionServerInst(appState.activeInteraction);
+      const interSeq = interactionSeq(appState.activeInteraction);
+      const activeFromDifferentOrRetiredInst =
+        !!activeInst &&
+        (appState.retiredServerInstanceIds.has(activeInst) ||
+          (!!nextServerInst && activeInst !== nextServerInst));
       const stateNewerThanInteraction =
-        !isDuplicateStateSeq &&
-        (interSeq === null ||
-          (typeof state.stateSeq === 'number' && state.stateSeq > interSeq));
+        activeFromDifferentOrRetiredInst ||
+        (!isDuplicateStateSeq &&
+          (interSeq === null ||
+            (typeof state.stateSeq === 'number' && state.stateSeq > interSeq)));
       if (stateNewerThanInteraction) {
         closeAcrobatModal();
       }
@@ -1059,6 +1118,19 @@
       return true;
     }
     if (appState.activeInteraction) {
+      const curInst = interactionServerInst(appState.activeInteraction);
+      const nextInst = interactionServerInst(interaction);
+      const sameInst = !curInst || !nextInst || curInst === nextInst;
+      const curSeq = interactionSeq(appState.activeInteraction);
+      const nextSeq = interactionSeq(interaction);
+      // Never let a delayed older interaction from the same server instance replace
+      // or retire a newer active prompt.
+      if (sameInst && curSeq !== null && nextSeq !== null && nextSeq <= curSeq) {
+        return false;
+      }
+      if (curInst && nextInst && curInst !== nextInst) {
+        appState.retiredServerInstanceIds.add(curInst);
+      }
       retireInteraction(appState.activeInteraction.id, appState.activeInteraction.serverInstanceId);
     }
     appState.activeInteraction = interaction;

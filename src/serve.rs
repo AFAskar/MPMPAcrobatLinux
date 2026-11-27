@@ -640,6 +640,30 @@ struct SheetWorker {
     last_save_conflict: Option<SaveResult>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum JobErrorMapping {
+    Legacy,
+    TypedCreate,
+}
+
+fn map_create_sheet_error_status(err: &anyhow::Error) -> StatusCode {
+    if err.chain().any(|c| {
+        c.downcast_ref::<crate::storage::TemplateNotFoundError>()
+            .is_some()
+    }) {
+        StatusCode::NOT_FOUND
+    } else if err.chain().any(|c| {
+        c.downcast_ref::<crate::storage::SheetAlreadyExistsError>()
+            .is_some()
+            || c.downcast_ref::<crate::storage::SidecarConflictError>()
+                .is_some()
+    }) {
+        StatusCode::CONFLICT
+    } else {
+        StatusCode::BAD_REQUEST
+    }
+}
+
 impl SheetWorker {
     fn run(mut self, rx: mpsc::Receiver<WorkerCommand>) {
         loop {
@@ -858,7 +882,7 @@ impl SheetWorker {
                 discard,
                 expected_session,
             } => {
-                self.run_job(job_id, gate, done, |w| {
+                self.run_job_with_mapping(job_id, gate, done, JobErrorMapping::TypedCreate, |w| {
                     w.create_and_open_from_template(
                         &template,
                         &name,
@@ -1001,6 +1025,19 @@ impl SheetWorker {
     ) where
         F: FnOnce(&mut Self) -> Result<Value>,
     {
+        self.run_job_with_mapping(job_id, gate, done, JobErrorMapping::Legacy, f);
+    }
+
+    fn run_job_with_mapping<F>(
+        &mut self,
+        job_id: u64,
+        gate: JobGate,
+        done: watch::Sender<Option<JobOutcome>>,
+        error_mapping: JobErrorMapping,
+        f: F,
+    ) where
+        F: FnOnce(&mut Self) -> Result<Value>,
+    {
         if !gate.try_start() {
             // Cancelled before execution (e.g. rejected with 409 because an earlier
             // job opened a modal interaction while this job was queued).
@@ -1035,23 +1072,28 @@ impl SheetWorker {
                     "type": "error",
                     "message": msg,
                 }));
-                let status = if err
-                    .downcast_ref::<crate::storage::TemplateNotFoundError>()
-                    .is_some()
-                {
-                    StatusCode::NOT_FOUND
-                } else if err.chain().any(|c| {
-                    c.downcast_ref::<crate::storage::SheetAlreadyExistsError>()
-                        .is_some()
-                        || c.downcast_ref::<crate::storage::SidecarConflictError>()
+                let status = match error_mapping {
+                    JobErrorMapping::TypedCreate => map_create_sheet_error_status(&err),
+                    JobErrorMapping::Legacy => {
+                        if err
+                            .downcast_ref::<crate::storage::TemplateNotFoundError>()
                             .is_some()
-                }) || msg.contains("conflict")
-                    || msg.contains("changed externally")
-                    || msg.contains("already exists")
-                {
-                    StatusCode::CONFLICT
-                } else {
-                    StatusCode::BAD_REQUEST
+                        {
+                            StatusCode::NOT_FOUND
+                        } else if err.chain().any(|c| {
+                            c.downcast_ref::<crate::storage::SheetAlreadyExistsError>()
+                                .is_some()
+                                || c.downcast_ref::<crate::storage::SidecarConflictError>()
+                                    .is_some()
+                        }) || msg.contains("conflict")
+                            || msg.contains("changed externally")
+                            || msg.contains("already exists")
+                        {
+                            StatusCode::CONFLICT
+                        } else {
+                            StatusCode::BAD_REQUEST
+                        }
+                    }
                 };
                 Err((status, json!({"error": msg})))
             }
@@ -2721,22 +2763,7 @@ async fn handle_create_from_template(
                 .into_response(),
             Ok(Err(e)) => {
                 let msg = format!("{e:#}");
-                let status = if e
-                    .downcast_ref::<crate::storage::TemplateNotFoundError>()
-                    .is_some()
-                {
-                    StatusCode::NOT_FOUND
-                } else if e.chain().any(|c| {
-                    c.downcast_ref::<crate::storage::SheetAlreadyExistsError>()
-                        .is_some()
-                        || c.downcast_ref::<crate::storage::SidecarConflictError>()
-                            .is_some()
-                }) {
-                    StatusCode::CONFLICT
-                } else {
-                    StatusCode::BAD_REQUEST
-                };
-                err_response(status, msg)
+                err_response(map_create_sheet_error_status(&e), msg)
             }
             Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
         };
@@ -2935,6 +2962,7 @@ async fn handle_session_state(
                 "open": true,
                 "busy": true,
                 "serverInstanceId": state.server_instance_id,
+                "stateSeq": inter.state_seq,
                 "activeInteraction": inter,
                 "git": git,
             })),
@@ -2965,6 +2993,7 @@ async fn handle_session_state(
                         "open": true,
                         "busy": true,
                         "serverInstanceId": state.server_instance_id,
+                        "stateSeq": inter.state_seq,
                         "activeInteraction": inter,
                         "git": git,
                     })),
@@ -7556,6 +7585,27 @@ mod tests {
         assert_eq!(tricked_json["code"], "sidecar_conflict");
         assert!(!base.join("already exists.pdf").exists());
         assert_eq!(std::fs::read(&tricked_sc).unwrap(), tricked_bytes);
+
+        // Invalid template source containing "conflict" in its filename must return
+        // 400 Bad Request (not 409) in BOTH create-only (open=false) and create-and-open (open=true).
+        for open_flag in [false, true] {
+            let (st_bad_tpl, body_bad_tpl) = post_json(
+                &app,
+                "/api/sheets/new",
+                json!({
+                    "template": "conflict.pdf",
+                    "name": "UnusedDestForBadTpl",
+                    "open": open_flag
+                }),
+            )
+            .await;
+            assert_eq!(
+                st_bad_tpl,
+                StatusCode::BAD_REQUEST,
+                "invalid template source 'conflict.pdf' with open={open_flag} must be 400, got {st_bad_tpl}: {body_bad_tpl}"
+            );
+            assert!(!base.join("UnusedDestForBadTpl.pdf").exists());
+        }
 
         // Upload with overwrite=true on absent RevDouble.pdf (colliding with RevDouble.pdf.pdf's
         // legacy RevDouble.pdf.state.json) must return 409 Conflict via HTTP.
