@@ -1032,7 +1032,12 @@ impl SheetWorker {
                     "type": "error",
                     "message": msg,
                 }));
-                let status = if msg.contains("conflict")
+                let status = if err
+                    .downcast_ref::<crate::storage::TemplateNotFoundError>()
+                    .is_some()
+                {
+                    StatusCode::NOT_FOUND
+                } else if msg.contains("conflict")
                     || msg.contains("changed externally")
                     || msg.contains("already exists")
                 {
@@ -2641,10 +2646,13 @@ async fn handle_create_from_template(
             }
             Ok(Err(e)) => {
                 let msg = format!("{e:#}");
-                let status = if msg.contains("already exists") {
-                    StatusCode::CONFLICT
-                } else if msg.contains("not found") {
+                let status = if e
+                    .downcast_ref::<crate::storage::TemplateNotFoundError>()
+                    .is_some()
+                {
                     StatusCode::NOT_FOUND
+                } else if msg.contains("already exists") {
+                    StatusCode::CONFLICT
                 } else {
                     StatusCode::BAD_REQUEST
                 };
@@ -6954,6 +6962,156 @@ mod tests {
             .as_str()
             .unwrap_or("")
             .contains("git status unavailable"));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn template_create_missing_template_returns_404_in_both_modes_and_ignores_orphan_sidecars(
+    ) {
+        let base = std::env::temp_dir().join(format!(
+            "mpmb-serve-template-404-orphans-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(base.join("templates")).unwrap();
+        let tpl_path = base.join("templates/MPMB-2024-Blank.pdf");
+        make_scripted_hp_pdf(&tpl_path, "12", "", None);
+
+        let cfg = ServeConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            store: StoreConfig {
+                root: base.clone(),
+                git: None,
+            },
+            auth_token: None,
+            allow_unauthenticated: false,
+            git_auto_sync_secs: 0,
+            autosave: false,
+            default_sheet: None,
+        };
+        let app = build_router(AppState::start(&cfg).unwrap());
+
+        // 1. Missing template returns 404 Not Found for BOTH open:false and open:true.
+        let (st_no_open, body_no_open) = post_json(
+            &app,
+            "/api/sheets/new",
+            json!({
+                "template": "templates/Missing.pdf",
+                "name": "UnusedOne",
+                "open": false
+            }),
+        )
+        .await;
+        assert_eq!(
+            st_no_open,
+            StatusCode::NOT_FOUND,
+            "open:false missing template should return 404: {body_no_open}"
+        );
+
+        let (st_open, body_open) = post_json(
+            &app,
+            "/api/sheets/new",
+            json!({
+                "template": "templates/Missing.pdf",
+                "name": "UnusedTwo",
+                "open": true
+            }),
+        )
+        .await;
+        assert_eq!(
+            st_open,
+            StatusCode::NOT_FOUND,
+            "open:true missing template should return 404: {body_open}"
+        );
+
+        // Separate /api/session/open contract for missing sheets remains 400 Bad Request.
+        let (st_session_open, _) =
+            post_json(&app, "/api/session/open", json!({ "path": "missing.pdf" })).await;
+        assert_eq!(st_session_open, StatusCode::BAD_REQUEST);
+
+        // 2. Orphaned primary and legacy sidecars matching the template SHA-256 do not
+        //    attach stale character metadata to newly created characters.
+        let (st_list, list_before) = get_json(&app, "/api/sheets").await;
+        assert_eq!(st_list, StatusCode::OK);
+        let tpl_sha = list_before["templates"][0]["sha256"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        std::fs::write(
+            base.join("OrphanPrimary.pdf.state.json"),
+            serde_json::to_vec_pretty(&json!({
+                "schema": "mpmb-sheet-state-v1",
+                "pdfSha256": tpl_sha,
+                "character": { "name": "Old Primary", "classAndLevels": "Cleric 8", "level": "8" }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            base.join("OrphanLegacy.state.json"),
+            serde_json::to_vec_pretty(&json!({
+                "pdfSha256": tpl_sha,
+                "character": { "name": "Old Legacy", "classAndLevels": "Paladin 6", "level": "6" }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let (st_p, created_p) = post_json(
+            &app,
+            "/api/sheets/new",
+            json!({
+                "template": "templates/MPMB-2024-Blank.pdf",
+                "name": "OrphanPrimary",
+                "open": true
+            }),
+        )
+        .await;
+        assert_eq!(
+            st_p,
+            StatusCode::OK,
+            "create over primary orphan failed: {created_p}"
+        );
+        assert_eq!(created_p["sheet"]["has_state_sidecar"], false);
+        assert!(created_p["sheet"]["character_name"].is_null());
+        assert!(created_p["sheet"]["level"].is_null());
+
+        let (st_l, created_l) = post_json(
+            &app,
+            "/api/sheets/new",
+            json!({
+                "template": "templates/MPMB-2024-Blank.pdf",
+                "name": "OrphanLegacy",
+                "open": false
+            }),
+        )
+        .await;
+        assert_eq!(
+            st_l,
+            StatusCode::CREATED,
+            "create over legacy orphan failed: {created_l}"
+        );
+        assert_eq!(created_l["sheet"]["has_state_sidecar"], false);
+        assert!(created_l["sheet"]["character_name"].is_null());
+        assert!(created_l["sheet"]["level"].is_null());
+
+        let (st_after, list_after) = get_json(&app, "/api/sheets").await;
+        assert_eq!(st_after, StatusCode::OK);
+        for name in ["OrphanPrimary.pdf", "OrphanLegacy.pdf"] {
+            let entry = list_after["characters"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["path"] == name)
+                .unwrap();
+            assert_eq!(entry["has_state_sidecar"], false);
+            assert!(entry["character_name"].is_null());
+            assert!(entry["level"].is_null());
+        }
 
         let _ = std::fs::remove_dir_all(&base);
     }

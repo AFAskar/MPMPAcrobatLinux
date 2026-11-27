@@ -1567,6 +1567,8 @@
   }
 
   let newCharModalOpener = null;
+  let newCharModalInstanceSeq = 0;
+  let activeNewCharModalInstance = null;
 
   function updateNewCharPreview() {
     const preview = $('nc-preview');
@@ -1590,6 +1592,8 @@
       switchTab('library');
       return;
     }
+    newCharModalInstanceSeq += 1;
+    activeNewCharModalInstance = newCharModalInstanceSeq;
     newCharModalOpener = document.activeElement || null;
     const sel = $('nc-template');
     sel.innerHTML = '';
@@ -1607,7 +1611,13 @@
     if (typeof $('nc-name').focus === 'function') $('nc-name').focus();
   }
 
-  function closeNewCharModal(restoreFocus = false) {
+  function closeNewCharModal(restoreFocus = false, expectedInstance = undefined) {
+    if (expectedInstance !== undefined) {
+      if (expectedInstance === null || activeNewCharModalInstance !== expectedInstance) {
+        return;
+      }
+    }
+    activeNewCharModalInstance = null;
     $('new-char-modal').classList.add('hidden');
     const opener = newCharModalOpener;
     newCharModalOpener = null;
@@ -1616,7 +1626,13 @@
     }
   }
 
-  async function createCharacterFromTemplate(template, name, force = false, discard = null) {
+  async function createCharacterFromTemplate(
+    template,
+    name,
+    force = false,
+    discard = null,
+    modalInstance = activeNewCharModalInstance,
+  ) {
     const trimmed = String(name || '').trim();
     if (!trimmed) {
       showBanner('Enter a character name first', 'warn', 3500);
@@ -1631,10 +1647,21 @@
       const body = { template, name: trimmed, open: true, force };
       if (discard) body.discard = discard;
       const res = await api('/api/sheets/new', { method: 'POST', json: body });
-      closeNewCharModal(false);
+      closeNewCharModal(false, modalInstance);
       const applied = await handleActionResponse(res);
+      const createdSessionRef = res && res.state && res.state.open
+        ? {
+            sheet: res.state.path || '',
+            session: res.state.sessionId || '',
+          }
+        : null;
       await refreshLibrary();
-      if (applied && res.status !== 'interaction_required') {
+      if (
+        applied &&
+        res.status !== 'interaction_required' &&
+        createdSessionRef &&
+        isCurrentSession(createdSessionRef)
+      ) {
         appState.page = 0;
         const createdPath = res.sheet?.path || trimmed;
         showBanner(`Created and opened ${createdPath}`, 'ok', 3000);
@@ -1644,7 +1671,7 @@
       }
     } catch (err) {
       if (err.status === 409 && err.data && err.data.status === 'interaction_required' && err.data.interaction) {
-        closeNewCharModal(false);
+        closeNewCharModal(false, modalInstance);
         openAcrobatInteraction(err.data.interaction);
         showBanner('Finish or cancel the active dialog before creating a new character', 'warn', 5000);
         return;
@@ -1656,7 +1683,7 @@
         target &&
         confirm(`${err.message}\n\nDiscard unsaved edits on ${target.sheet} (rev ${target.revision}) and create ${trimmed}?`)
       ) {
-        return createCharacterFromTemplate(template, trimmed, true, target);
+        return createCharacterFromTemplate(template, trimmed, true, target, modalInstance);
       }
       if (err.status === 409 && force) {
         refreshSession();

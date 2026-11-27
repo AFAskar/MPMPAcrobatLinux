@@ -511,6 +511,102 @@ PWA_HARNESS = textwrap.dedent(
       assert.equal(element('tab-play').classList.contains('active'), true);
       assert.equal(element('banner').textContent, 'Loaded Bryn.pdf');
 
+      // 12. Obsolete New Character submission must NOT close a newer modal draft
+      //     opened after closing the first form while its POST was still in flight.
+      openNewCharModal();
+      element('nc-name').value = 'FirstDraft';
+      let resolveFirstCreate = null;
+      fetchHandler = async (path) => {
+        if (path === '/api/sheets/new') {
+          return new Promise((resolve) => {
+            resolveFirstCreate = () => resolve(jsonResp({
+              status: 'ok',
+              sheet: { path: 'FirstDraft.pdf', name: 'FirstDraft.pdf', is_template: false, size_bytes: 100 },
+              state: { open: true, serverInstanceId: 'srv-5', sessionId: 'srv-5-s4', stateSeq: 22, path: 'FirstDraft.pdf', revision: 1, fields: [] },
+            }));
+          });
+        }
+        if (path === '/api/sheets') {
+          return jsonResp({ sheets: appState.templates, templates: appState.templates, characters: [], git: null });
+        }
+        throw new Error('Unexpected obsolete-form create fetch ' + path);
+      };
+      const firstCreatePromise = createCharacterFromTemplate('templates/MPMB-2024-Blank.pdf', 'FirstDraft');
+      assert.ok(resolveFirstCreate, 'first create POST should be in flight');
+      // User closes the first modal and opens a fresh one to type a second character draft.
+      closeNewCharModal(true);
+      openNewCharModal();
+      element('nc-name').value = 'SecondDraft';
+      resolveFirstCreate();
+      await firstCreatePromise;
+      assert.equal(
+        element('new-char-modal').classList.contains('hidden'),
+        false,
+        'obsolete create response must not close the newly opened modal',
+      );
+      assert.equal(element('nc-name').value, 'SecondDraft');
+      closeNewCharModal(false);
+
+      // 13. If another sheet/session becomes active while refreshLibrary() is pending
+      //     after createCharacterFromTemplate, stale completion must NOT reset appState.page,
+      //     overwrite the banner, switch tabs, or steal focus.
+      element('tab-play').classList.remove('active');
+      element('tab-sheet').classList.add('active');
+      const keepFocusBtn = element('btn-new-char');
+      keepFocusBtn.focus();
+      let resolveStaleLib = null;
+      fetchHandler = async (path) => {
+        if (path === '/api/sheets/new') {
+          return jsonResp({
+            status: 'ok',
+            sheet: { path: 'StaleHero.pdf', name: 'StaleHero.pdf', is_template: false, size_bytes: 100 },
+            state: { open: true, serverInstanceId: 'srv-5', sessionId: 'srv-5-s5', stateSeq: 23, path: 'StaleHero.pdf', revision: 1, fields: [] },
+          });
+        }
+        if (path === '/api/sheets') {
+          return new Promise((resolve) => {
+            resolveStaleLib = () => resolve(jsonResp({
+              sheets: appState.templates,
+              templates: appState.templates,
+              characters: [],
+              git: null,
+            }));
+          });
+        }
+        throw new Error('Unexpected stale-refresh create fetch ' + path);
+      };
+      openNewCharModal();
+      const staleCreatePromise = createCharacterFromTemplate('templates/MPMB-2024-Blank.pdf', 'StaleHero');
+      // Wait a microtask tick for /api/sheets/new -> handleActionResponse -> /api/sheets to start.
+      await new Promise((r) => setTimeout(r, 0));
+      assert.ok(resolveStaleLib, 'refreshLibrary fetch should be pending');
+      // While refreshLibrary is pending, another session becomes active on page 3.
+      applySessionState({
+        open: true,
+        serverInstanceId: 'srv-5',
+        sessionId: 'srv-5-s6',
+        stateSeq: 24,
+        path: 'NewerHero.pdf',
+        revision: 2,
+        pageCount: 6,
+        fields: [],
+      });
+      appState.page = 3;
+      element('banner').textContent = 'Loaded NewerHero.pdf';
+      element('banner').className = 'banner ok';
+      element('tab-play').classList.remove('active');
+      element('tab-sheet').classList.add('active');
+      keepFocusBtn.focus();
+      resolveStaleLib();
+      await staleCreatePromise;
+      assert.equal(appState.sheet.path, 'NewerHero.pdf');
+      assert.equal(appState.sheet.sessionId, 'srv-5-s6');
+      assert.equal(appState.page, 3, 'stale create completion must not reset active page');
+      assert.equal(element('banner').textContent, 'Loaded NewerHero.pdf');
+      assert.equal(element('tab-sheet').classList.contains('active'), true);
+      assert.equal(element('tab-play').classList.contains('active'), false);
+      assert.equal(context.document.activeElement, keepFocusBtn);
+
       console.log('PWA_CLIENT_REGRESSIONS_OK');
     })().catch((err) => {
       console.error(err);

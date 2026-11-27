@@ -32,6 +32,19 @@ const GIT_ENV_SCRUB_KEYS: &[&str] = &[
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
 ];
 
+#[derive(Debug)]
+pub struct TemplateNotFoundError {
+    pub path: String,
+}
+
+impl std::fmt::Display for TemplateNotFoundError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "template not found: {}", self.path)
+    }
+}
+
+impl std::error::Error for TemplateNotFoundError {}
+
 #[derive(Clone, Debug)]
 pub struct GitConfig {
     pub repo_url: String,
@@ -246,6 +259,25 @@ impl SheetStore {
         pdf_path.with_file_name(format!("{stem}.state.json"))
     }
 
+    fn invalidate_sidecars_for(pdf_path: &Path) {
+        let primary = Self::sidecar_path_for(pdf_path);
+        if let Ok(meta) = fs::symlink_metadata(&primary) {
+            if meta.is_file() && !meta.file_type().is_symlink() {
+                let _ = fs::remove_file(&primary);
+            }
+        }
+        // Only invalidate the stem-based legacy sidecar when no other sibling PDF
+        // shares the same stem (e.g. case-variant filenames on case-sensitive Unix).
+        if !has_sibling_pdf_with_same_stem(pdf_path) {
+            let legacy = Self::legacy_sidecar_path_for(pdf_path);
+            if let Ok(meta) = fs::symlink_metadata(&legacy) {
+                if meta.is_file() && !meta.file_type().is_symlink() {
+                    let _ = fs::remove_file(&legacy);
+                }
+            }
+        }
+    }
+
     pub fn list_sheets(&self) -> Result<Vec<SheetEntry>> {
         let _guard = self.lock.lock().unwrap();
         let mut out = Vec::new();
@@ -320,16 +352,7 @@ impl SheetStore {
                 .publish_replace(&abs)
                 .with_context(|| format!("failed replacing {}", abs.display()))?;
             // Invalidate any previous sidecar metadata so stale character details are not advertised.
-            for sc in [
-                Self::sidecar_path_for(&abs),
-                Self::legacy_sidecar_path_for(&abs),
-            ] {
-                if let Ok(meta) = fs::symlink_metadata(&sc) {
-                    if meta.is_file() && !meta.file_type().is_symlink() {
-                        let _ = fs::remove_file(&sc);
-                    }
-                }
-            }
+            Self::invalidate_sidecars_for(&abs);
             sync_parent_dir(&abs);
         } else {
             if let Err(err) = staged.publish_create_new(&abs) {
@@ -342,6 +365,10 @@ impl SheetStore {
                 }
                 return Err(err);
             }
+            // Invalidate any orphaned destination sidecar metadata (primary or legacy)
+            // left behind after an external deletion so stale character details are never
+            // attached to a newly created sheet.
+            Self::invalidate_sidecars_for(&abs);
             sync_parent_dir(&abs);
         }
         sheet_entry_from_path(&self.root, &abs)
@@ -353,7 +380,7 @@ impl SheetStore {
         character_name: &str,
     ) -> Result<(String, PathBuf, Vec<u8>, String)> {
         let dest_rel = normalize_new_character_path(character_name)?;
-        let (dest_norm, dest_abs) = {
+        let (dest_norm, dest_abs, src_norm) = {
             let _guard = self.lock.lock().unwrap();
             let (norm, abs) = self.resolve_safe_pdf_path(&dest_rel)?;
             // Fast-fail before running any template startup/JavaScript when a sheet
@@ -361,12 +388,25 @@ impl SheetStore {
             if fs::symlink_metadata(&abs).is_ok() {
                 bail!("sheet already exists: {norm}");
             }
-            (norm, abs)
+            let (src_norm, _) = self.resolve_safe_pdf_path(template_rel)?;
+            if !is_template_path(&src_norm) {
+                bail!("source sheet must be a template inside templates/: {src_norm}");
+            }
+            (norm, abs, src_norm)
         };
-        let (src_norm, _, bytes, sha) = self.read_sheet_bytes(template_rel)?;
-        if !is_template_path(&src_norm) {
-            bail!("source sheet must be a template inside templates/: {src_norm}");
-        }
+        let (_, _, bytes, sha) = match self.read_sheet_bytes(&src_norm) {
+            Ok(v) => v,
+            Err(err)
+                if err.chain().any(|cause| {
+                    cause
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+                }) =>
+            {
+                return Err(anyhow::Error::new(TemplateNotFoundError { path: src_norm }));
+            }
+            Err(err) => return Err(err),
+        };
         if bytes.is_empty() || bytes.len() > MAX_PDF_BYTES {
             bail!("template PDF must be between 1 byte and 64 MiB");
         }
@@ -1754,30 +1794,70 @@ impl StagedUpload {
 
     fn publish_create_new(mut self, dest: &Path) -> Result<()> {
         let src = self.path.take().expect("staged upload already consumed");
-        #[cfg(unix)]
-        {
-            let link_res = fs::hard_link(&src, dest);
-            let _ = fs::remove_file(&src);
-            link_res.with_context(|| format!("failed creating {}", dest.display()))?;
-            Ok(())
-        }
-        #[cfg(not(unix))]
-        {
-            let res = (|| -> std::io::Result<()> {
+        // Prefer atomic create-only hard linking on all platforms (including Windows NTFS)
+        // so the destination never briefly exposes a half-written file.
+        let res = match fs::hard_link(&src, dest) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Err(err),
+            Err(_) => copy_create_new_with(dest, |dst| {
                 let mut reader = fs::File::open(&src)?;
-                let mut dst = fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(dest)?;
-                std::io::copy(&mut reader, &mut dst)?;
-                dst.sync_all()?;
+                std::io::copy(&mut reader, dst)?;
                 Ok(())
-            })();
-            let _ = fs::remove_file(&src);
-            res.with_context(|| format!("failed creating {}", dest.display()))?;
-            Ok(())
-        }
+            }),
+        };
+        let _ = fs::remove_file(&src);
+        res.with_context(|| format!("failed creating {}", dest.display()))?;
+        Ok(())
     }
+}
+
+fn copy_create_new_with<F>(dest: &Path, write_fn: F) -> std::io::Result<()>
+where
+    F: FnOnce(&mut fs::File) -> std::io::Result<()>,
+{
+    let mut dst = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(dest)?;
+    let write_res = write_fn(&mut dst).and_then(|()| dst.sync_all());
+    // Close handle before unlinking on Windows so cleanup never fails with a sharing violation.
+    drop(dst);
+    if let Err(err) = write_res {
+        let _ = fs::remove_file(dest);
+        return Err(err);
+    }
+    Ok(())
+}
+
+fn has_sibling_pdf_with_same_stem(pdf_path: &Path) -> bool {
+    let Some(parent) = pdf_path.parent() else {
+        return false;
+    };
+    let Some(stem) = pdf_path.file_stem() else {
+        return false;
+    };
+    let Some(self_name) = pdf_path.file_name() else {
+        return false;
+    };
+    let Ok(entries) = fs::read_dir(parent) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let name = entry.file_name();
+        if name == self_name {
+            return false;
+        }
+        let Some(name_str) = name.to_str() else {
+            return false;
+        };
+        if !name_str.to_ascii_lowercase().ends_with(".pdf") {
+            return false;
+        }
+        if !entry.file_type().is_ok_and(|ty| ty.is_file()) {
+            return false;
+        }
+        entry.path().file_stem() == Some(stem)
+    })
 }
 
 impl Drop for StagedUpload {
@@ -3408,6 +3488,210 @@ mod tests {
             .unwrap_err();
         assert!(format!("{pub_err:#}").contains("already exists"));
         assert_eq!(fs::read(dir.join("RaceDest.pdf")).unwrap(), competing);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn template_create_invalidates_orphaned_primary_and_legacy_sidecars_and_reports_missing_template(
+    ) {
+        let dir = temp_dir("template-orphan-sidecars");
+        let store = SheetStore::open(StoreConfig {
+            root: dir.clone(),
+            git: None,
+        })
+        .unwrap();
+
+        let tpl = store
+            .upload_sheet(
+                "templates/MPMB-2024-Blank.pdf",
+                &valid_test_pdf("Blank"),
+                false,
+            )
+            .unwrap();
+
+        // Missing template returns typed TemplateNotFoundError.
+        let missing_err = store
+            .prepare_template_copy("templates/Missing.pdf", "FreshHero")
+            .unwrap_err();
+        assert!(
+            missing_err
+                .downcast_ref::<TemplateNotFoundError>()
+                .is_some(),
+            "expected typed TemplateNotFoundError, got: {missing_err:#}"
+        );
+
+        // 1. Orphaned primary sidecar (<name>.pdf.state.json) matching template SHA-256.
+        let primary_orphan = dir.join("OrphanPrimary.pdf.state.json");
+        fs::write(
+            &primary_orphan,
+            serde_json::to_vec_pretty(&json!({
+                "schema": "mpmb-sheet-state-v1",
+                "pdfSha256": tpl.sha256,
+                "character": { "name": "Stale Primary Hero", "classAndLevels": "Wizard 9", "level": "9" }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let created_primary = store
+            .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "OrphanPrimary")
+            .unwrap();
+        assert!(!created_primary.has_state_sidecar);
+        assert_eq!(created_primary.character_name, None);
+        assert_eq!(created_primary.class_and_levels, None);
+        assert_eq!(created_primary.level, None);
+        assert!(
+            !primary_orphan.exists(),
+            "orphaned primary sidecar should be invalidated"
+        );
+
+        // 2. Orphaned legacy sidecar (<stem>.state.json) matching template SHA-256.
+        let legacy_hashed_orphan = dir.join("OrphanLegacyHashed.state.json");
+        fs::write(
+            &legacy_hashed_orphan,
+            serde_json::to_vec_pretty(&json!({
+                "pdfSha256": tpl.sha256,
+                "character": { "name": "Stale Legacy Hashed", "classAndLevels": "Rogue 7", "level": "7" }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let created_legacy_hashed = store
+            .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "OrphanLegacyHashed")
+            .unwrap();
+        assert!(!created_legacy_hashed.has_state_sidecar);
+        assert_eq!(created_legacy_hashed.character_name, None);
+        assert_eq!(created_legacy_hashed.level, None);
+        assert!(
+            !legacy_hashed_orphan.exists(),
+            "orphaned hashed legacy sidecar should be invalidated"
+        );
+
+        // 3. Orphaned pre-hash legacy sidecar (<stem>.state.json without pdfSha256/schema).
+        let legacy_prehash_orphan = dir.join("OrphanLegacyPreHash.state.json");
+        fs::write(
+            &legacy_prehash_orphan,
+            serde_json::to_vec_pretty(&json!({
+                "character": { "name": "Stale Legacy PreHash", "classAndLevels": "Bard 5", "level": "5" }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let created_legacy_prehash = store
+            .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "OrphanLegacyPreHash")
+            .unwrap();
+        assert!(!created_legacy_prehash.has_state_sidecar);
+        assert_eq!(created_legacy_prehash.character_name, None);
+        assert_eq!(created_legacy_prehash.level, None);
+        assert!(
+            !legacy_prehash_orphan.exists(),
+            "orphaned pre-hash legacy sidecar should be invalidated"
+        );
+
+        // 4. Duplicate create attempt must NEVER touch an existing sheet's sidecar.
+        store
+            .write_sidecar_atomic(
+                "OrphanPrimary.pdf",
+                &created_primary.sha256,
+                &json!({"character": {"name": "Real Live Hero", "level": "3"}}),
+            )
+            .unwrap();
+        let dup_err = store
+            .publish_new_sheet_bytes("OrphanPrimary.pdf", &valid_test_pdf("Other"))
+            .unwrap_err();
+        assert!(format!("{dup_err:#}").contains("already exists"));
+        let listed = store.list_sheets().unwrap();
+        let live = listed
+            .iter()
+            .find(|s| s.path == "OrphanPrimary.pdf")
+            .unwrap();
+        assert!(live.has_state_sidecar);
+        assert_eq!(live.character_name.as_deref(), Some("Real Live Hero"));
+
+        // 5. On case-sensitive filesystems, creating `Sibling.pdf` must not delete a
+        //    legacy `Sibling.state.json` owned by an existing `Sibling.PDF`.
+        let sibling_upper = dir.join("Sibling.PDF");
+        let sibling_lower = dir.join("Sibling.pdf");
+        fs::write(&sibling_upper, valid_test_pdf("Upper")).unwrap();
+        if !sibling_lower.exists() {
+            let sibling_legacy = dir.join("Sibling.state.json");
+            fs::write(
+                &sibling_legacy,
+                serde_json::to_vec_pretty(&json!({
+                    "character": { "name": "Upper Owner" }
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            store
+                .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "Sibling")
+                .unwrap();
+            assert!(
+                sibling_legacy.exists(),
+                "legacy sidecar belonging to another sibling PDF must not be deleted"
+            );
+        }
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn publish_create_new_is_atomic_and_copy_fallback_cleans_partial_file_on_write_failure() {
+        let dir = temp_dir("publish-create-new");
+        let target = dir.join("Hero.pdf");
+        let payload = valid_test_pdf("Hero");
+
+        // 1. StagedUpload::publish_create_new publishes cleanly and cleans up staging file.
+        let mut staged = StagedUpload::create(&target).unwrap();
+        staged.write_chunk(&payload).unwrap();
+        staged.finish().unwrap();
+        staged.publish_create_new(&target).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), payload);
+        let leftover_tmp = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().starts_with(STAGING_PREFIX));
+        assert!(!leftover_tmp, "staging temp file must be cleaned up");
+
+        // 2. publish_create_new refuses to overwrite an existing destination and keeps its bytes.
+        let mut staged2 = StagedUpload::create(&target).unwrap();
+        staged2.write_chunk(&valid_test_pdf("Other")).unwrap();
+        staged2.finish().unwrap();
+        let err = staged2.publish_create_new(&target).unwrap_err();
+        assert!(
+            err.downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.kind() == std::io::ErrorKind::AlreadyExists),
+            "expected AlreadyExists, got: {err:#}"
+        );
+        assert_eq!(fs::read(&target).unwrap(), payload);
+
+        // 3. Copy fallback removes the partial destination file if writing fails mid-stream,
+        //    so a retry succeeds instead of hitting a truncated duplicate.
+        let fallback_dest = dir.join("FallbackHero.pdf");
+        let partial_err = copy_create_new_with(&fallback_dest, |dst| {
+            dst.write_all(b"%PDF-1.4\nPARTIAL")?;
+            Err(std::io::Error::new(
+                std::io::ErrorKind::WriteZero,
+                "simulated disk full",
+            ))
+        })
+        .unwrap_err();
+        assert_eq!(partial_err.kind(), std::io::ErrorKind::WriteZero);
+        assert!(
+            !fallback_dest.exists(),
+            "failed copy fallback must remove partial destination file"
+        );
+
+        // Subsequent retry creates the destination cleanly.
+        copy_create_new_with(&fallback_dest, |dst| dst.write_all(&payload)).unwrap();
+        assert_eq!(fs::read(&fallback_dest).unwrap(), payload);
+
+        // 4. Copy fallback refuses AlreadyExists WITHOUT deleting the pre-existing file.
+        let exists_err =
+            copy_create_new_with(&fallback_dest, |dst| dst.write_all(b"should never run"))
+                .unwrap_err();
+        assert_eq!(exists_err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&fallback_dest).unwrap(), payload);
 
         let _ = fs::remove_dir_all(&dir);
     }
