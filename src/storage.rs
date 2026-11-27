@@ -269,7 +269,7 @@ impl SheetStore {
             if !meta.is_file() || meta.file_type().is_symlink() {
                 continue;
             }
-            if !sidecar_claimed_by_other_pdf(pdf_path, &sc) {
+            if !sidecar_claimed_by_other_pdf(pdf_path, &sc)? {
                 continue;
             }
             let owner_matches = sidecar_explicit_owner_matches(&sc, pdf_path);
@@ -303,7 +303,7 @@ impl SheetStore {
                 sidecar_path.display()
             );
         }
-        if sidecar_claimed_by_other_pdf(pdf_path, sidecar_path)
+        if sidecar_claimed_by_other_pdf(pdf_path, sidecar_path)?
             && sidecar_explicit_owner_matches(sidecar_path, pdf_path) != Some(true)
         {
             bail!(
@@ -329,7 +329,8 @@ impl SheetStore {
             // derives as its primary or legacy sidecar (e.g. `Hero.pdf` vs `Hero.pdf.pdf`,
             // or case-variant siblings like `Hero.PDF` vs `Hero.pdf`), unless the sidecar
             // explicitly declares `pdf_path` as its sole owner via `pdfFileName`.
-            if sidecar_claimed_by_other_pdf(pdf_path, &sc)
+            // Fail closed if directory ownership cannot be verified.
+            if sidecar_claimed_by_other_pdf(pdf_path, &sc)?
                 && sidecar_explicit_owner_matches(&sc, pdf_path) != Some(true)
             {
                 continue;
@@ -1955,44 +1956,70 @@ fn same_dir_entry_name(a: &std::ffi::OsStr, b: &std::ffi::OsStr) -> bool {
 
 /// Returns whether any *other* existing regular `.pdf` file in `pdf_path`'s parent
 /// directory derives `sidecar_path` as either its primary (`<name>.state.json`) or
-/// legacy (`<stem>.state.json`) sidecar path.
-fn sidecar_claimed_by_other_pdf(pdf_path: &Path, sidecar_path: &Path) -> bool {
-    let Some(parent) = pdf_path.parent() else {
-        return false;
-    };
-    let Some(self_name) = pdf_path.file_name() else {
-        return false;
-    };
-    let Some(target_sc_name) = sidecar_path.file_name() else {
-        return false;
-    };
-    let Ok(entries) = fs::read_dir(parent) else {
-        return false;
-    };
-    entries.flatten().any(|entry| {
+/// legacy (`<stem>.state.json`) sidecar path. Fails closed (`Err`) if the directory
+/// cannot be enumerated so callers never delete or misattribute an unverified sidecar.
+fn sidecar_claimed_by_other_pdf(pdf_path: &Path, sidecar_path: &Path) -> Result<bool> {
+    let parent = pdf_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .ok_or_else(|| {
+            anyhow!(
+                "cannot determine parent directory for {}",
+                pdf_path.display()
+            )
+        })?;
+    let self_name = pdf_path
+        .file_name()
+        .ok_or_else(|| anyhow!("cannot determine filename for {}", pdf_path.display()))?;
+    let target_sc_name = sidecar_path
+        .file_name()
+        .ok_or_else(|| anyhow!("cannot determine filename for {}", sidecar_path.display()))?;
+    let entries = fs::read_dir(parent).with_context(|| {
+        format!(
+            "failed to inspect directory {} for sidecar ownership",
+            parent.display()
+        )
+    })?;
+    for entry_res in entries {
+        let entry = entry_res.with_context(|| {
+            format!(
+                "failed reading directory entry in {} for sidecar ownership",
+                parent.display()
+            )
+        })?;
         let name = entry.file_name();
         if same_dir_entry_name(&name, self_name) {
-            return false;
+            continue;
         }
         let Some(name_str) = name.to_str() else {
-            return false;
+            continue;
         };
         if !name_str.to_ascii_lowercase().ends_with(".pdf") {
-            return false;
+            continue;
         }
-        if !entry.file_type().is_ok_and(|ty| ty.is_file()) {
-            return false;
+        let ty = entry.file_type().with_context(|| {
+            format!(
+                "failed inspecting directory entry {} for sidecar ownership",
+                entry.path().display()
+            )
+        })?;
+        if !ty.is_file() {
+            continue;
         }
         let other_path = entry.path();
         let other_primary = SheetStore::sidecar_path_for(&other_path);
         let other_legacy = SheetStore::legacy_sidecar_path_for(&other_path);
-        other_primary
+        if other_primary
             .file_name()
             .is_some_and(|n| same_dir_entry_name(n, target_sc_name))
             || other_legacy
                 .file_name()
                 .is_some_and(|n| same_dir_entry_name(n, target_sc_name))
-    })
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Inspects a sidecar file for an explicit `pdfFileName` ownership tag and returns
@@ -2248,7 +2275,9 @@ fn sheet_entry_from_path(root: &Path, abs: &Path) -> Result<SheetEntry> {
                 }
             }
             None => {
-                if sidecar_claimed_by_other_pdf(abs, p) {
+                // Fail closed if directory enumeration fails so unverified unstamped
+                // sidecars are never misattributed.
+                if sidecar_claimed_by_other_pdf(abs, p).unwrap_or(true) {
                     return None;
                 }
             }
@@ -3845,6 +3874,7 @@ mod tests {
             .unwrap();
         assert!(pre_pr_before.has_state_sidecar);
         assert_eq!(pre_pr_before.character_name.as_deref(), Some("Pre-PR Hero"));
+        assert_eq!(pre_pr_before.level.as_deref(), Some("13"));
         let pre_pr_err = store
             .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "PrePrHero.pdf.pdf")
             .unwrap_err();
@@ -3864,6 +3894,7 @@ mod tests {
             .unwrap();
         assert!(pre_pr_listed.has_state_sidecar);
         assert_eq!(pre_pr_listed.character_name.as_deref(), Some("Pre-PR Hero"));
+        assert_eq!(pre_pr_listed.level.as_deref(), Some("13"));
 
         // 7. Reverse direction: when `Reverse.pdf.pdf` already exists with a legacy
         //    sidecar `Reverse.pdf.state.json`, creating `Reverse.pdf` is rejected with
@@ -3890,6 +3921,7 @@ mod tests {
             reverse_before.character_name.as_deref(),
             Some("Legacy Double PDF Owner")
         );
+        assert_eq!(reverse_before.level.as_deref(), Some("14"));
 
         let reverse_err = store
             .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "Reverse")
@@ -3914,6 +3946,7 @@ mod tests {
             reverse_dbl_listed.character_name.as_deref(),
             Some("Legacy Double PDF Owner")
         );
+        assert_eq!(reverse_dbl_listed.level.as_deref(), Some("14"));
 
         // 8. Later saves cannot clobber a shared legacy sidecar even if both PDFs
         //    already coexist externally on disk.
@@ -4098,6 +4131,84 @@ mod tests {
                 assert!(!retried.has_state_sidecar);
                 assert_eq!(retried.character_name, None);
                 assert!(!locked_orphan.exists());
+            }
+
+            // 11. Write+exec, non-enumerable directory (`0o333`): directory enumeration
+            //     fails closed so an existing sibling's sidecar is NEVER deleted as an
+            //     apparent orphan and creation aborts cleanly.
+            let wo_dir = dir.join("write-only-dir");
+            fs::create_dir_all(&wo_dir).unwrap();
+            let wo_upper = wo_dir.join("WoSibling.PDF");
+            let wo_lower = wo_dir.join("WoSibling.pdf");
+            fs::write(&wo_upper, &tpl_bytes).unwrap();
+            if !wo_lower.exists() {
+                let wo_legacy = wo_dir.join("WoSibling.state.json");
+                let wo_legacy_bytes = serde_json::to_vec_pretty(&json!({
+                    "pdfSha256": tpl.sha256,
+                    "character": { "name": "WriteOnly Sibling", "level": "17" }
+                }))
+                .unwrap();
+                fs::write(&wo_legacy, &wo_legacy_bytes).unwrap();
+                let wo_before = store
+                    .list_sheets()
+                    .unwrap()
+                    .into_iter()
+                    .find(|s| s.path == "write-only-dir/WoSibling.PDF")
+                    .unwrap();
+                assert!(wo_before.has_state_sidecar);
+                assert_eq!(
+                    wo_before.character_name.as_deref(),
+                    Some("WriteOnly Sibling")
+                );
+                assert_eq!(wo_before.level.as_deref(), Some("17"));
+
+                // Stage while writable+readable, then drop read bit (`0o333`) so
+                // `read_dir` fails while `lstat`, `unlink`, and `hard_link` would succeed.
+                let (wo_norm, mut wo_staged) = store
+                    .start_staged_upload("write-only-dir/WoSibling.pdf")
+                    .unwrap();
+                wo_staged.write_chunk(&tpl_bytes).unwrap();
+                fs::set_permissions(&wo_dir, fs::Permissions::from_mode(0o333)).unwrap();
+                let read_dir_blocked = fs::read_dir(&wo_dir).is_err();
+                let wo_create_res = store.create_sheet_from_template(
+                    "templates/MPMB-2024-Blank.pdf",
+                    "write-only-dir/WoSibling",
+                );
+                let wo_commit_res = store.commit_staged_upload(&wo_norm, wo_staged, false);
+                fs::set_permissions(&wo_dir, fs::Permissions::from_mode(0o755)).unwrap();
+                if read_dir_blocked {
+                    let create_err = wo_create_res.unwrap_err();
+                    assert!(
+                        format!("{create_err:#}").contains("failed to inspect directory"),
+                        "expected fail-closed ownership scan error on create, got: {create_err:#}"
+                    );
+                    let commit_err = wo_commit_res.unwrap_err();
+                    assert!(
+                        format!("{commit_err:#}").contains("failed to inspect directory"),
+                        "expected fail-closed ownership scan error on commit, got: {commit_err:#}"
+                    );
+                    assert!(
+                        !wo_lower.exists(),
+                        "destination PDF must not be created when ownership scan fails"
+                    );
+                    assert_eq!(
+                        fs::read(&wo_legacy).unwrap(),
+                        wo_legacy_bytes,
+                        "sibling legacy sidecar must NOT be deleted when directory enumeration fails"
+                    );
+                    let wo_after = store
+                        .list_sheets()
+                        .unwrap()
+                        .into_iter()
+                        .find(|s| s.path == "write-only-dir/WoSibling.PDF")
+                        .unwrap();
+                    assert!(wo_after.has_state_sidecar);
+                    assert_eq!(
+                        wo_after.character_name.as_deref(),
+                        Some("WriteOnly Sibling")
+                    );
+                    assert_eq!(wo_after.level.as_deref(), Some("17"));
+                }
             }
         }
 
