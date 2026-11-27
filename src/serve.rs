@@ -1040,7 +1040,12 @@ impl SheetWorker {
                     .is_some()
                 {
                     StatusCode::NOT_FOUND
-                } else if msg.contains("conflict")
+                } else if err.chain().any(|c| {
+                    c.downcast_ref::<crate::storage::SheetAlreadyExistsError>()
+                        .is_some()
+                        || c.downcast_ref::<crate::storage::SidecarConflictError>()
+                            .is_some()
+                }) || msg.contains("conflict")
                     || msg.contains("changed externally")
                     || msg.contains("already exists")
                 {
@@ -2721,7 +2726,12 @@ async fn handle_create_from_template(
                     .is_some()
                 {
                     StatusCode::NOT_FOUND
-                } else if msg.contains("already exists") || msg.contains("conflict") {
+                } else if e.chain().any(|c| {
+                    c.downcast_ref::<crate::storage::SheetAlreadyExistsError>()
+                        .is_some()
+                        || c.downcast_ref::<crate::storage::SidecarConflictError>()
+                            .is_some()
+                }) {
                     StatusCode::CONFLICT
                 } else {
                     StatusCode::BAD_REQUEST
@@ -2816,14 +2826,20 @@ async fn handle_upload_sheet(
         Ok(Ok(entry)) => (StatusCode::CREATED, Json(json!({"sheet": entry}))).into_response(),
         Ok(Err(e)) => {
             let msg = format!("{e:#}");
-            if msg.contains("already exists") {
+            if e.chain().any(|c| {
+                c.downcast_ref::<crate::storage::SheetAlreadyExistsError>()
+                    .is_some()
+            }) {
                 return (
                     StatusCode::CONFLICT,
                     Json(json!({"error": msg, "code": "already_exists"})),
                 )
                     .into_response();
             }
-            if msg.contains("conflict") {
+            if e.chain().any(|c| {
+                c.downcast_ref::<crate::storage::SidecarConflictError>()
+                    .is_some()
+            }) {
                 return (
                     StatusCode::CONFLICT,
                     Json(json!({"error": msg, "code": "sidecar_conflict"})),
@@ -7507,6 +7523,39 @@ mod tests {
         )
         .unwrap();
         assert_eq!(exists_json["code"], "already_exists");
+
+        // User-controlled filenames containing "already exists" must still classify
+        // sidecar conflicts as `sidecar_conflict` (not `already_exists`).
+        std::fs::write(base.join("already exists.pdf.pdf"), &tpl_bytes).unwrap();
+        let tricked_sc = base.join("already exists.pdf.state.json");
+        let tricked_bytes = serde_json::to_vec_pretty(&json!({
+            "pdfSha256": tpl_sha,
+            "character": { "name": "Tricky Name Owner", "level": "8" }
+        }))
+        .unwrap();
+        std::fs::write(&tricked_sc, &tricked_bytes).unwrap();
+        let tricked_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sheets/upload?name=already%20exists.pdf&overwrite=false")
+                    .header("content-type", "application/pdf")
+                    .body(Body::from(tpl_bytes.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(tricked_resp.status(), StatusCode::CONFLICT);
+        let tricked_json: Value = serde_json::from_slice(
+            &axum::body::to_bytes(tricked_resp.into_body(), 1024 * 1024)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(tricked_json["code"], "sidecar_conflict");
+        assert!(!base.join("already exists.pdf").exists());
+        assert_eq!(std::fs::read(&tricked_sc).unwrap(), tricked_bytes);
 
         // Upload with overwrite=true on absent RevDouble.pdf (colliding with RevDouble.pdf.pdf's
         // legacy RevDouble.pdf.state.json) must return 409 Conflict via HTTP.

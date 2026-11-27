@@ -117,6 +117,41 @@ impl std::fmt::Display for TemplateNotFoundError {
 
 impl std::error::Error for TemplateNotFoundError {}
 
+#[derive(Debug)]
+pub struct SheetAlreadyExistsError {
+    pub path: String,
+    pub allow_overwrite_hint: bool,
+}
+
+impl std::fmt::Display for SheetAlreadyExistsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.allow_overwrite_hint {
+            write!(
+                f,
+                "sheet already exists: {} (pass overwrite=true to replace)",
+                self.path
+            )
+        } else {
+            write!(f, "sheet already exists: {}", self.path)
+        }
+    }
+}
+
+impl std::error::Error for SheetAlreadyExistsError {}
+
+#[derive(Debug)]
+pub struct SidecarConflictError {
+    pub message: String,
+}
+
+impl std::fmt::Display for SidecarConflictError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for SidecarConflictError {}
+
 #[derive(Clone, Debug)]
 pub struct GitConfig {
     pub repo_url: String,
@@ -354,12 +389,14 @@ impl SheetStore {
             // - turn a pre-existing unstamped sidecar owned by another sheet ambiguous and
             //   hide that sheet's metadata.
             if is_primary || owner_matches.is_none() {
-                bail!(
-                    "conflict: destination sidecar {} belongs to another existing sheet; choose a different character name",
-                    sc.file_name()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("sidecar")
-                );
+                return Err(anyhow::Error::new(SidecarConflictError {
+                    message: format!(
+                        "conflict: destination sidecar {} belongs to another existing sheet; choose a different character name",
+                        sc.file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("sidecar")
+                    ),
+                }));
             }
         }
         Ok(())
@@ -378,10 +415,12 @@ impl SheetStore {
         if sidecar_claimed_by_other_pdf(pdf_path, sidecar_path)?
             && sidecar_explicit_owner_matches(sidecar_path, pdf_path) != Some(true)
         {
-            bail!(
-                "conflict: sidecar destination {} is shared with another existing sheet and will not be overwritten",
-                sidecar_path.display()
-            );
+            return Err(anyhow::Error::new(SidecarConflictError {
+                message: format!(
+                    "conflict: sidecar destination {} is shared with another existing sheet and will not be overwritten",
+                    sidecar_path.display()
+                ),
+            }));
         }
         Ok(())
     }
@@ -528,7 +567,10 @@ impl SheetStore {
             sync_parent_dir(&abs);
         } else {
             if fs::symlink_metadata(&abs).is_ok() {
-                bail!("sheet already exists: {normalized} (pass overwrite=true to replace)");
+                return Err(anyhow::Error::new(SheetAlreadyExistsError {
+                    path: normalized,
+                    allow_overwrite_hint: true,
+                }));
             }
             // Reject destinations whose sidecar path would collide with another existing
             // sheet's sidecar (e.g. pre-PR unstamped sidecar or shared legacy sidecar),
@@ -542,7 +584,10 @@ impl SheetStore {
                     .is_some_and(|io| io.kind() == std::io::ErrorKind::AlreadyExists)
                     || abs.exists()
                 {
-                    bail!("sheet already exists: {normalized} (pass overwrite=true to replace)");
+                    return Err(anyhow::Error::new(SheetAlreadyExistsError {
+                        path: normalized,
+                        allow_overwrite_hint: true,
+                    }));
                 }
                 return Err(err);
             }
@@ -593,7 +638,10 @@ impl SheetStore {
             // Fast-fail before running any template startup/JavaScript when a sheet
             // already exists or its sidecar path collides with another existing sheet.
             if fs::symlink_metadata(&abs).is_ok() {
-                bail!("sheet already exists: {norm}");
+                return Err(anyhow::Error::new(SheetAlreadyExistsError {
+                    path: norm,
+                    allow_overwrite_hint: false,
+                }));
             }
             Self::check_create_sidecar_conflicts(&abs)?;
             let (src_norm, _) = self.resolve_safe_pdf_path(template_rel)?;
