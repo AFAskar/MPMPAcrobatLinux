@@ -1262,15 +1262,17 @@ impl SheetWorker {
             .ok()
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
-        let extracted = rt.eval(EXTRACT_STATE_JS)?;
-        if !extracted.is_object() {
+        let Value::Object(extracted_obj) = rt.eval(EXTRACT_STATE_JS)? else {
             bail!("state extraction did not return an object");
-        }
+        };
 
         // Only now atomically publish with create-only semantics (O_CREAT|O_EXCL).
         // If another writer created the destination while startup was pending, this
         // fails with 409 Conflict without touching their file or mutating self.active.
         let entry = self.store.publish_new_sheet_bytes(&dest_norm, &bytes)?;
+
+        // Everything below this point is infallible so a committed sheet + session
+        // swap can never be reported to the client as a failed creation.
         self.session_seq += 1;
         let session_id = format!("{}-s{}", self.server_instance_id, self.session_seq);
         let active_sheet = ActiveSheet {
@@ -1287,10 +1289,10 @@ impl SheetWorker {
             page_pngs: BTreeMap::new(),
             page_sizes: BTreeMap::new(),
         };
-        self.active = Some(active_sheet);
         self.last_save_conflict = None;
         self.sync_tracker.mark_dirty();
-        let state = self.assemble_active_state_payload(extracted)?;
+        let state = self.assemble_active_state_payload(&active_sheet, extracted_obj);
+        self.active = Some(active_sheet);
         Ok(json!({
             "status": "ok",
             "sheet": entry,
@@ -1324,11 +1326,12 @@ impl SheetWorker {
             .ok()
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
+        let Value::Object(extracted_obj) = rt.eval(EXTRACT_STATE_JS)? else {
+            bail!("state extraction did not return an object");
+        };
         self.session_seq += 1;
         let session_id = format!("{}-s{}", self.server_instance_id, self.session_seq);
-        let prev_active = self.active.take();
-        let prev_conflict = self.last_save_conflict.take();
-        self.active = Some(ActiveSheet {
+        let active_sheet = ActiveSheet {
             rel_path: norm,
             session_id,
             pdf,
@@ -1341,21 +1344,16 @@ impl SheetWorker {
             projected: None,
             page_pngs: BTreeMap::new(),
             page_sizes: BTreeMap::new(),
-        });
-        let state = match self.build_state_payload() {
-            Ok(state) => state,
-            Err(err) => {
-                self.active = prev_active;
-                self.last_save_conflict = prev_conflict;
-                return Err(err);
-            }
         };
+        self.last_save_conflict = None;
+        let state = self.assemble_active_state_payload(&active_sheet, extracted_obj);
+        self.active = Some(active_sheet);
         Ok(json!({"status": "ok", "state": state}))
     }
 
     fn build_state_payload(&self) -> Result<Value> {
         let Some(sh) = &self.active else {
-            let git = self.store.git_status()?;
+            let git = self.store.git_status_best_effort();
             let active_interaction = self.bridge.active_public();
             let state_seq = self.bridge.next_state_seq();
             let dirty_since_sync = self.sync_tracker.is_dirty();
@@ -1369,20 +1367,22 @@ impl SheetWorker {
                 "activeInteraction": active_interaction,
             }));
         };
-        let extracted = sh.rt.eval(EXTRACT_STATE_JS)?;
-        self.assemble_active_state_payload(extracted)
+        let Value::Object(extracted_obj) = sh.rt.eval(EXTRACT_STATE_JS)? else {
+            bail!("state extraction did not return an object");
+        };
+        Ok(self.assemble_active_state_payload(sh, extracted_obj))
     }
 
-    fn assemble_active_state_payload(&self, mut extracted: Value) -> Result<Value> {
-        let sh = self.active.as_ref().context("no sheet is open")?;
-        let git = self.store.git_status()?;
+    fn assemble_active_state_payload(
+        &self,
+        sh: &ActiveSheet,
+        mut obj: serde_json::Map<String, Value>,
+    ) -> Value {
+        let git = self.store.git_status_best_effort();
         let active_interaction = self.bridge.active_public();
         let state_seq = self.bridge.next_state_seq();
         let dirty_since_sync = self.sync_tracker.is_dirty();
         let diagnostics = sh.rt.diagnostics().unwrap_or(Value::Null);
-        let obj = extracted
-            .as_object_mut()
-            .ok_or_else(|| anyhow!("state extraction did not return an object"))?;
         obj.insert("open".into(), json!(true));
         obj.insert("serverInstanceId".into(), json!(self.server_instance_id));
         obj.insert("sessionId".into(), json!(sh.session_id));
@@ -1392,16 +1392,13 @@ impl SheetWorker {
         obj.insert("dirtySinceSave".into(), json!(sh.dirty_since_save));
         obj.insert("dirtySinceSync".into(), json!(dirty_since_sync));
         obj.insert("diagnostics".into(), diagnostics);
-        obj.insert("git".into(), serde_json::to_value(&git)?);
+        obj.insert("git".into(), json!(git));
         obj.insert("pdfium".into(), json!(self.renderer.is_some()));
-        obj.insert(
-            "activeInteraction".into(),
-            serde_json::to_value(&active_interaction)?,
-        );
+        obj.insert("activeInteraction".into(), json!(active_interaction));
         if let Some(conflict) = &self.last_save_conflict {
-            obj.insert("saveConflict".into(), serde_json::to_value(conflict)?);
+            obj.insert("saveConflict".into(), json!(conflict));
         }
-        Ok(extracted)
+        Value::Object(obj)
     }
 
     fn inspect_field(&self, name: &str) -> Result<Value> {
@@ -6858,6 +6855,105 @@ mod tests {
         let (st, active_state) = get_json(&app, "/api/session/state").await;
         assert_eq!(st, StatusCode::OK);
         assert_eq!(active_state["path"], "baseline.pdf");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn template_create_succeeds_with_graceful_git_status_when_git_index_is_corrupt() {
+        let base = std::env::temp_dir().join(format!(
+            "mpmb-serve-corrupt-git-index-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let bare = base.join("remote.git");
+        let data_dir = base.join("sheets");
+        std::fs::create_dir_all(&bare).unwrap();
+        std::fs::create_dir_all(&data_dir).unwrap();
+        assert!(std::process::Command::new("git")
+            .args(["init", "--bare", "-b", "main"])
+            .arg(&bare)
+            .status()
+            .unwrap()
+            .success());
+
+        let cfg = ServeConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            store: StoreConfig {
+                root: data_dir.clone(),
+                git: Some(GitConfig::new(bare.to_string_lossy().into_owned())),
+            },
+            auth_token: None,
+            allow_unauthenticated: false,
+            git_auto_sync_secs: 0,
+            autosave: false,
+            default_sheet: None,
+        };
+        let state = AppState::start(&cfg).unwrap();
+        let store_ref = Arc::clone(&state.store);
+        let app = build_router(state);
+
+        std::fs::create_dir_all(data_dir.join("templates")).unwrap();
+        make_scripted_hp_pdf(
+            &data_dir.join("templates/MPMB-2024-Blank.pdf"),
+            "10",
+            "",
+            None,
+        );
+        make_scripted_hp_pdf(&data_dir.join("baseline.pdf"), "20", "", None);
+
+        // Baseline git sync so .git/index exists and is populated, then open baseline.pdf.
+        let (st, _) = post_json(&app, "/api/git/sync", json!({"message": "seed"})).await;
+        assert_eq!(st, StatusCode::OK);
+        let (st, _) = post_json(&app, "/api/session/open", json!({"path": "baseline.pdf"})).await;
+        assert_eq!(st, StatusCode::OK);
+
+        // Corrupt .git/index so real `git status --porcelain` fails.
+        std::fs::write(data_dir.join(".git/index"), b"CORRUPT_GIT_INDEX_BYTES").unwrap();
+        assert!(
+            store_ref.git_status().is_err(),
+            "corrupted .git/index must cause real git_status() to fail"
+        );
+
+        // POST /api/sheets/new must still succeed with 200 OK, keep file + active session
+        // consistent, and report graceful Git-status error metadata instead of failing post-commit.
+        let (st, created) = post_json(
+            &app,
+            "/api/sheets/new",
+            json!({
+                "template": "templates/MPMB-2024-Blank.pdf",
+                "name": "CorruptGitHero",
+                "open": true
+            }),
+        )
+        .await;
+        assert_eq!(
+            st,
+            StatusCode::OK,
+            "post-commit git status failure must not fail creation: {created}"
+        );
+        assert!(data_dir.join("CorruptGitHero.pdf").is_file());
+        assert_eq!(created["sheet"]["path"], "CorruptGitHero.pdf");
+        assert_eq!(created["state"]["open"], true);
+        assert_eq!(created["state"]["path"], "CorruptGitHero.pdf");
+        assert_eq!(created["state"]["git"]["enabled"], true);
+        assert!(
+            created["state"]["git"]["last_error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("git status unavailable"),
+            "expected graceful git status error metadata: {created}"
+        );
+
+        let (st, follow_state) = get_json(&app, "/api/session/state").await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(follow_state["path"], "CorruptGitHero.pdf");
+        assert!(follow_state["git"]["last_error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("git status unavailable"));
 
         let _ = std::fs::remove_dir_all(&base);
     }

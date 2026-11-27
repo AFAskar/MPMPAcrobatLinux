@@ -639,6 +639,39 @@ impl SheetStore {
         })
     }
 
+    /// Returns Git status, degrading gracefully to a status object carrying
+    /// `last_error` when `git status` itself fails (e.g. a corrupt `.git/index`),
+    /// so post-commit HTTP responses remain infallible once a sheet is saved or created.
+    pub fn git_status_best_effort(&self) -> GitStatus {
+        match self.git_status() {
+            Ok(status) => status,
+            Err(err) => {
+                let (enabled, repo_url, branch) = match &self.git {
+                    Some(cfg) => (
+                        true,
+                        Some(redact_url(&cfg.repo_url)),
+                        Some(cfg.branch.clone()),
+                    ),
+                    None => (false, None, None),
+                };
+                GitStatus {
+                    enabled,
+                    repo_url,
+                    branch,
+                    head_sha: None,
+                    head_subject: None,
+                    dirty: enabled,
+                    changed_files: Vec::new(),
+                    ahead: 0,
+                    behind: 0,
+                    head_backed_up: false,
+                    last_conflict_branch: None,
+                    last_error: Some(format!("git status unavailable: {err:#}")),
+                }
+            }
+        }
+    }
+
     pub fn git_pull(&self) -> Result<PullResult> {
         let mut guard = self.lock.lock().unwrap();
         let Some(cfg) = &self.git else {
