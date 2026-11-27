@@ -511,8 +511,10 @@ PWA_HARNESS = textwrap.dedent(
       assert.equal(element('tab-play').classList.contains('active'), true);
       assert.equal(element('banner').textContent, 'Loaded Bryn.pdf');
 
-      // 12. Obsolete New Character submission must NOT close a newer modal draft
-      //     opened after closing the first form while its POST was still in flight.
+      // 12. Obsolete New Character submission must NOT close a newer modal draft,
+      //     switch tabs behind it, or steal focus away from the newer form.
+      element('tab-play').classList.remove('active');
+      element('tab-library').classList.add('active');
       openNewCharModal();
       element('nc-name').value = 'FirstDraft';
       let resolveFirstCreate = null;
@@ -537,6 +539,7 @@ PWA_HARNESS = textwrap.dedent(
       closeNewCharModal(true);
       openNewCharModal();
       element('nc-name').value = 'SecondDraft';
+      assert.equal(context.document.activeElement, element('nc-name'));
       resolveFirstCreate();
       await firstCreatePromise;
       assert.equal(
@@ -545,6 +548,17 @@ PWA_HARNESS = textwrap.dedent(
         'obsolete create response must not close the newly opened modal',
       );
       assert.equal(element('nc-name').value, 'SecondDraft');
+      assert.equal(
+        context.document.activeElement,
+        element('nc-name'),
+        'obsolete create response must not steal focus from the newer creation form',
+      );
+      assert.equal(
+        element('tab-library').classList.contains('active'),
+        true,
+        'obsolete create response must not switch tabs behind the newer form',
+      );
+      assert.equal(element('tab-play').classList.contains('active'), false);
       closeNewCharModal(false);
 
       // 13. If another sheet/session becomes active while refreshLibrary() is pending
@@ -606,6 +620,46 @@ PWA_HARNESS = textwrap.dedent(
       assert.equal(element('tab-sheet').classList.contains('active'), true);
       assert.equal(element('tab-play').classList.contains('active'), false);
       assert.equal(context.document.activeElement, keepFocusBtn);
+
+      // 14. Obsolete New Character submission receiving 409 discardTarget after its form
+      //     was dismissed / replaced by a newer draft must NOT prompt to discard edits or retry.
+      openNewCharModal();
+      element('nc-name').value = 'DismissedHero';
+      let resolveDismissed409 = null;
+      let dismissedCalls = 0;
+      let dismissedConfirms = 0;
+      confirmHandler = () => { dismissedConfirms += 1; return true; };
+      fetchHandler = async (path) => {
+        if (path === '/api/sheets/new') {
+          dismissedCalls += 1;
+          return new Promise((resolve) => {
+            resolveDismissed409 = () => resolve(jsonResp({
+              status: 'conflict',
+              code: 'unsaved_edits',
+              error: 'unsaved edits on NewerHero.pdf',
+              discardTarget: { sheet: 'NewerHero.pdf', sessionId: 'srv-5-s6', revision: 2 },
+            }, 409));
+          });
+        }
+        throw new Error('Unexpected dismissed-409 fetch ' + path);
+      };
+      const dismissedPromise = createCharacterFromTemplate('templates/MPMB-2024-Blank.pdf', 'DismissedHero');
+      assert.ok(resolveDismissed409, 'dismissed create POST should be in flight');
+      closeNewCharModal(true);
+      openNewCharModal();
+      element('nc-name').value = 'ActiveReplacementDraft';
+      resolveDismissed409();
+      await dismissedPromise;
+      assert.equal(dismissedConfirms, 0, 'obsolete 409 must not open discard confirm prompt');
+      assert.equal(dismissedCalls, 1, 'obsolete 409 must not issue a forced retry');
+      assert.equal(element('new-char-modal').classList.contains('hidden'), false);
+      assert.equal(element('nc-name').value, 'ActiveReplacementDraft');
+      assert.equal(context.document.activeElement, element('nc-name'));
+      assert.ok(
+        element('banner').textContent.includes('out of date'),
+        'obsolete 409 should report that the request is out of date',
+      );
+      closeNewCharModal(false);
 
       console.log('PWA_CLIENT_REGRESSIONS_OK');
     })().catch((err) => {

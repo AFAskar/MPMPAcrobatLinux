@@ -1665,9 +1665,15 @@
         appState.page = 0;
         const createdPath = res.sheet?.path || trimmed;
         showBanner(`Created and opened ${createdPath}`, 'ok', 3000);
-        switchTab('play');
-        const destFocus = $('btn-classes');
-        if (destFocus && typeof destFocus.focus === 'function') destFocus.focus();
+        // Do not switch tabs or steal focus behind a newer New Character form.
+        const newerModalOpen =
+          activeNewCharModalInstance !== null &&
+          activeNewCharModalInstance !== modalInstance;
+        if (!newerModalOpen) {
+          switchTab('play');
+          const destFocus = $('btn-classes');
+          if (destFocus && typeof destFocus.focus === 'function') destFocus.focus();
+        }
       }
     } catch (err) {
       if (err.status === 409 && err.data && err.data.status === 'interaction_required' && err.data.interaction) {
@@ -1677,13 +1683,28 @@
         return;
       }
       const target = err.data && err.data.discardTarget;
-      if (
-        err.status === 409 &&
-        !force &&
-        target &&
-        confirm(`${err.message}\n\nDiscard unsaved edits on ${target.sheet} (rev ${target.revision}) and create ${trimmed}?`)
-      ) {
-        return createCharacterFromTemplate(template, trimmed, true, target, modalInstance);
+      if (err.status === 409 && !force && target) {
+        const originatingFormActive =
+          modalInstance === null
+            ? activeNewCharModalInstance === null
+            : activeNewCharModalInstance === modalInstance;
+        if (!originatingFormActive) {
+          showBanner(`Creation request for ${trimmed} is out of date`, 'warn', 5000);
+          return;
+        }
+        if (
+          confirm(`${err.message}\n\nDiscard unsaved edits on ${target.sheet} (rev ${target.revision}) and create ${trimmed}?`)
+        ) {
+          const stillActiveAfterConfirm =
+            modalInstance === null
+              ? activeNewCharModalInstance === null
+              : activeNewCharModalInstance === modalInstance;
+          if (!stillActiveAfterConfirm) {
+            showBanner(`Creation request for ${trimmed} is out of date`, 'warn', 5000);
+            return;
+          }
+          return createCharacterFromTemplate(template, trimmed, true, target, modalInstance);
+        }
       }
       if (err.status === 409 && force) {
         refreshSession();

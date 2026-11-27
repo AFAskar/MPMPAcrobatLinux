@@ -18,6 +18,21 @@ use std::{
 static TEMP_SEQ: AtomicU64 = AtomicU64::new(1);
 static CONFLICT_SEQ: AtomicU64 = AtomicU64::new(1);
 
+#[cfg(all(test, unix))]
+static FAIL_SIDECAR_REMOVE_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+#[cfg(test)]
+static FAIL_POST_PUBLISH_READ_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+#[cfg(all(test, unix))]
+pub(crate) fn set_fail_sidecar_remove_path_for_test(path: Option<PathBuf>) {
+    *FAIL_SIDECAR_REMOVE_PATH.lock().unwrap() = path;
+}
+
+#[cfg(test)]
+pub(crate) fn set_fail_post_publish_read_path_for_test(path: Option<PathBuf>) {
+    *FAIL_POST_PUBLISH_READ_PATH.lock().unwrap() = path;
+}
+
 pub const MAX_PDF_BYTES: usize = 64 * 1024 * 1024;
 const MAX_SIDECAR_BYTES: usize = 4 * 1024 * 1024;
 const DEFAULT_GIT_TIMEOUT_SECS: u64 = 60;
@@ -335,7 +350,25 @@ impl SheetStore {
             {
                 continue;
             }
-            match fs::remove_file(&sc) {
+            #[cfg(all(test, unix))]
+            let remove_res = {
+                let injected = FAIL_SIDECAR_REMOVE_PATH
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .is_some_and(|target| target == &sc);
+                if injected {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "injected orphan sidecar removal failure",
+                    ))
+                } else {
+                    fs::remove_file(&sc)
+                }
+            };
+            #[cfg(not(all(test, unix)))]
+            let remove_res = fs::remove_file(&sc);
+            match remove_res {
                 Ok(()) => {}
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
                 Err(err) => {
@@ -404,19 +437,29 @@ impl SheetStore {
         // any existing PDF/sidecar so truncated or corrupted uploads can never
         // overwrite a valid character sheet.
         staged.validate_pdf()?;
+        let (staged_size, staged_sha) = staged.staged_size_and_sha256();
         let _guard = self.lock.lock().unwrap();
         let (normalized, abs) = self.resolve_safe_pdf_path(rel)?;
         if let Some(parent) = abs.parent() {
             fs::create_dir_all(parent)?;
         }
-        // Hold the cross-process store lock until after sheet_entry_from_path()
-        // hashes the published file so the returned entry describes the exact bytes
-        // published by this operation.
+        // Hold the cross-process store lock until after publication and entry assembly
+        // so the returned entry describes the exact bytes published by this operation.
         let _commit_lock = acquire_store_lock(&self.root)?;
         if overwrite {
-            if let Ok(meta) = fs::symlink_metadata(&abs) {
-                if meta.file_type().is_symlink() || !meta.is_file() {
+            match fs::symlink_metadata(&abs) {
+                Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => {
                     bail!("cannot overwrite non-regular file at {normalized}");
+                }
+                Ok(_) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    // Creating an absent PDF via overwrite=true must run the same
+                    // sidecar ownership check so it never hides another sheet's metadata.
+                    Self::check_create_sidecar_conflicts(&abs)?;
+                }
+                Err(err) => {
+                    return Err(anyhow::Error::new(err)
+                        .context(format!("failed to stat destination {normalized}")));
                 }
             }
             staged
@@ -447,7 +490,38 @@ impl SheetStore {
             }
             sync_parent_dir(&abs);
         }
-        sheet_entry_from_path(&self.root, &abs)
+        // Once the file has been published on disk, never fail the commit if a post-publish
+        // stat/hash reread encounters an error; fall back to the exact pre-computed metadata
+        // of the staged bytes that were just published.
+        let committed_fallback = SheetEntry {
+            path: normalized.clone(),
+            name: abs
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(str::to_owned)
+                .unwrap_or_else(|| normalized.clone()),
+            size_bytes: staged_size,
+            sha256: staged_sha,
+            modified_unix: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            is_template: is_template_path(&normalized),
+            has_state_sidecar: false,
+            character_name: None,
+            class_and_levels: None,
+            level: None,
+        };
+        #[cfg(test)]
+        if FAIL_POST_PUBLISH_READ_PATH
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|target| target == &abs)
+        {
+            return Ok(committed_fallback);
+        }
+        Ok(sheet_entry_from_path(&self.root, &abs).unwrap_or(committed_fallback))
     }
 
     pub fn prepare_template_copy(
@@ -644,6 +718,19 @@ impl SheetStore {
         let _commit_lock = acquire_store_lock(&self.root)?;
         if let Some(conflict) = check_expected()? {
             return Ok(conflict);
+        }
+        match fs::symlink_metadata(&abs) {
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                // Recreating an absent PDF (even without a sidecar payload) must run
+                // the create-time sidecar conflict check so it cannot hide another
+                // sheet's unstamped or legacy sidecar metadata.
+                Self::check_create_sidecar_conflicts(&abs)?;
+            }
+            Err(err) => {
+                return Err(anyhow::Error::new(err)
+                    .context(format!("failed to stat destination {}", abs.display())));
+            }
         }
         if let Some((_, ref sidecar_path)) = staged_sidecar {
             Self::ensure_primary_sidecar_writable_for(&abs, sidecar_path)?;
@@ -1776,6 +1863,7 @@ pub struct StagedUpload {
     file: Option<fs::File>,
     size: usize,
     header: Vec<u8>,
+    hasher: Sha256,
 }
 
 impl StagedUpload {
@@ -1803,6 +1891,7 @@ impl StagedUpload {
             file: Some(file),
             size: 0,
             header: Vec::with_capacity(5),
+            hasher: Sha256::new(),
         })
     }
 
@@ -1827,8 +1916,19 @@ impl StagedUpload {
             .as_mut()
             .ok_or_else(|| anyhow!("upload staging file already finalized"))?;
         file.write_all(chunk)?;
+        self.hasher.update(chunk);
         self.size = next_size;
         Ok(())
+    }
+
+    fn staged_size_and_sha256(&self) -> (u64, String) {
+        let digest = self.hasher.clone().finalize();
+        let mut out = String::with_capacity(digest.len() * 2);
+        for b in digest {
+            use std::fmt::Write;
+            let _ = write!(&mut out, "{b:02x}");
+        }
+        (self.size as u64, out)
     }
 
     fn finish(&mut self) -> Result<()> {
@@ -4282,6 +4382,97 @@ mod tests {
             !leftover_tmp3,
             "staging temp file must be cleaned up after publish error"
         );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn overwrite_upload_and_sidecarless_save_enforce_absent_pdf_conflicts_and_survive_post_publish_read_error(
+    ) {
+        let dir = temp_dir("overwrite-save-post-publish");
+        let store = SheetStore::open(StoreConfig {
+            root: dir.clone(),
+            git: None,
+        })
+        .unwrap();
+
+        let tpl_bytes = valid_test_pdf("Blank");
+        let tpl = store
+            .upload_sheet("templates/MPMB-2024-Blank.pdf", &tpl_bytes, false)
+            .unwrap();
+
+        // 1. Overwrite=true upload on an ABSENT destination must reject creating `Hero.pdf`
+        //    when unstamped `Hero.pdf.state.json` belongs to `Hero.pdf.pdf`, leaving
+        //    `Hero.pdf.pdf`'s sidecar and metadata untouched.
+        store
+            .upload_sheet("Hero.pdf.pdf", &tpl_bytes, false)
+            .unwrap();
+        let hero_legacy_sc = dir.join("Hero.pdf.state.json");
+        let hero_legacy_bytes = serde_json::to_vec_pretty(&json!({
+            "pdfSha256": tpl.sha256,
+            "character": { "name": "Existing Double Owner", "level": "8" }
+        }))
+        .unwrap();
+        fs::write(&hero_legacy_sc, &hero_legacy_bytes).unwrap();
+
+        let ov_err = store
+            .upload_sheet("Hero.pdf", &tpl_bytes, true)
+            .unwrap_err();
+        assert!(
+            format!("{ov_err:#}").contains("conflict"),
+            "overwrite=true upload on absent PDF colliding with sibling sidecar must conflict: {ov_err:#}"
+        );
+        assert!(!dir.join("Hero.pdf").exists());
+        assert_eq!(fs::read(&hero_legacy_sc).unwrap(), hero_legacy_bytes);
+
+        // 2. save_sheet_atomic without a state_sidecar payload on an ABSENT destination must
+        //    likewise reject recreating `Hero.pdf`.
+        let save_err = store
+            .save_sheet_atomic("Hero.pdf", &tpl_bytes, None, None, true)
+            .unwrap_err();
+        assert!(
+            format!("{save_err:#}").contains("conflict"),
+            "sidecarless save_sheet_atomic on absent PDF colliding with sibling sidecar must conflict: {save_err:#}"
+        );
+        assert!(!dir.join("Hero.pdf").exists());
+        assert_eq!(fs::read(&hero_legacy_sc).unwrap(), hero_legacy_bytes);
+
+        let listed = store.list_sheets().unwrap();
+        let dbl = listed.iter().find(|s| s.path == "Hero.pdf.pdf").unwrap();
+        assert!(dbl.has_state_sidecar);
+        assert_eq!(dbl.character_name.as_deref(), Some("Existing Double Owner"));
+        assert_eq!(dbl.level.as_deref(), Some("8"));
+
+        // Replacing an EXISTING PDF with overwrite=true still succeeds normally.
+        let replacement = valid_test_pdf("Replacement");
+        let replaced = store
+            .upload_sheet("Hero.pdf.pdf", &replacement, true)
+            .unwrap();
+        assert_eq!(replaced.path, "Hero.pdf.pdf");
+        assert_eq!(replaced.sha256, sha256_hex(&replacement));
+
+        // 3. If post-publish `sheet_entry_from_path` fails after commit, `commit_staged_upload`
+        //    must STILL return Ok(committed_entry) with exact size/hash and keep the published file.
+        struct ClearPostReadGuard;
+        impl Drop for ClearPostReadGuard {
+            fn drop(&mut self) {
+                set_fail_post_publish_read_path_for_test(None);
+            }
+        }
+        let post_target = dir.join("PostPublishOk.pdf");
+        let post_bytes = valid_test_pdf("PostPublishOk");
+        let expected_sha = sha256_hex(&post_bytes);
+        set_fail_post_publish_read_path_for_test(Some(post_target.clone()));
+        let _guard = ClearPostReadGuard;
+        let entry = store
+            .publish_new_sheet_bytes("PostPublishOk.pdf", &post_bytes)
+            .unwrap();
+        drop(_guard);
+        assert_eq!(entry.path, "PostPublishOk.pdf");
+        assert_eq!(entry.size_bytes, post_bytes.len() as u64);
+        assert_eq!(entry.sha256, expected_sha);
+        assert!(!entry.has_state_sidecar);
+        assert_eq!(fs::read(&post_target).unwrap(), post_bytes);
 
         let _ = fs::remove_dir_all(&dir);
     }

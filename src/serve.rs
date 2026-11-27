@@ -1270,14 +1270,70 @@ impl SheetWorker {
         let Value::Object(extracted_obj) = rt.eval(EXTRACT_STATE_JS)? else {
             bail!("state extraction did not return an object");
         };
+        let startup_dirty = revision > 0;
+
+        // If startup dialogs/scripts mutated persistent document state and autosave is
+        // enabled, project the updated PDF bytes IN MEMORY before atomic create-only
+        // publication so the file on disk immediately contains those edits without
+        // needing a fallible post-commit write.
+        let (publish_bytes, disk_sha256, projected, initial_dirty_since_save, startup_sidecar) =
+            if startup_dirty && self.autosave {
+                let snap = rt.snapshot()?;
+                let projected_bytes = pdf.project(&snap)?;
+                let projected_sha = crate::storage::sha256_hex(&projected_bytes);
+                let sidecar = build_state_sidecar(
+                    &dest_norm,
+                    &Value::Object(extracted_obj.clone()),
+                    &projected_sha,
+                );
+                (
+                    projected_bytes.clone(),
+                    projected_sha,
+                    Some((revision, projected_bytes)),
+                    false,
+                    Some(sidecar),
+                )
+            } else {
+                (bytes, sha, None, startup_dirty, None)
+            };
 
         // Only now atomically publish with create-only semantics (O_CREAT|O_EXCL).
         // If another writer created the destination while startup was pending, this
         // fails with 409 Conflict without touching their file or mutating self.active.
-        let entry = self.store.publish_new_sheet_bytes(&dest_norm, &bytes)?;
+        let mut entry = self
+            .store
+            .publish_new_sheet_bytes(&dest_norm, &publish_bytes)?;
 
         // Everything below this point is infallible so a committed sheet + session
         // swap can never be reported to the client as a failed creation.
+        let mut sidecar_dirty = false;
+        if let Some(sidecar) = startup_sidecar {
+            match self
+                .store
+                .write_sidecar_atomic(&entry.path, &disk_sha256, &sidecar)
+            {
+                Ok(()) => {
+                    entry.has_state_sidecar = true;
+                    let str_opt = |v: &Value| {
+                        v.as_str()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_owned)
+                    };
+                    if let Some(ch) = extracted_obj.get("character") {
+                        entry.character_name = str_opt(&ch["name"]);
+                        entry.class_and_levels = str_opt(&ch["classAndLevels"]);
+                        entry.level = str_opt(&ch["level"]);
+                    }
+                }
+                Err(err) => {
+                    eprintln!(
+                        "WARN: sidecar write after startup-edit template creation failed: {err:#}"
+                    );
+                    sidecar_dirty = true;
+                }
+            }
+        }
         self.session_seq += 1;
         let session_id = format!("{}-s{}", self.server_instance_id, self.session_seq);
         let active_sheet = ActiveSheet {
@@ -1285,12 +1341,12 @@ impl SheetWorker {
             session_id,
             pdf,
             rt,
-            disk_sha256: sha,
+            disk_sha256,
             revision,
-            dirty_since_save: false,
-            sidecar_dirty: false,
+            dirty_since_save: initial_dirty_since_save,
+            sidecar_dirty,
             last_tick: Instant::now(),
-            projected: None,
+            projected,
             page_pngs: BTreeMap::new(),
             page_sizes: BTreeMap::new(),
         };
@@ -1334,6 +1390,7 @@ impl SheetWorker {
         let Value::Object(extracted_obj) = rt.eval(EXTRACT_STATE_JS)? else {
             bail!("state extraction did not return an object");
         };
+        let startup_dirty = revision > 0;
         self.session_seq += 1;
         let session_id = format!("{}-s{}", self.server_instance_id, self.session_seq);
         let active_sheet = ActiveSheet {
@@ -1343,7 +1400,7 @@ impl SheetWorker {
             rt,
             disk_sha256: sha,
             revision,
-            dirty_since_save: false,
+            dirty_since_save: startup_dirty,
             sidecar_dirty: false,
             last_tick: Instant::now(),
             projected: None,
@@ -1351,8 +1408,16 @@ impl SheetWorker {
             page_sizes: BTreeMap::new(),
         };
         self.last_save_conflict = None;
-        let state = self.assemble_active_state_payload(&active_sheet, extracted_obj);
         self.active = Some(active_sheet);
+        if startup_dirty && self.autosave {
+            if let Err(err) = self.persist_active(false) {
+                eprintln!("WARN: autosave after startup edits failed: {err:#}");
+            }
+        }
+        let state = self.assemble_active_state_payload(
+            self.active.as_ref().expect("active sheet was just set"),
+            extracted_obj,
+        );
         Ok(json!({"status": "ok", "state": state}))
     }
 
@@ -2597,7 +2662,7 @@ async fn handle_list_sheets(
         let sheets = store.list_sheets()?;
         let templates: Vec<_> = sheets.iter().filter(|s| s.is_template).cloned().collect();
         let characters: Vec<_> = sheets.iter().filter(|s| !s.is_template).cloned().collect();
-        let git = store.git_status()?;
+        let git = store.git_status_best_effort();
         Ok(json!({
             "sheets": sheets,
             "templates": templates,
@@ -2629,21 +2694,23 @@ async fn handle_create_from_template(
     }
     if !req.open {
         let store = Arc::clone(&state.store);
+        let sync_tracker = Arc::clone(&state.sync_tracker);
         let template = req.template;
         let name = req.name;
-        return match tokio::task::spawn_blocking(move || {
-            store.create_sheet_from_template(&template, &name)
+        return match tokio::task::spawn_blocking(move || -> Result<_> {
+            let entry = store.create_sheet_from_template(&template, &name)?;
+            // Mark dirty inside the blocking task immediately after commit so a
+            // client disconnect dropping the handler future never skips Git sync.
+            sync_tracker.mark_dirty();
+            Ok(entry)
         })
         .await
         {
-            Ok(Ok(entry)) => {
-                state.sync_tracker.mark_dirty();
-                (
-                    StatusCode::CREATED,
-                    Json(json!({"status": "ok", "sheet": entry})),
-                )
-                    .into_response()
-            }
+            Ok(Ok(entry)) => (
+                StatusCode::CREATED,
+                Json(json!({"status": "ok", "sheet": entry})),
+            )
+                .into_response(),
             Ok(Err(e)) => {
                 let msg = format!("{e:#}");
                 let status = if e
@@ -2732,17 +2799,21 @@ async fn handle_upload_sheet(
     }
 
     let store = Arc::clone(&state.store);
+    let sync_tracker = Arc::clone(&state.sync_tracker);
     let overwrite = q.overwrite;
-    match tokio::task::spawn_blocking(move || store.commit_staged_upload(&norm, staged, overwrite))
-        .await
+    match tokio::task::spawn_blocking(move || -> Result<_> {
+        let entry = store.commit_staged_upload(&norm, staged, overwrite)?;
+        // Mark dirty inside the blocking task immediately after commit so a client
+        // disconnect dropping the handler future never skips idle Git sync.
+        sync_tracker.mark_dirty();
+        Ok(entry)
+    })
+    .await
     {
-        Ok(Ok(entry)) => {
-            state.sync_tracker.mark_dirty();
-            (StatusCode::CREATED, Json(json!({"sheet": entry}))).into_response()
-        }
+        Ok(Ok(entry)) => (StatusCode::CREATED, Json(json!({"sheet": entry}))).into_response(),
         Ok(Err(e)) => {
             let msg = format!("{e:#}");
-            let status = if msg.contains("already exists") {
+            let status = if msg.contains("already exists") || msg.contains("conflict") {
                 StatusCode::CONFLICT
             } else if msg.contains("exceeds 64 MiB") {
                 StatusCode::PAYLOAD_TOO_LARGE
@@ -6963,6 +7034,25 @@ mod tests {
             .unwrap_or("")
             .contains("git status unavailable"));
 
+        // GET /api/sheets must ALSO degrade gracefully via git_status_best_effort() so
+        // refreshLibrary() still shows the newly created character instead of returning 500.
+        let (st_lib, lib_body) = get_json(&app, "/api/sheets").await;
+        assert_eq!(
+            st_lib,
+            StatusCode::OK,
+            "GET /api/sheets must not fail with 500 on corrupt .git/index: {lib_body}"
+        );
+        assert!(lib_body["characters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["path"] == "CorruptGitHero.pdf"));
+        assert_eq!(lib_body["git"]["enabled"], true);
+        assert!(lib_body["git"]["last_error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("git status unavailable"));
+
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -7256,6 +7346,13 @@ mod tests {
                 StatusCode::BAD_REQUEST,
                 "unremovable orphan must fail cleanly: {body_locked}"
             );
+            assert!(
+                body_locked["error"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("failed to remove stale sidecar"),
+                "expected orphan-removal failure message: {body_locked}"
+            );
             assert!(!base.join("LockedApiOrphan.pdf").exists());
             assert_eq!(std::fs::read(&locked_sc).unwrap(), locked_sc_bytes);
             let (st_sess, sess) = get_json(&app, "/api/session/state").await;
@@ -7284,61 +7381,97 @@ mod tests {
         }
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            let ro_sub = base.join("locked-api-sub");
-            std::fs::create_dir_all(&ro_sub).unwrap();
-            let locked_sc = ro_sub.join("LockedApiOrphan.pdf.state.json");
-            std::fs::write(
-                &locked_sc,
-                serde_json::to_vec_pretty(&json!({
-                    "pdfSha256": tpl_sha,
-                    "character": { "name": "Locked API Hero" }
-                }))
-                .unwrap(),
-            )
+            // Inject failure specifically at orphan sidecar removal so staging succeeds
+            // and the HTTP test deterministically exercises `invalidate_sidecars_for`
+            // (even when running as root).
+            struct ClearRemoveFaultGuard;
+            impl Drop for ClearRemoveFaultGuard {
+                fn drop(&mut self) {
+                    crate::storage::set_fail_sidecar_remove_path_for_test(None);
+                }
+            }
+            let locked_sc = base.join("LockedApiOrphan.pdf.state.json");
+            let locked_sc_bytes = serde_json::to_vec_pretty(&json!({
+                "pdfSha256": tpl_sha,
+                "character": { "name": "Locked API Hero" }
+            }))
             .unwrap();
-            std::fs::set_permissions(&ro_sub, std::fs::Permissions::from_mode(0o555)).unwrap();
+            std::fs::write(&locked_sc, &locked_sc_bytes).unwrap();
+            let canonical_locked_sc = base
+                .canonicalize()
+                .unwrap_or_else(|_| base.clone())
+                .join("LockedApiOrphan.pdf.state.json");
+            crate::storage::set_fail_sidecar_remove_path_for_test(Some(canonical_locked_sc));
+            let _fault_guard = ClearRemoveFaultGuard;
+
             let (st_locked, body_locked) = post_json(
                 &app,
                 "/api/sheets/new",
                 json!({
                     "template": "templates/MPMB-2024-Blank.pdf",
-                    "name": "locked-api-sub/LockedApiOrphan",
+                    "name": "LockedApiOrphan",
                     "open": true
                 }),
             )
             .await;
-            std::fs::set_permissions(&ro_sub, std::fs::Permissions::from_mode(0o755)).unwrap();
-            if locked_sc.exists() {
-                assert_eq!(
-                    st_locked,
-                    StatusCode::BAD_REQUEST,
-                    "unremovable orphan must fail cleanly: {body_locked}"
-                );
-                assert!(!ro_sub.join("LockedApiOrphan.pdf").exists());
-                let (st_sess, sess) = get_json(&app, "/api/session/state").await;
-                assert_eq!(st_sess, StatusCode::OK);
-                assert_eq!(sess["path"], "OrphanPrimary.pdf");
+            drop(_fault_guard);
 
-                let (st_retry, retry_body) = post_json(
-                    &app,
-                    "/api/sheets/new",
-                    json!({
-                        "template": "templates/MPMB-2024-Blank.pdf",
-                        "name": "locked-api-sub/LockedApiOrphan",
-                        "open": true
-                    }),
-                )
-                .await;
-                assert_eq!(
-                    st_retry,
-                    StatusCode::OK,
-                    "retry after restoring permissions should succeed: {retry_body}"
-                );
-                assert_eq!(retry_body["sheet"]["has_state_sidecar"], false);
-                assert!(retry_body["sheet"]["character_name"].is_null());
-            }
+            assert_eq!(
+                st_locked,
+                StatusCode::BAD_REQUEST,
+                "unremovable orphan must fail cleanly: {body_locked}"
+            );
+            assert!(
+                body_locked["error"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("failed to remove stale sidecar"),
+                "Unix HTTP test must fail at orphan removal, not staging: {body_locked}"
+            );
+            assert!(!base.join("LockedApiOrphan.pdf").exists());
+            assert_eq!(std::fs::read(&locked_sc).unwrap(), locked_sc_bytes);
+            let (st_sess, sess) = get_json(&app, "/api/session/state").await;
+            assert_eq!(st_sess, StatusCode::OK);
+            assert_eq!(sess["path"], "OrphanPrimary.pdf");
+
+            // Once orphan removal succeeds, retrying the exact same name succeeds cleanly.
+            let (st_retry, retry_body) = post_json(
+                &app,
+                "/api/sheets/new",
+                json!({
+                    "template": "templates/MPMB-2024-Blank.pdf",
+                    "name": "LockedApiOrphan",
+                    "open": true
+                }),
+            )
+            .await;
+            assert_eq!(
+                st_retry,
+                StatusCode::OK,
+                "retry after orphan becomes removable should succeed: {retry_body}"
+            );
+            assert_eq!(retry_body["sheet"]["has_state_sidecar"], false);
+            assert!(retry_body["sheet"]["character_name"].is_null());
+            assert!(!locked_sc.exists());
         }
+
+        // Upload with overwrite=true on absent RevDouble.pdf (colliding with RevDouble.pdf.pdf's
+        // legacy RevDouble.pdf.state.json) must return 409 Conflict via HTTP.
+        let upload_conflict_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sheets/upload?name=RevDouble.pdf&overwrite=true")
+                    .header("content-type", "application/pdf")
+                    .body(Body::from(tpl_bytes.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(upload_conflict_resp.status(), StatusCode::CONFLICT);
+        assert!(!base.join("RevDouble.pdf").exists());
+        assert_eq!(std::fs::read(&rev_legacy_sc).unwrap(), rev_legacy_bytes);
 
         let (st_final, list_final) = get_json(&app, "/api/sheets").await;
         assert_eq!(st_final, StatusCode::OK);
@@ -7373,6 +7506,278 @@ mod tests {
         assert!(!chars_final
             .iter()
             .any(|c| c["path"] == "PrePrDouble.pdf.pdf" || c["path"] == "RevDouble.pdf"));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn startup_dialog_persistent_edits_are_tracked_or_autosaved_while_alert_only_stays_clean()
+    {
+        let base = std::env::temp_dir().join(format!(
+            "mpmb-serve-startup-dirty-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(base.join("templates")).unwrap();
+
+        let alert_only_js = r#"app.alert({cMsg: "Welcome banner only", nIcon: 3, nType: 0});"#;
+        let mutate_js = r#"
+            var r = app.alert({cMsg: "Apply startup character name?", nIcon: 2, nType: 2});
+            if (r === 4) {
+                getField("PC Name").value = "StartupHero";
+            }
+        "#;
+
+        make_scripted_hp_pdf(
+            &base.join("templates/AlertOnly.pdf"),
+            "10",
+            alert_only_js,
+            None,
+        );
+        make_scripted_hp_pdf(
+            &base.join("templates/StartupMutate.pdf"),
+            "10",
+            mutate_js,
+            None,
+        );
+        make_scripted_hp_pdf(
+            &base.join("ExistingAlertOnly.pdf"),
+            "10",
+            alert_only_js,
+            None,
+        );
+        make_scripted_hp_pdf(
+            &base.join("ExistingMutateNoAuto.pdf"),
+            "10",
+            mutate_js,
+            None,
+        );
+        make_scripted_hp_pdf(&base.join("ExistingMutateAuto.pdf"), "10", mutate_js, None);
+        make_scripted_hp_pdf(&base.join("OtherClean.pdf"), "20", "", None);
+
+        // Helper to read persisted PC Name directly from the PDF file on disk.
+        let disk_pc_name = |path: &std::path::Path| -> String {
+            let pdf = Pdf::open(path).unwrap();
+            pdf.fields["PC Name"]
+                .value
+                .as_str()
+                .unwrap_or("")
+                .to_owned()
+        };
+
+        // --- A. --no-autosave mode ---
+        let cfg_no_auto = ServeConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            store: StoreConfig {
+                root: base.clone(),
+                git: None,
+            },
+            auth_token: None,
+            allow_unauthenticated: false,
+            git_auto_sync_secs: 0,
+            autosave: false,
+            default_sheet: None,
+        };
+        let app_no_auto = build_router(AppState::start(&cfg_no_auto).unwrap());
+
+        // 1. Alert-only template create stays clean (no unsaved_edits on switch).
+        let (st, paused) = post_json(
+            &app_no_auto,
+            "/api/sheets/new",
+            json!({ "template": "templates/AlertOnly.pdf", "name": "AlertNew", "open": true }),
+        )
+        .await;
+        assert_eq!(st, StatusCode::ACCEPTED);
+        let id = paused["interaction"]["id"].as_str().unwrap().to_owned();
+        let (st, done) = post_json(
+            &app_no_auto,
+            &format!("/api/session/interaction/{id}"),
+            json!({"button": 1}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK, "alert-only create failed: {done}");
+        assert_eq!(done["state"]["dirtySinceSave"], false);
+        let (st, _) = post_json(
+            &app_no_auto,
+            "/api/session/open",
+            json!({"path": "OtherClean.pdf"}),
+        )
+        .await;
+        assert_eq!(
+            st,
+            StatusCode::OK,
+            "alert-only create must allow clean sheet switch"
+        );
+
+        // 2. Alert-only ordinary open also stays clean.
+        let (st, paused) = post_json(
+            &app_no_auto,
+            "/api/session/open",
+            json!({ "path": "ExistingAlertOnly.pdf" }),
+        )
+        .await;
+        assert_eq!(st, StatusCode::ACCEPTED);
+        let id = paused["interaction"]["id"].as_str().unwrap().to_owned();
+        let (st, done) = post_json(
+            &app_no_auto,
+            &format!("/api/session/interaction/{id}"),
+            json!({"button": 1}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(done["state"]["dirtySinceSave"], false);
+        let (st, _) = post_json(
+            &app_no_auto,
+            "/api/session/open",
+            json!({"path": "OtherClean.pdf"}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+
+        // 3. Persistent startup-dialog edit on template create with --no-autosave marks
+        //    dirtySinceSave=true, blocks silent discard with 409 unsaved_edits, and saves cleanly.
+        let (st, paused) = post_json(
+            &app_no_auto,
+            "/api/sheets/new",
+            json!({ "template": "templates/StartupMutate.pdf", "name": "MutateNewNoAuto", "open": true }),
+        )
+        .await;
+        assert_eq!(st, StatusCode::ACCEPTED);
+        let id = paused["interaction"]["id"].as_str().unwrap().to_owned();
+        let (st, done) = post_json(
+            &app_no_auto,
+            &format!("/api/session/interaction/{id}"),
+            json!({"button": 4}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(done["state"]["character"]["name"], "StartupHero");
+        assert_eq!(done["state"]["dirtySinceSave"], true);
+        let (st_sw, sw_body) = post_json(
+            &app_no_auto,
+            "/api/session/open",
+            json!({"path": "OtherClean.pdf"}),
+        )
+        .await;
+        assert_eq!(st_sw, StatusCode::CONFLICT);
+        assert_eq!(sw_body["code"], "unsaved_edits");
+        let (st_save, save_body) = post_json(&app_no_auto, "/api/session/save", json!({})).await;
+        assert_eq!(st_save, StatusCode::OK, "save failed: {save_body}");
+        assert_eq!(save_body["state"]["dirtySinceSave"], false);
+        assert_eq!(
+            disk_pc_name(&base.join("MutateNewNoAuto.pdf")),
+            "StartupHero"
+        );
+
+        // 4. Persistent startup-dialog edit on ordinary open with --no-autosave marks
+        //    dirtySinceSave=true and blocks silent discard with 409 unsaved_edits.
+        let (st, paused) = post_json(
+            &app_no_auto,
+            "/api/session/open",
+            json!({ "path": "ExistingMutateNoAuto.pdf" }),
+        )
+        .await;
+        assert_eq!(st, StatusCode::ACCEPTED);
+        let id = paused["interaction"]["id"].as_str().unwrap().to_owned();
+        let (st, done) = post_json(
+            &app_no_auto,
+            &format!("/api/session/interaction/{id}"),
+            json!({"button": 4}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(done["state"]["character"]["name"], "StartupHero");
+        assert_eq!(done["state"]["dirtySinceSave"], true);
+        let (st_sw, sw_body) = post_json(
+            &app_no_auto,
+            "/api/session/open",
+            json!({"path": "OtherClean.pdf"}),
+        )
+        .await;
+        assert_eq!(st_sw, StatusCode::CONFLICT);
+        assert_eq!(sw_body["code"], "unsaved_edits");
+        let (st_save, _) = post_json(&app_no_auto, "/api/session/save", json!({})).await;
+        assert_eq!(st_save, StatusCode::OK);
+        assert_eq!(
+            disk_pc_name(&base.join("ExistingMutateNoAuto.pdf")),
+            "StartupHero"
+        );
+
+        // --- B. autosave=true mode ---
+        let cfg_auto = ServeConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            store: StoreConfig {
+                root: base.clone(),
+                git: None,
+            },
+            auth_token: None,
+            allow_unauthenticated: false,
+            git_auto_sync_secs: 0,
+            autosave: true,
+            default_sheet: None,
+        };
+        let app_auto = build_router(AppState::start(&cfg_auto).unwrap());
+
+        // 5. Template create with startup-dialog persistent edit + autosave=true persists
+        //    the edited field into the published PDF immediately and reports clean.
+        let (st, paused) = post_json(
+            &app_auto,
+            "/api/sheets/new",
+            json!({ "template": "templates/StartupMutate.pdf", "name": "MutateNewAuto", "open": true }),
+        )
+        .await;
+        assert_eq!(st, StatusCode::ACCEPTED);
+        let id = paused["interaction"]["id"].as_str().unwrap().to_owned();
+        let (st, done) = post_json(
+            &app_auto,
+            &format!("/api/session/interaction/{id}"),
+            json!({"button": 4}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK, "autosave startup create failed: {done}");
+        assert_eq!(done["state"]["character"]["name"], "StartupHero");
+        assert_eq!(done["state"]["dirtySinceSave"], false);
+        assert_eq!(disk_pc_name(&base.join("MutateNewAuto.pdf")), "StartupHero");
+        let (st, _) = post_json(
+            &app_auto,
+            "/api/session/open",
+            json!({"path": "OtherClean.pdf"}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+
+        // 6. Ordinary open with startup-dialog persistent edit + autosave=true persists
+        //    the edited field to disk immediately and reports clean.
+        let (st, paused) = post_json(
+            &app_auto,
+            "/api/session/open",
+            json!({ "path": "ExistingMutateAuto.pdf" }),
+        )
+        .await;
+        assert_eq!(st, StatusCode::ACCEPTED);
+        let id = paused["interaction"]["id"].as_str().unwrap().to_owned();
+        let (st, done) = post_json(
+            &app_auto,
+            &format!("/api/session/interaction/{id}"),
+            json!({"button": 4}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK, "autosave startup open failed: {done}");
+        assert_eq!(done["state"]["character"]["name"], "StartupHero");
+        assert_eq!(done["state"]["dirtySinceSave"], false);
+        assert_eq!(
+            disk_pc_name(&base.join("ExistingMutateAuto.pdf")),
+            "StartupHero"
+        );
+        let (st, _) = post_json(
+            &app_auto,
+            "/api/session/open",
+            json!({"path": "OtherClean.pdf"}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
 
         let _ = std::fs::remove_dir_all(&base);
     }
