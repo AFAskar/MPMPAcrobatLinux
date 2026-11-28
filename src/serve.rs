@@ -7992,7 +7992,7 @@ mod tests {
         let (st_co, body_co) = post_json(
             &app_auto,
             "/api/sheets/new",
-            json!({ "template": "templates/StartupAlertOnly.pdf", "name": "BadCreateOnlySidecar", "open": false }),
+            json!({ "template": "templates/AlertOnly.pdf", "name": "BadCreateOnlySidecar", "open": false }),
         )
         .await;
         assert_eq!(
@@ -8005,13 +8005,26 @@ mod tests {
             .unwrap_or("")
             .contains("not a regular file"));
         assert!(!base.join("BadCreateOnlySidecar.pdf").exists());
+        // Removing the blocking directory allows the exact same create-only request to succeed.
+        std::fs::remove_dir(&bad_create_only_dir).unwrap();
+        let (st_co_ok, body_co_ok) = post_json(
+            &app_auto,
+            "/api/sheets/new",
+            json!({ "template": "templates/AlertOnly.pdf", "name": "BadCreateOnlySidecar", "open": false }),
+        )
+        .await;
+        assert_eq!(
+            st_co_ok,
+            StatusCode::CREATED,
+            "create-only retry after removing nonregular sidecar dir must succeed: {body_co_ok}"
+        );
 
         let bad_no_edit_dir = base.join("BadNoEditSidecar.pdf.state.json");
         std::fs::create_dir_all(&bad_no_edit_dir).unwrap();
         let (st_ne, body_ne) = post_json(
             &app_auto,
             "/api/sheets/new",
-            json!({ "template": "templates/StartupAlertOnly.pdf", "name": "BadNoEditSidecar", "open": true }),
+            json!({ "template": "templates/AlertOnly.pdf", "name": "BadNoEditSidecar", "open": true }),
         )
         .await;
         assert_eq!(
