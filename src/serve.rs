@@ -1347,16 +1347,12 @@ impl SheetWorker {
                 (bytes, sha, None, startup_dirty, None)
             };
 
-        // If startup edits require writing a sidecar immediately after publish, reject
-        // a non-regular sidecar path (e.g. a directory or symlink) BEFORE publishing the
-        // PDF so Git sync is never permanently blocked by an unwritable sidecar path.
-        if startup_sidecar.is_some() {
-            self.store.ensure_startup_sidecar_writable(&dest_norm)?;
-        }
-
         // Only now atomically publish with create-only semantics (O_CREAT|O_EXCL).
-        // If another writer created the destination while startup was pending, this
-        // fails with 409 Conflict without touching their file or mutating self.active.
+        // `publish_new_sheet_bytes` validates sidecar conflicts and rejects any
+        // non-regular primary sidecar path (regardless of whether startup edits
+        // produced `startup_sidecar`) before publishing, so another writer's file
+        // is never touched and future saves/Git sync can never be blocked by a
+        // directory or symlink at `<name>.pdf.state.json`.
         let mut entry = self
             .store
             .publish_new_sheet_bytes(&dest_norm, &publish_bytes)?;
@@ -7985,11 +7981,52 @@ mod tests {
         .await;
         assert_eq!(st, StatusCode::OK);
 
-        // 7. When autosave=true and startup edits require writing a sidecar, a non-regular
-        //    entry (e.g. a directory) at the primary sidecar path must reject BEFORE
-        //    publishing the new sheet so Git sync is not permanently poisoned.
-        let bad_sidecar_dir = base.join("BadStartupSidecar.pdf.state.json");
-        std::fs::create_dir_all(&bad_sidecar_dir).unwrap();
+        // 7. A non-regular entry (e.g. a directory) at the primary sidecar path must
+        //    reject BEFORE publishing across ALL create paths:
+        //    - create-only (`open: false`),
+        //    - create-and-open with NO startup edits (`open: true`), and
+        //    - create-and-open WITH startup edits even if the directory appears while the
+        //      startup dialog is pending (caught at publish_new_sheet_bytes under lock).
+        let bad_create_only_dir = base.join("BadCreateOnlySidecar.pdf.state.json");
+        std::fs::create_dir_all(&bad_create_only_dir).unwrap();
+        let (st_co, body_co) = post_json(
+            &app_auto,
+            "/api/sheets/new",
+            json!({ "template": "templates/StartupAlertOnly.pdf", "name": "BadCreateOnlySidecar", "open": false }),
+        )
+        .await;
+        assert_eq!(
+            st_co,
+            StatusCode::BAD_REQUEST,
+            "create-only nonregular sidecar must fail: {body_co}"
+        );
+        assert!(body_co["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("not a regular file"));
+        assert!(!base.join("BadCreateOnlySidecar.pdf").exists());
+
+        let bad_no_edit_dir = base.join("BadNoEditSidecar.pdf.state.json");
+        std::fs::create_dir_all(&bad_no_edit_dir).unwrap();
+        let (st_ne, body_ne) = post_json(
+            &app_auto,
+            "/api/sheets/new",
+            json!({ "template": "templates/StartupAlertOnly.pdf", "name": "BadNoEditSidecar", "open": true }),
+        )
+        .await;
+        assert_eq!(
+            st_ne,
+            StatusCode::BAD_REQUEST,
+            "no-startup-edit create+open nonregular sidecar must fail: {body_ne}"
+        );
+        assert!(body_ne["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("not a regular file"));
+        assert!(!base.join("BadNoEditSidecar.pdf").exists());
+
+        // Directory created mid-flight while startup dialog is pending must still be
+        // rejected at publish_new_sheet_bytes before publishing the PDF.
         let (st, paused) = post_json(
             &app_auto,
             "/api/sheets/new",
@@ -7997,6 +8034,8 @@ mod tests {
         )
         .await;
         assert_eq!(st, StatusCode::ACCEPTED);
+        let bad_sidecar_dir = base.join("BadStartupSidecar.pdf.state.json");
+        std::fs::create_dir_all(&bad_sidecar_dir).unwrap();
         let id = paused["interaction"]["id"].as_str().unwrap().to_owned();
         let (st, err_body) = post_json(
             &app_auto,
@@ -8017,7 +8056,7 @@ mod tests {
         );
         assert!(
             !base.join("BadStartupSidecar.pdf").exists(),
-            "new character PDF must NOT be published when required startup sidecar path is non-regular"
+            "new character PDF must NOT be published when primary sidecar path is non-regular"
         );
         let (st_sess, sess) = get_json(&app_auto, "/api/session/state").await;
         assert_eq!(st_sess, StatusCode::OK);

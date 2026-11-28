@@ -1114,6 +1114,25 @@ PWA_HARNESS = textwrap.dedent(
 
       // 21c: Delayed HTTP interaction from an unobserved old server instance (`srv-unseen-old`)
       // must NOT retire the current authoritative server (`srv-7`) or close its prompt.
+      // It triggers a fresh recovery session read which sees live `srv-7`.
+      fetchHandler = async (path) => {
+        if (path === '/api/session/state') {
+          return jsonResp({
+            open: true,
+            busy: true,
+            serverInstanceId: 'srv-7',
+            stateSeq: 3,
+            activeInteraction: {
+              id: 'srv-7-int-eq',
+              serverInstanceId: 'srv-7',
+              stateSeq: 3,
+              kind: 'alert',
+              request: { cTitle: 'Current HTTP', cMsg: 'Equal to watermark' },
+            },
+          });
+        }
+        return jsonResp({ status: 'ok' });
+      };
       assert.equal(
         await handleActionResponse({
           status: 'interaction_required',
@@ -1128,6 +1147,8 @@ PWA_HARNESS = textwrap.dedent(
         false,
         'HTTP interaction from unobserved instance must not retire current instance',
       );
+      await Promise.resolve();
+      await Promise.resolve();
       assert.equal(appState.lastServerInstanceId, 'srv-7');
       assert.equal(appState.retiredServerInstanceIds.has('srv-7'), false);
       assert.equal(appState.activeInteraction && appState.activeInteraction.id, 'srv-7-int-eq');
@@ -1171,6 +1192,252 @@ PWA_HARNESS = textwrap.dedent(
         element('btn-new-char'),
         'cancelling when template row no longer exists must fall back to #btn-new-char',
       );
+
+      // 23: Delayed HTTP `refreshSession()` from an UNOBSERVED server instance (`srv-8-unseen`)
+      // must NOT retire a newer authoritative WebSocket server instance (`srv-9-live`).
+      connectWs();
+      const wsLive = sockets[sockets.length - 1];
+      wsLive.readyState = MockWebSocket.OPEN;
+      wsLive.onopen();
+      let resolveDelayedUnseenRead;
+      fetchHandler = (path) => {
+        if (path === '/api/session/state') {
+          return new Promise((resolve) => { resolveDelayedUnseenRead = resolve; });
+        }
+        return Promise.resolve(jsonResp({ status: 'ok' }));
+      };
+      const pendingUnseenRefresh = refreshSession();
+      // While the HTTP fetch to unobserved `srv-8-unseen` is still in flight, WS
+      // establishes `srv-9-live` as authoritative (retiring `srv-7`, NOT `srv-8-unseen`).
+      wsLive.onmessage({
+        data: JSON.stringify({
+          type: 'state_updated',
+          state: {
+            open: true,
+            serverInstanceId: 'srv-9-live',
+            sessionId: 'srv-9-s1',
+            stateSeq: 1,
+            path: 'LiveC.pdf',
+            revision: 1,
+            fields: [],
+          },
+        }),
+      });
+      assert.equal(appState.lastServerInstanceId, 'srv-9-live');
+      assert.equal(appState.retiredServerInstanceIds.has('srv-8-unseen'), false);
+      // Now delayed HTTP response from unobserved `srv-8-unseen` resolves: must be ignored!
+      resolveDelayedUnseenRead(jsonResp({
+        open: true,
+        serverInstanceId: 'srv-8-unseen',
+        sessionId: 'srv-8-s1',
+        stateSeq: 5,
+        path: 'StaleB.pdf',
+        revision: 1,
+        fields: [],
+      }));
+      await pendingUnseenRefresh;
+      assert.equal(
+        appState.lastServerInstanceId,
+        'srv-9-live',
+        'delayed HTTP session response from unobserved server must not displace authoritative WS instance',
+      );
+      assert.equal(
+        appState.retiredServerInstanceIds.has('srv-9-live'),
+        false,
+        'authoritative WS server instance must NEVER be retired by delayed HTTP response',
+      );
+      assert.equal(appState.sheet && appState.sheet.path, 'LiveC.pdf');
+      // Subsequent WS updates from `srv-9-live` continue applying cleanly.
+      wsLive.onmessage({
+        data: JSON.stringify({
+          type: 'state_updated',
+          state: {
+            open: true,
+            serverInstanceId: 'srv-9-live',
+            sessionId: 'srv-9-s1',
+            stateSeq: 2,
+            path: 'LiveC.pdf',
+            revision: 2,
+            fields: [],
+          },
+        }),
+      });
+      assert.equal(appState.lastStateSeq, 2);
+
+      // 24: Prompt recovery when WS is unavailable and server restarts (srv-9-live -> srv-10-no-ws):
+      // 24a: Mismatched HTTP 202 triggers fresh session read which discovers and opens srv-10's prompt.
+      wsLive.onclose();
+      assert.equal(appState.wsConnected, false);
+      let recoveryStateReads = 0;
+      fetchHandler = async (path) => {
+        if (path === '/api/session/state') {
+          recoveryStateReads += 1;
+          return jsonResp({
+            open: true,
+            busy: true,
+            serverInstanceId: 'srv-10-no-ws',
+            stateSeq: 1,
+            activeInteraction: {
+              id: 'srv-10-int-1',
+              serverInstanceId: 'srv-10-no-ws',
+              stateSeq: 1,
+              kind: 'alert',
+              request: { cTitle: 'Recovered Prompt', cMsg: 'Recovered via fresh session read' },
+            },
+          });
+        }
+        return jsonResp({ status: 'ok' });
+      };
+      const directHandled = await handleActionResponse({
+        status: 'interaction_required',
+        interaction: {
+          id: 'srv-10-int-1',
+          serverInstanceId: 'srv-10-no-ws',
+          stateSeq: 1,
+          kind: 'alert',
+          request: { cTitle: 'Recovered Prompt', cMsg: 'Direct HTTP 202' },
+        },
+      });
+      async function flushMicrotasks() {
+        for (let i = 0; i < 10; i += 1) {
+          await Promise.resolve();
+        }
+      }
+      assert.equal(directHandled, false, 'mismatched direct HTTP action response must still return false');
+      await flushMicrotasks();
+      assert.equal(recoveryStateReads, 1, 'mismatched HTTP interaction must start fresh session read');
+      assert.equal(appState.lastServerInstanceId, 'srv-10-no-ws');
+      assert.equal(appState.retiredServerInstanceIds.has('srv-9-live'), true);
+      assert.equal(
+        appState.activeInteraction && appState.activeInteraction.id,
+        'srv-10-int-1',
+        'fresh session read must recover and display the live prompt when WS is unavailable',
+      );
+      closeAcrobatModal();
+
+      // 24b: If a newer authoritative WS event from `srv-11-ws` supersedes the recovery read
+      // while it is in flight, the stale recovery read from `srv-10b-stale` must be ignored.
+      let resolveSupersededRecovery;
+      fetchHandler = (path) => {
+        if (path === '/api/session/state') {
+          return new Promise((resolve) => { resolveSupersededRecovery = resolve; });
+        }
+        return Promise.resolve(jsonResp({ status: 'ok' }));
+      };
+      assert.equal(
+        await handleActionResponse({
+          status: 'interaction_required',
+          interaction: {
+            id: 'srv-10b-int-1',
+            serverInstanceId: 'srv-10b-stale',
+            stateSeq: 1,
+            kind: 'alert',
+            request: { cTitle: 'Stale Recovery', cMsg: 'Should be superseded by WS' },
+          },
+        }),
+        false,
+      );
+      // WS reconnects and delivers authoritative state from `srv-11-ws` before recovery read returns.
+      connectWs();
+      const wsRecovered = sockets[sockets.length - 1];
+      wsRecovered.readyState = MockWebSocket.OPEN;
+      wsRecovered.onmessage({
+        data: JSON.stringify({
+          type: 'state_updated',
+          state: {
+            open: true,
+            serverInstanceId: 'srv-11-ws',
+            sessionId: 'srv-11-s1',
+            stateSeq: 1,
+            path: 'WsAuthoritative.pdf',
+            revision: 1,
+            fields: [],
+          },
+        }),
+      });
+      assert.equal(appState.lastServerInstanceId, 'srv-11-ws');
+      resolveSupersededRecovery(jsonResp({
+        open: true,
+        busy: true,
+        serverInstanceId: 'srv-10b-stale',
+        stateSeq: 1,
+        activeInteraction: {
+          id: 'srv-10b-int-1',
+          serverInstanceId: 'srv-10b-stale',
+          stateSeq: 1,
+          kind: 'alert',
+          request: { cTitle: 'Stale Recovery', cMsg: 'Must be ignored' },
+        },
+      }));
+      await flushMicrotasks();
+      assert.equal(appState.lastServerInstanceId, 'srv-11-ws');
+      assert.equal(appState.retiredServerInstanceIds.has('srv-11-ws'), false);
+      assert.equal(appState.activeInteraction, null);
+
+      // 25: Rejected create 409 carrying an obsolete/already-cleared prompt must keep the
+      // New Character form open with the user's draft intact and invite a retry.
+      appState.templates = [
+        { path: 'templates/MPMB-2024-Blank.pdf', name: 'MPMB-2024-Blank.pdf', size_bytes: 1024, is_template: true },
+      ];
+      // Retire `srv-11-int-old` via WS clear before the 409 arrives.
+      wsRecovered.onmessage({
+        data: JSON.stringify({
+          type: 'interaction_requested',
+          interaction: {
+            id: 'srv-11-int-old',
+            serverInstanceId: 'srv-11-ws',
+            stateSeq: 2,
+            kind: 'alert',
+            request: { cTitle: 'Blocking', cMsg: 'Soon cleared' },
+          },
+        }),
+      });
+      wsRecovered.onmessage({
+        data: JSON.stringify({
+          type: 'interaction_cleared',
+          id: 'srv-11-int-old',
+          serverInstanceId: 'srv-11-ws',
+        }),
+      });
+      assert.equal(appState.activeInteraction, null);
+      openNewCharModal('templates/MPMB-2024-Blank.pdf');
+      element('nc-name').value = 'Thalia Draft';
+      fetchHandler = async (path) => {
+        if (path === '/api/sheets/new') {
+          return jsonResp(
+            {
+              error: 'active interaction',
+              status: 'interaction_required',
+              interaction: {
+                id: 'srv-11-int-old',
+                serverInstanceId: 'srv-11-ws',
+                stateSeq: 2,
+                kind: 'alert',
+                request: { cTitle: 'Blocking', cMsg: 'Already cleared' },
+              },
+            },
+            409,
+          );
+        }
+        return jsonResp({ status: 'ok' });
+      };
+      await createCharacterFromTemplate('templates/MPMB-2024-Blank.pdf', 'Thalia Draft');
+      assert.equal(
+        element('new-char-modal').classList.contains('hidden'),
+        false,
+        'obsolete 409 prompt must keep New Character modal open',
+      );
+      assert.equal(
+        element('nc-name').value,
+        'Thalia Draft',
+        'obsolete 409 prompt must preserve user draft name',
+      );
+      assert.match(
+        element('banner').textContent,
+        /retry/i,
+        'banner must inform the user they can retry',
+      );
+      closeNewCharModal(false);
 
       console.log('PWA_CLIENT_REGRESSIONS_OK');
     })().catch((err) => {

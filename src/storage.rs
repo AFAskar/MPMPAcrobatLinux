@@ -332,29 +332,6 @@ impl SheetStore {
         is_path_in_templates_dir(&self.root, &normalized)
     }
 
-    /// Verifies that the primary sidecar path for `rel` does not exist as a
-    /// non-regular entry (such as a directory or symlink) before publishing a new
-    /// sheet whose startup edits require writing a sidecar.
-    pub fn ensure_startup_sidecar_writable(&self, rel: &str) -> Result<()> {
-        let _guard = self.lock.lock().unwrap();
-        let (_norm, abs) = self.resolve_safe_pdf_path(rel)?;
-        let sidecar_path = Self::sidecar_path_for(&abs);
-        match fs::symlink_metadata(&sidecar_path) {
-            Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => {
-                bail!(
-                    "sidecar destination is not a regular file: {}",
-                    sidecar_path.display()
-                );
-            }
-            Ok(_) => Ok(()),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(err) => Err(anyhow::Error::new(err).context(format!(
-                "failed to inspect sidecar destination {}",
-                sidecar_path.display()
-            ))),
-        }
-    }
-
     fn ensure_within_store(&self, parts: &[String]) -> Result<PathBuf> {
         let mut cur = self.root.clone();
         for seg in parts {
@@ -401,10 +378,23 @@ impl SheetStore {
         let primary = Self::sidecar_path_for(pdf_path);
         let legacy = Self::legacy_sidecar_path_for(pdf_path);
         for (sc, is_primary) in [(primary, true), (legacy, false)] {
-            let Ok(meta) = fs::symlink_metadata(&sc) else {
-                continue;
+            let meta = match fs::symlink_metadata(&sc) {
+                Ok(m) => m,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(err) => {
+                    return Err(anyhow::Error::new(err).context(format!(
+                        "failed to inspect sidecar destination {}",
+                        sc.display()
+                    )));
+                }
             };
             if !meta.is_file() || meta.file_type().is_symlink() {
+                if is_primary {
+                    bail!(
+                        "sidecar destination is not a regular file: {}",
+                        sc.display()
+                    );
+                }
                 continue;
             }
             if !sidecar_claimed_by_other_pdf(pdf_path, &sc)? {
@@ -507,8 +497,9 @@ impl SheetStore {
 
     pub fn list_sheets(&self) -> Result<Vec<SheetEntry>> {
         let _guard = self.lock.lock().unwrap();
+        let template_dir_ids = collect_template_dir_ids(&self.root)?;
         let mut out = Vec::new();
-        collect_pdfs(&self.root, &self.root, &mut out)?;
+        collect_pdfs(&self.root, &self.root, &template_dir_ids, None, &mut out)?;
         out.sort_by(|a, b| a.path.cmp(&b.path));
         Ok(out)
     }
@@ -2740,7 +2731,13 @@ pub fn write_file_atomic_replace(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn collect_pdfs(root: &Path, dir: &Path, out: &mut Vec<SheetEntry>) -> Result<()> {
+fn collect_pdfs(
+    root: &Path,
+    dir: &Path,
+    template_dir_ids: &[FileId],
+    in_template_dir: Option<bool>,
+    out: &mut Vec<SheetEntry>,
+) -> Result<()> {
     if !dir.exists() {
         return Ok(());
     }
@@ -2761,9 +2758,34 @@ fn collect_pdfs(root: &Path, dir: &Path, out: &mut Vec<SheetEntry>) -> Result<()
             continue;
         }
         if ty.is_dir() {
-            collect_pdfs(root, &path, out)?;
+            // Resolve template-directory alias state ONCE per top-level directory and
+            // reuse the cached classification for every nested directory and PDF under it.
+            let child_is_template = match in_template_dir {
+                Some(flag) => flag,
+                None => {
+                    if name_str.eq_ignore_ascii_case("templates") {
+                        true
+                    } else if template_dir_ids.is_empty() {
+                        false
+                    } else {
+                        match file_identity(&path) {
+                            Ok(id) => template_dir_ids.contains(&id),
+                            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                            Err(err) => {
+                                eprintln!(
+                                    "WARN: skipping directory {} (identity error): {err:#}",
+                                    path.display()
+                                );
+                                continue;
+                            }
+                        }
+                    }
+                }
+            };
+            collect_pdfs(root, &path, template_dir_ids, Some(child_is_template), out)?;
         } else if ty.is_file() && name_str.to_ascii_lowercase().ends_with(".pdf") {
-            match sheet_entry_from_path(root, &path) {
+            let is_template = in_template_dir.unwrap_or(false);
+            match sheet_entry_from_path_with_template(root, &path, Some(is_template)) {
                 Ok(item) => out.push(item),
                 Err(err) => {
                     eprintln!("WARN: skipping sheet {}: {err:#}", path.display());
@@ -2815,34 +2837,17 @@ pub fn is_template_path(rel: &str) -> bool {
         && parts.next().is_some()
 }
 
-fn is_path_in_templates_dir(root: &Path, normalized: &str) -> Result<bool> {
-    if is_template_path(normalized) {
-        return Ok(true);
+fn collect_template_dir_ids(root: &Path) -> Result<Vec<FileId>> {
+    if !root.exists() {
+        return Ok(Vec::new());
     }
-    let mut parts = normalized.split('/').filter(|s| !s.is_empty());
-    let Some(first) = parts.next() else {
-        return Ok(false);
-    };
-    if parts.next().is_none() {
-        return Ok(false);
-    }
-    let top_path = root.join(first);
-    let top_id = match file_identity(&top_path) {
-        Ok(id) => id,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(err) => {
-            return Err(anyhow::Error::new(err).context(format!(
-                "failed to determine directory identity for {}",
-                top_path.display()
-            )));
-        }
-    };
     let entries = fs::read_dir(root).with_context(|| {
         format!(
             "failed to inspect store root {} for template directory aliases",
             root.display()
         )
     })?;
+    let mut ids = Vec::new();
     for entry_res in entries {
         let entry = entry_res.with_context(|| {
             format!(
@@ -2867,8 +2872,7 @@ fn is_path_in_templates_dir(root: &Path, normalized: &str) -> Result<bool> {
             continue;
         }
         match file_identity(&entry.path()) {
-            Ok(tpl_id) if tpl_id == top_id => return Ok(true),
-            Ok(_) => {}
+            Ok(tpl_id) => ids.push(tpl_id),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
             Err(err) => {
                 return Err(anyhow::Error::new(err).context(format!(
@@ -2878,7 +2882,33 @@ fn is_path_in_templates_dir(root: &Path, normalized: &str) -> Result<bool> {
             }
         }
     }
-    Ok(false)
+    Ok(ids)
+}
+
+fn is_path_in_templates_dir(root: &Path, normalized: &str) -> Result<bool> {
+    if is_template_path(normalized) {
+        return Ok(true);
+    }
+    let mut parts = normalized.split('/').filter(|s| !s.is_empty());
+    let Some(first) = parts.next() else {
+        return Ok(false);
+    };
+    if parts.next().is_none() {
+        return Ok(false);
+    }
+    let top_path = root.join(first);
+    let top_id = match file_identity(&top_path) {
+        Ok(id) => id,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => {
+            return Err(anyhow::Error::new(err).context(format!(
+                "failed to determine directory identity for {}",
+                top_path.display()
+            )));
+        }
+    };
+    let template_dir_ids = collect_template_dir_ids(root)?;
+    Ok(template_dir_ids.contains(&top_id))
 }
 
 pub fn normalize_new_character_path(name: &str) -> Result<String> {
@@ -2939,6 +2969,14 @@ fn validate_safe_rel_pdf_path(rel: &str) -> Result<Vec<String>> {
 }
 
 fn sheet_entry_from_path(root: &Path, abs: &Path) -> Result<SheetEntry> {
+    sheet_entry_from_path_with_template(root, abs, None)
+}
+
+fn sheet_entry_from_path_with_template(
+    root: &Path,
+    abs: &Path,
+    is_template_override: Option<bool>,
+) -> Result<SheetEntry> {
     let rel_path = abs.strip_prefix(root).unwrap_or(abs);
     let rel = rel_path
         .to_str()
@@ -3028,7 +3066,10 @@ fn sheet_entry_from_path(root: &Path, abs: &Path) -> Result<SheetEntry> {
             .filter(|s| !s.is_empty())
             .map(str::to_owned)
     };
-    let is_template = is_path_in_templates_dir(root, &rel)?;
+    let is_template = match is_template_override {
+        Some(flag) => flag,
+        None => is_path_in_templates_dir(root, &rel)?,
+    };
     Ok(SheetEntry {
         path: rel,
         name,
@@ -5624,15 +5665,25 @@ mod tests {
                 .is_err());
             drop(camp_guard);
 
-            // Non-regular startup sidecar path (directory) is rejected before publication.
+            // Non-regular primary sidecar path (directory) is rejected BEFORE publishing
+            // in the shared create-only path even when no startup edits occur.
             fs::create_dir_all(dir.join("NonRegSc.pdf.state.json")).unwrap();
             let nonreg_err = store
-                .ensure_startup_sidecar_writable("NonRegSc.pdf")
+                .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "NonRegSc")
                 .unwrap_err();
             assert!(
                 format!("{nonreg_err:#}").contains("not a regular file"),
-                "nonregular startup sidecar path must fail: {nonreg_err:#}"
+                "create-only with nonregular primary sidecar path must fail: {nonreg_err:#}"
             );
+            assert!(!dir.join("NonRegSc.pdf").exists());
+            let nonreg_pub_err = store
+                .publish_new_sheet_bytes("NonRegSc.pdf", &tpl_bytes)
+                .unwrap_err();
+            assert!(
+                format!("{nonreg_pub_err:#}").contains("not a regular file"),
+                "publish_new_sheet_bytes with nonregular primary sidecar path must fail: {nonreg_pub_err:#}"
+            );
+            assert!(!dir.join("NonRegSc.pdf").exists());
 
             // On Linux casefold filesystems where `templateſ` (U+017F) resolves to `templates`,
             // verify both direct-open classification and create-to-missing-file are blocked,
@@ -5684,15 +5735,19 @@ mod tests {
                         Some(nfc_name),
                         "sidecar saved via NFD spelling must stamp actual on-disk NFC entry name"
                     );
-                    // Even when an external sidecar carries the NFD spelling directly,
-                    // Library must attribute it to `Élodie.pdf` and reject `Backup.pdf`.
+                    // Even when an external sidecar carries the NFD spelling directly AND
+                    // is hard-linked at `Backup.pdf.state.json` (giving `Backup.pdf` a real
+                    // primary sidecar candidate with matching PDF hash and FileId), Library
+                    // must attribute it ONLY to `Élodie.pdf` and reject `Backup.pdf`.
                     let nfd_sc_bytes = serde_json::to_vec_pretty(&json!({
                         "pdfFileName": nfd_name,
                         "pdfSha256": tpl.sha256,
                         "character": { "name": "External NFD Stamp", "level": "16" }
                     }))
                     .unwrap();
-                    fs::write(dir.join(format!("{nfc_name}.state.json")), &nfd_sc_bytes).unwrap();
+                    let nfc_sc_path = dir.join(format!("{nfc_name}.state.json"));
+                    fs::write(&nfc_sc_path, &nfd_sc_bytes).unwrap();
+                    fs::hard_link(&nfc_sc_path, dir.join("Backup.pdf.state.json")).unwrap();
                     let listed_cf = store.list_sheets().unwrap();
                     let listed_elodie = listed_cf.iter().find(|s| s.path == nfc_name).unwrap();
                     assert!(listed_elodie.has_state_sidecar);

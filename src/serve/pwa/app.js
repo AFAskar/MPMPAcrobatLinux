@@ -15,6 +15,8 @@
     pageLoadSeq: 0,
     lastServerInstanceId: null,
     retiredServerInstanceIds: new Set(),
+    authoritativeEpoch: 0,
+    wsAuthoritativeInstanceId: null,
     lastStateSeq: 0,
     sessionFetchSeq: 0,
     appliedSessionFetchSeq: 0,
@@ -180,12 +182,14 @@
     ws.onclose = () => {
       if (appState.ws !== ws) return;
       appState.wsConnected = false;
+      appState.wsAuthoritativeInstanceId = null;
       updateConnDot();
       setTimeout(connectWs, 2500);
     };
     ws.onerror = () => {
       if (appState.ws !== ws) return;
       appState.wsConnected = false;
+      appState.wsAuthoritativeInstanceId = null;
       updateConnDot();
     };
     ws.onmessage = (ev) => {
@@ -193,16 +197,19 @@
       try {
         const msg = JSON.parse(ev.data);
         if (msg.type === 'state_updated' && msg.state) {
-          applySessionState(msg.state);
+          applySessionState(msg.state, { allowAdoptNewInstance: true, fromWs: true });
         } else if (msg.type === 'resync_required') {
           refreshSession();
         } else if (msg.type === 'interaction_requested' && msg.interaction) {
           const inter = msg.serverInstanceId && !msg.interaction.serverInstanceId
             ? Object.assign({ serverInstanceId: msg.serverInstanceId }, msg.interaction)
             : msg.interaction;
-          openAcrobatInteraction(inter, { allowAdoptNewInstance: true });
+          openAcrobatInteraction(inter, { allowAdoptNewInstance: true, fromWs: true });
         } else if (msg.type === 'interaction_cleared') {
-          if (msg.serverInstanceId && !adoptServerInstance(msg.serverInstanceId)) {
+          if (
+            msg.serverInstanceId &&
+            !adoptServerInstance(msg.serverInstanceId, { allowAdoptNewInstance: true, fromWs: true })
+          ) {
             return;
           }
           closeAcrobatModal(msg.id || null, msg.serverInstanceId || null);
@@ -267,10 +274,16 @@
 
   async function refreshSession() {
     const fetchSeq = ++appState.sessionFetchSeq;
+    const startAuthEpoch = appState.authoritativeEpoch;
     try {
       const state = await api('/api/session/state');
       if (!state || fetchSeq < appState.appliedSessionFetchSeq) return;
-      if (applySessionState(state)) {
+      // Never allow an HTTP session read that raced with an authoritative WebSocket
+      // event (or while WebSocket holds authority on another instance) to retire
+      // the authoritative WebSocket server instance.
+      const canAdoptNewInstance =
+        startAuthEpoch === appState.authoritativeEpoch && !appState.wsAuthoritativeInstanceId;
+      if (applySessionState(state, { allowAdoptNewInstance: canAdoptNewInstance })) {
         appState.appliedSessionFetchSeq = fetchSeq;
       }
     } catch (err) {
@@ -288,33 +301,63 @@
       : null;
   }
 
-  function adoptServerInstance(inst) {
+  function adoptServerInstance(inst, { allowAdoptNewInstance = true, fromWs = false } = {}) {
     if (typeof inst !== 'string' || !inst) return true;
     if (appState.retiredServerInstanceIds.has(inst)) {
       return false;
     }
-    if (appState.lastServerInstanceId && appState.lastServerInstanceId !== inst) {
+    const switchingInstance =
+      !!appState.lastServerInstanceId && appState.lastServerInstanceId !== inst;
+    if (switchingInstance && !allowAdoptNewInstance) {
+      return false;
+    }
+    if (switchingInstance) {
       appState.retiredServerInstanceIds.add(appState.lastServerInstanceId);
       appState.lastStateSeq = 0;
     }
     if (appState.activeInteraction) {
       const activeInst = interactionServerInst(appState.activeInteraction);
       if (activeInst && activeInst !== inst) {
+        if (!allowAdoptNewInstance) {
+          return false;
+        }
         appState.retiredServerInstanceIds.add(activeInst);
         closeAcrobatModal();
       }
     }
     appState.lastServerInstanceId = inst;
+    if (fromWs) {
+      appState.authoritativeEpoch += 1;
+      appState.wsAuthoritativeInstanceId = inst;
+    }
     return true;
   }
 
-  function applySessionState(state) {
+  function applyHttpSessionState(state) {
+    if (!state) return false;
+    const nextInst =
+      typeof state.serverInstanceId === 'string' && state.serverInstanceId
+        ? state.serverInstanceId
+        : '';
+    if (
+      nextInst &&
+      !appState.retiredServerInstanceIds.has(nextInst) &&
+      appState.lastServerInstanceId &&
+      nextInst !== appState.lastServerInstanceId
+    ) {
+      refreshSession();
+      return false;
+    }
+    return applySessionState(state, { allowAdoptNewInstance: false });
+  }
+
+  function applySessionState(state, { allowAdoptNewInstance = true, fromWs = false } = {}) {
     if (!state) return false;
     const nextServerInst =
       typeof state.serverInstanceId === 'string' && state.serverInstanceId
         ? state.serverInstanceId
         : '';
-    if (!adoptServerInstance(nextServerInst)) {
+    if (!adoptServerInstance(nextServerInst, { allowAdoptNewInstance, fromWs })) {
       return false;
     }
     if (state.busy && !state.path) {
@@ -339,7 +382,13 @@
         appState.git = state.git;
         renderGit();
       }
-      if (state.activeInteraction) openAcrobatInteraction(state.activeInteraction);
+      if (state.activeInteraction) {
+        openAcrobatInteraction(state.activeInteraction, {
+          allowAdoptNewInstance,
+          fromWs,
+          fromStateSnapshot: true,
+        });
+      }
       return true;
     }
     if (!state.open) {
@@ -420,7 +469,11 @@
       showBanner('File changed externally on disk — pull latest or tap Force Save in the Git tab', 'warn', 0);
     }
     if (state.activeInteraction) {
-      openAcrobatInteraction(state.activeInteraction);
+      openAcrobatInteraction(state.activeInteraction, {
+        allowAdoptNewInstance,
+        fromWs,
+        fromStateSnapshot: true,
+      });
     } else if (appState.activeInteraction) {
       // Clear prompts from retired/different server instances unconditionally, and
       // compare state sequences only within the same server instance.
@@ -964,7 +1017,7 @@
       return openAcrobatInteraction(res.interaction, { allowAdoptNewInstance: false });
     }
     let applied = true;
-    if (res.state) applied = applySessionState(res.state);
+    if (res.state) applied = applyHttpSessionState(res.state);
     if (applied && res.message) showBanner(res.message, 'ok', 3000);
     return applied;
   }
@@ -1105,7 +1158,10 @@
     appState.retiredInteractionKeys.add(`${inst}:${id}`);
   }
 
-  function openAcrobatInteraction(interaction, { allowAdoptNewInstance = true } = {}) {
+  function openAcrobatInteraction(
+    interaction,
+    { allowAdoptNewInstance = true, fromWs = false, fromStateSnapshot = false } = {},
+  ) {
     if (!interaction || !interaction.id) return false;
     const nextInst = interactionServerInst(interaction);
     if (nextInst && appState.retiredServerInstanceIds.has(nextInst)) {
@@ -1118,7 +1174,7 @@
     // Preserve in-progress user input if a duplicate delivery arrives for the
     // exact same active interaction ID (e.g. HTTP 202 arriving after WS).
     if (appState.activeInteraction && interactionKey(appState.activeInteraction) === key) {
-      adoptServerInstance(nextInst);
+      adoptServerInstance(nextInst, { allowAdoptNewInstance, fromWs });
       $('acrobat-modal').classList.remove('hidden');
       return true;
     }
@@ -1127,17 +1183,20 @@
       !nextInst || !appState.lastServerInstanceId || nextInst === appState.lastServerInstanceId;
     // Reject stale direct/HTTP interaction replies below the same-instance stateSeq
     // watermark (equal sequence is still allowed so duplicate delivery works).
-    if (sameAsWatermarkInst && nextSeq !== null && nextSeq < appState.lastStateSeq) {
+    if (!fromStateSnapshot && sameAsWatermarkInst && nextSeq !== null && nextSeq < appState.lastStateSeq) {
       return false;
     }
     // Do not let a delayed HTTP interaction_required response from an unobserved
     // server instance retire the current authoritative server or dismiss its prompt.
+    // Start a fresh session read so a live prompt on a restarted server is still
+    // recovered when WebSocket delivery is unavailable (and ignored if superseded).
     if (
       !allowAdoptNewInstance &&
       nextInst &&
       appState.lastServerInstanceId &&
       nextInst !== appState.lastServerInstanceId
     ) {
+      refreshSession();
       return false;
     }
     if (appState.activeInteraction) {
@@ -1153,7 +1212,7 @@
     // Adopt the interaction's server instance consistently so an authoritative WS
     // interaction from a new server retires the previous server before any delayed
     // state response from the old server can arrive and retire the new one.
-    if (!adoptServerInstance(nextInst)) {
+    if (!adoptServerInstance(nextInst, { allowAdoptNewInstance, fromWs })) {
       return false;
     }
     if (appState.activeInteraction) {
@@ -1586,7 +1645,7 @@
           const switchedToNewSession = Boolean(
             res.state.open && (wasUnopened || (res.state.sessionId && res.state.sessionId !== prevSessionId))
           );
-          if (applySessionState(res.state) && switchedToNewSession) {
+          if (applyHttpSessionState(res.state) && switchedToNewSession) {
             appState.page = 0;
             showBanner(`Loaded ${res.state.path}`, 'ok', 2500);
             if (activeNewCharModalInstance === null) {
@@ -1820,9 +1879,13 @@
       }
     } catch (err) {
       if (err.status === 409 && err.data && err.data.status === 'interaction_required' && err.data.interaction) {
-        closeNewCharModal(false, modalInstance);
-        openAcrobatInteraction(err.data.interaction, { allowAdoptNewInstance: false });
-        showBanner('Finish or cancel the active dialog before creating a new character', 'warn', 5000);
+        const opened = openAcrobatInteraction(err.data.interaction, { allowAdoptNewInstance: false });
+        if (opened) {
+          closeNewCharModal(false, modalInstance);
+          showBanner('Finish or cancel the active dialog before creating a new character', 'warn', 5000);
+        } else {
+          showBanner('The blocking dialog has already closed — you can retry creating this character', 'warn', 5000);
+        }
         return;
       }
       const target = err.data && err.data.discardTarget;
@@ -2007,8 +2070,14 @@
       }
     } catch (err) {
       if (err.status === 409 && err.data && err.data.status === 'interaction_required' && err.data.interaction) {
-        openAcrobatInteraction(err.data.interaction, { allowAdoptNewInstance: false });
-        showBanner('Finish or cancel the active dialog before switching sheets', 'warn', 5000);
+        const opened = openAcrobatInteraction(err.data.interaction, { allowAdoptNewInstance: false });
+        showBanner(
+          opened
+            ? 'Finish or cancel the active dialog before switching sheets'
+            : 'The blocking dialog has already closed — you can retry opening this sheet',
+          'warn',
+          5000,
+        );
         return;
       }
       const target = err.data && err.data.discardTarget;
@@ -2036,11 +2105,11 @@
         method: 'POST',
         json: Object.assign({ force }, targetPayload(null)),
       });
-      if (res.state) applySessionState(res.state);
+      if (res.state) applyHttpSessionState(res.state);
       showBanner(res.message || 'Saved PDF to disk', 'ok', 3000);
       await refreshLibrary();
     } catch (err) {
-      if (err.data && err.data.state) applySessionState(err.data.state);
+      if (err.data && err.data.state) applyHttpSessionState(err.data.state);
       showBanner(err.message, 'err');
     }
   }
@@ -2051,7 +2120,7 @@
       const res = await api('/api/git/sync', { method: 'POST', json: { message } });
       $('git-commit-msg').value = '';
       if (res.git) appState.git = res.git;
-      if (res.state) applySessionState(res.state);
+      if (res.state) applyHttpSessionState(res.state);
       const kind = res.sync?.status === 'conflict_branch' ? 'warn' : 'ok';
       showBanner(res.sync?.message || 'Synced', kind, 6000);
       await refreshLibrary();
@@ -2066,11 +2135,11 @@
       const body = { force };
       if (discard) body.discard = discard;
       const res = await api('/api/git/pull', { method: 'POST', json: body });
-      if (res.state) applySessionState(res.state);
+      if (res.state) applyHttpSessionState(res.state);
       showBanner(res.pull?.message || 'Pull complete', res.pull?.dirty ? 'warn' : 'ok', 5000);
       await refreshLibrary();
     } catch (err) {
-      if (err.data && err.data.state) applySessionState(err.data.state);
+      if (err.data && err.data.state) applyHttpSessionState(err.data.state);
       const target = err.data && err.data.discardTarget;
       if (
         err.status === 409 &&
