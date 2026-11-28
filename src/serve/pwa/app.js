@@ -200,7 +200,7 @@
           const inter = msg.serverInstanceId && !msg.interaction.serverInstanceId
             ? Object.assign({ serverInstanceId: msg.serverInstanceId }, msg.interaction)
             : msg.interaction;
-          openAcrobatInteraction(inter);
+          openAcrobatInteraction(inter, { allowAdoptNewInstance: true });
         } else if (msg.type === 'interaction_cleared') {
           if (msg.serverInstanceId && !adoptServerInstance(msg.serverInstanceId)) {
             return;
@@ -961,7 +961,7 @@
   async function handleActionResponse(res) {
     if (!res) return false;
     if (res.status === 'interaction_required' && res.interaction) {
-      return openAcrobatInteraction(res.interaction);
+      return openAcrobatInteraction(res.interaction, { allowAdoptNewInstance: false });
     }
     let applied = true;
     if (res.state) applied = applySessionState(res.state);
@@ -1105,7 +1105,7 @@
     appState.retiredInteractionKeys.add(`${inst}:${id}`);
   }
 
-  function openAcrobatInteraction(interaction) {
+  function openAcrobatInteraction(interaction, { allowAdoptNewInstance = true } = {}) {
     if (!interaction || !interaction.id) return false;
     const nextInst = interactionServerInst(interaction);
     if (nextInst && appState.retiredServerInstanceIds.has(nextInst)) {
@@ -1122,11 +1122,28 @@
       $('acrobat-modal').classList.remove('hidden');
       return true;
     }
+    const nextSeq = interactionSeq(interaction);
+    const sameAsWatermarkInst =
+      !nextInst || !appState.lastServerInstanceId || nextInst === appState.lastServerInstanceId;
+    // Reject stale direct/HTTP interaction replies below the same-instance stateSeq
+    // watermark (equal sequence is still allowed so duplicate delivery works).
+    if (sameAsWatermarkInst && nextSeq !== null && nextSeq < appState.lastStateSeq) {
+      return false;
+    }
+    // Do not let a delayed HTTP interaction_required response from an unobserved
+    // server instance retire the current authoritative server or dismiss its prompt.
+    if (
+      !allowAdoptNewInstance &&
+      nextInst &&
+      appState.lastServerInstanceId &&
+      nextInst !== appState.lastServerInstanceId
+    ) {
+      return false;
+    }
     if (appState.activeInteraction) {
       const curInst = interactionServerInst(appState.activeInteraction);
       const sameInst = !curInst || !nextInst || curInst === nextInst;
       const curSeq = interactionSeq(appState.activeInteraction);
-      const nextSeq = interactionSeq(interaction);
       // Never let a delayed older interaction from the same server instance replace
       // or retire a newer active prompt.
       if (sameInst && curSeq !== null && nextSeq !== null && nextSeq <= curSeq) {
@@ -1562,7 +1579,7 @@
       }
       if (res.status === 'interaction_required' && res.interaction) {
         retireInteraction(interId, interServerId);
-        openAcrobatInteraction(res.interaction);
+        openAcrobatInteraction(res.interaction, { allowAdoptNewInstance: false });
       } else {
         closeAcrobatModal(interId, interServerId);
         if (res.state) {
@@ -1666,6 +1683,7 @@
   }
 
   let newCharModalOpener = null;
+  let newCharModalOpenerTemplatePath = null;
   let newCharModalInstanceSeq = 0;
   let activeNewCharModalInstance = null;
 
@@ -1694,6 +1712,10 @@
     newCharModalInstanceSeq += 1;
     activeNewCharModalInstance = newCharModalInstanceSeq;
     newCharModalOpener = document.activeElement || null;
+    newCharModalOpenerTemplatePath =
+      preselectedTemplatePath ||
+      (newCharModalOpener && newCharModalOpener.dataset && newCharModalOpener.dataset.templatePath) ||
+      null;
     const sel = $('nc-template');
     sel.innerHTML = '';
     tpls.forEach((tpl) => {
@@ -1719,9 +1741,31 @@
     activeNewCharModalInstance = null;
     $('new-char-modal').classList.add('hidden');
     const opener = newCharModalOpener;
+    const openerTemplatePath = newCharModalOpenerTemplatePath;
     newCharModalOpener = null;
-    if (restoreFocus && opener && typeof opener.focus === 'function') {
-      opener.focus();
+    newCharModalOpenerTemplatePath = null;
+    if (restoreFocus) {
+      const openerConnected = opener && opener.isConnected !== false;
+      if (openerConnected && typeof opener.focus === 'function') {
+        opener.focus();
+      } else {
+        let fallback = null;
+        if (openerTemplatePath) {
+          const tplList = $('templates-list');
+          const btns =
+            tplList && typeof tplList.querySelectorAll === 'function'
+              ? Array.from(tplList.querySelectorAll('button'))
+              : [];
+          fallback =
+            btns.find((b) => b.dataset && b.dataset.templatePath === openerTemplatePath) || null;
+        }
+        if (!fallback) {
+          fallback = $('btn-new-char') || $('btn-empty-new-char');
+        }
+        if (fallback && typeof fallback.focus === 'function') {
+          fallback.focus();
+        }
+      }
     }
   }
 
@@ -1777,7 +1821,7 @@
     } catch (err) {
       if (err.status === 409 && err.data && err.data.status === 'interaction_required' && err.data.interaction) {
         closeNewCharModal(false, modalInstance);
-        openAcrobatInteraction(err.data.interaction);
+        openAcrobatInteraction(err.data.interaction, { allowAdoptNewInstance: false });
         showBanner('Finish or cancel the active dialog before creating a new character', 'warn', 5000);
         return;
       }
@@ -1919,6 +1963,7 @@
         useBtn.type = 'button';
         useBtn.className = 'btn small primary';
         useBtn.textContent = '+ New';
+        useBtn.dataset.templatePath = tpl.path;
         useBtn.addEventListener('click', () => openNewCharModal(tpl.path));
         actions.appendChild(dl);
         actions.appendChild(useBtn);
@@ -1962,7 +2007,7 @@
       }
     } catch (err) {
       if (err.status === 409 && err.data && err.data.status === 'interaction_required' && err.data.interaction) {
-        openAcrobatInteraction(err.data.interaction);
+        openAcrobatInteraction(err.data.interaction, { allowAdoptNewInstance: false });
         showBanner('Finish or cancel the active dialog before switching sheets', 'warn', 5000);
         return;
       }

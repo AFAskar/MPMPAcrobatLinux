@@ -16,20 +16,44 @@ PWA_HARNESS = textwrap.dedent(
 
     const source = fs.readFileSync(process.argv[process.argv.length - 1], 'utf8').replace(
       '  // Boot\n  updateConnDot();\n  connectWs();\n  refreshAll();',
-      '  globalThis.harness = { appState, applySessionState, openFieldEditorByName, enqueueStep, currentSessionRef, editField, activateField, openSheet, openNewCharModal, closeNewCharModal, createCharacterFromTemplate, handlePdfUpload, doGitPull, refreshSession, connectWs, openAcrobatInteraction, closeAcrobatModal, submitInteraction };'
+      '  globalThis.harness = { appState, applySessionState, openFieldEditorByName, enqueueStep, currentSessionRef, editField, activateField, openSheet, openNewCharModal, closeNewCharModal, createCharacterFromTemplate, handlePdfUpload, doGitPull, refreshSession, connectWs, openAcrobatInteraction, closeAcrobatModal, submitInteraction, handleActionResponse, renderSheets };'
     );
 
     const elements = new Map();
-    function element(id) {
+    function markDisconnected(node) {
+      if (!node || typeof node !== 'object') return;
+      node.isConnected = false;
+      if (Array.isArray(node.children)) {
+        node.children.forEach(markDisconnected);
+      }
+    }
+    function collectButtons(node, out) {
+      if (!node || typeof node !== 'object') return;
+      if (node.tagName === 'BUTTON') out.push(node);
+      if (Array.isArray(node.children)) {
+        node.children.forEach((c) => collectButtons(c, out));
+      }
+    }
+    function element(id, tagName = 'DIV') {
       if (!elements.has(id)) {
         const classes = new Set();
+        let htmlVal = '';
         const el = {
           id,
+          tagName: String(tagName || 'DIV').toUpperCase(),
+          isConnected: true,
+          children: [],
           listeners: {},
           dataset: {},
           style: {},
           value: '',
           textContent: '',
+          get innerHTML() { return htmlVal; },
+          set innerHTML(v) {
+            htmlVal = String(v);
+            el.children.forEach(markDisconnected);
+            el.children = [];
+          },
           focus() { context.document.activeElement = el; },
           classList: {
             toggle(c, force) {
@@ -46,7 +70,20 @@ PWA_HARNESS = textwrap.dedent(
           addEventListener(type, fn) { this.listeners[type] = fn; },
           getAttribute() {},
           setAttribute() {},
-          appendChild() {},
+          appendChild(child) {
+            if (child && typeof child === 'object') {
+              child.isConnected = el.isConnected;
+              el.children.push(child);
+            }
+          },
+          querySelectorAll(sel) {
+            if (sel === 'button') {
+              const out = [];
+              el.children.forEach((c) => collectButtons(c, out));
+              return out;
+            }
+            return [];
+          },
         };
         elements.set(id, el);
       }
@@ -85,7 +122,7 @@ PWA_HARNESS = textwrap.dedent(
           }
           return [];
         },
-        createElement() { return element(Symbol()); },
+        createElement(tag) { return element(Symbol(), tag); },
         createTextNode(t) { return { textContent: t }; },
       },
       URLSearchParams,
@@ -120,6 +157,8 @@ PWA_HARNESS = textwrap.dedent(
       openAcrobatInteraction,
       closeAcrobatModal,
       submitInteraction,
+      handleActionResponse,
+      renderSheets,
     } = context.harness;
 
     function jsonResp(payload, status = 200) {
@@ -950,13 +989,16 @@ PWA_HARNESS = textwrap.dedent(
       assert.equal(appState.lastServerInstanceId, 'srv-6');
       assert.equal(appState.activeInteraction, null);
       assert.equal(
-        openAcrobatInteraction({
-          id: 'srv-7-int-2',
-          serverInstanceId: 'srv-7',
-          stateSeq: 2,
-          kind: 'alert',
-          request: { cTitle: 'Server B Prompt', cMsg: 'Arrived over WS before B state' },
-        }),
+        openAcrobatInteraction(
+          {
+            id: 'srv-7-int-2',
+            serverInstanceId: 'srv-7',
+            stateSeq: 2,
+            kind: 'alert',
+            request: { cTitle: 'Server B Prompt', cMsg: 'Arrived over WS before B state' },
+          },
+          { allowAdoptNewInstance: true },
+        ),
         true,
       );
       assert.equal(appState.lastServerInstanceId, 'srv-7');
@@ -1035,6 +1077,100 @@ PWA_HARNESS = textwrap.dedent(
       assert.equal(appState.activeInteraction, null);
       assert.equal(appState.sheet && appState.sheet.sessionId, 'srv-7-s1');
       assert.equal(appState.lastStateSeq, 3);
+
+      // 21: Direct HTTP `handleActionResponse` interaction ordering and instance protection:
+      // 21a: Stale same-instance HTTP interaction (stateSeq 2 < lastStateSeq 3) must be rejected.
+      assert.equal(
+        await handleActionResponse({
+          status: 'interaction_required',
+          interaction: {
+            id: 'srv-7-int-stale',
+            serverInstanceId: 'srv-7',
+            stateSeq: 2,
+            kind: 'alert',
+            request: { cTitle: 'Stale HTTP', cMsg: 'Below watermark' },
+          },
+        }),
+        false,
+        'stale direct HTTP interaction below same-instance lastStateSeq must be rejected',
+      );
+      assert.equal(appState.activeInteraction, null);
+
+      // 21b: Equal same-instance stateSeq (3 === 3) is still accepted.
+      assert.equal(
+        await handleActionResponse({
+          status: 'interaction_required',
+          interaction: {
+            id: 'srv-7-int-eq',
+            serverInstanceId: 'srv-7',
+            stateSeq: 3,
+            kind: 'alert',
+            request: { cTitle: 'Current HTTP', cMsg: 'Equal to watermark' },
+          },
+        }),
+        true,
+      );
+      assert.equal(appState.activeInteraction && appState.activeInteraction.id, 'srv-7-int-eq');
+
+      // 21c: Delayed HTTP interaction from an unobserved old server instance (`srv-unseen-old`)
+      // must NOT retire the current authoritative server (`srv-7`) or close its prompt.
+      assert.equal(
+        await handleActionResponse({
+          status: 'interaction_required',
+          interaction: {
+            id: 'unseen-int-1',
+            serverInstanceId: 'srv-unseen-old',
+            stateSeq: 99,
+            kind: 'alert',
+            request: { cTitle: 'Stopped Server', cMsg: 'Delayed HTTP from unobserved instance' },
+          },
+        }),
+        false,
+        'HTTP interaction from unobserved instance must not retire current instance',
+      );
+      assert.equal(appState.lastServerInstanceId, 'srv-7');
+      assert.equal(appState.retiredServerInstanceIds.has('srv-7'), false);
+      assert.equal(appState.activeInteraction && appState.activeInteraction.id, 'srv-7-int-eq');
+      closeAcrobatModal();
+
+      // 22: Cancelling New Character modal after `renderSheets()` detaches the template-row
+      // opener button restores focus to the replacement row's `+ New` button (or `#btn-new-char`
+      // if that template is no longer listed).
+      appState.templates = [
+        { path: 'templates/MPMB-2024-Blank.pdf', name: 'MPMB-2024-Blank.pdf', size_bytes: 1024, is_template: true },
+      ];
+      appState.characters = [];
+      renderSheets();
+      const firstRowBtns = element('templates-list').querySelectorAll('button');
+      assert.equal(firstRowBtns.length, 1);
+      const origRowBtn = firstRowBtns[0];
+      assert.equal(origRowBtn.dataset.templatePath, 'templates/MPMB-2024-Blank.pdf');
+      origRowBtn.focus();
+      openNewCharModal('templates/MPMB-2024-Blank.pdf');
+      // Refreshing Library replaces the row DOM, detaching `origRowBtn`.
+      renderSheets();
+      assert.equal(origRowBtn.isConnected, false);
+      const replacementRowBtn = element('templates-list').querySelectorAll('button')[0];
+      assert.notEqual(replacementRowBtn, origRowBtn);
+      assert.equal(replacementRowBtn.isConnected, true);
+      closeNewCharModal(true);
+      assert.equal(
+        context.document.activeElement,
+        replacementRowBtn,
+        'cancelling after Library refresh must focus the replacement template row + New button',
+      );
+      // If the template itself is removed before cancelling, fall back to `#btn-new-char`.
+      replacementRowBtn.focus();
+      openNewCharModal('templates/MPMB-2024-Blank.pdf');
+      appState.templates = [];
+      renderSheets();
+      assert.equal(replacementRowBtn.isConnected, false);
+      closeNewCharModal(true);
+      assert.equal(
+        context.document.activeElement,
+        element('btn-new-char'),
+        'cancelling when template row no longer exists must fall back to #btn-new-char',
+      );
 
       console.log('PWA_CLIENT_REGRESSIONS_OK');
     })().catch((err) => {

@@ -324,6 +324,37 @@ impl SheetStore {
         Ok((normalized, abs))
     }
 
+    /// Returns whether `rel` resolves inside the store's `templates/` directory,
+    /// accounting for case, Unicode, and Windows 8.3 short-name directory aliases
+    /// by comparing top-level directory filesystem identities (failing closed on error).
+    pub fn is_template_resolved_path(&self, rel: &str) -> Result<bool> {
+        let (normalized, _) = self.resolve_safe_pdf_path(rel)?;
+        is_path_in_templates_dir(&self.root, &normalized)
+    }
+
+    /// Verifies that the primary sidecar path for `rel` does not exist as a
+    /// non-regular entry (such as a directory or symlink) before publishing a new
+    /// sheet whose startup edits require writing a sidecar.
+    pub fn ensure_startup_sidecar_writable(&self, rel: &str) -> Result<()> {
+        let _guard = self.lock.lock().unwrap();
+        let (_norm, abs) = self.resolve_safe_pdf_path(rel)?;
+        let sidecar_path = Self::sidecar_path_for(&abs);
+        match fs::symlink_metadata(&sidecar_path) {
+            Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => {
+                bail!(
+                    "sidecar destination is not a regular file: {}",
+                    sidecar_path.display()
+                );
+            }
+            Ok(_) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(anyhow::Error::new(err).context(format!(
+                "failed to inspect sidecar destination {}",
+                sidecar_path.display()
+            ))),
+        }
+    }
+
     fn ensure_within_store(&self, parts: &[String]) -> Result<PathBuf> {
         let mut cur = self.root.clone();
         for seg in parts {
@@ -619,7 +650,8 @@ impl SheetStore {
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0),
-            is_template: is_template_path(&normalized),
+            is_template: is_path_in_templates_dir(&self.root, &normalized)
+                .unwrap_or_else(|_| is_template_path(&normalized)),
             has_state_sidecar: false,
             character_name: None,
             class_and_levels: None,
@@ -645,6 +677,9 @@ impl SheetStore {
         let (dest_norm, dest_abs, src_norm) = {
             let _guard = self.lock.lock().unwrap();
             let (norm, abs) = self.resolve_safe_pdf_path(&dest_rel)?;
+            if is_path_in_templates_dir(&self.root, &norm)? {
+                bail!("character path cannot be inside templates/");
+            }
             // Fast-fail before running any template startup/JavaScript when a sheet
             // already exists or its sidecar path collides with another existing sheet.
             if fs::symlink_metadata(&abs).is_ok() {
@@ -655,7 +690,7 @@ impl SheetStore {
             }
             Self::check_create_sidecar_conflicts(&abs)?;
             let (src_norm, _) = self.resolve_safe_pdf_path(template_rel)?;
-            if !is_template_path(&src_norm) {
+            if !is_path_in_templates_dir(&self.root, &src_norm)? {
                 bail!("source sheet must be a template inside templates/: {src_norm}");
             }
             (norm, abs, src_norm)
@@ -688,6 +723,9 @@ impl SheetStore {
         }
         if !bytes.starts_with(b"%PDF-") {
             bail!("PDF file does not start with %PDF- header");
+        }
+        if self.is_template_resolved_path(rel)? {
+            bail!("character path cannot be inside templates/");
         }
         let (dest_norm, mut staged) = self.start_staged_upload(rel)?;
         staged.write_chunk(bytes)?;
@@ -1907,7 +1945,22 @@ fn stamp_sidecar_meta(sidecar: &Value, pdf_sha256: &str, pdf_path: &Path) -> Val
     let mut stamped = sidecar.clone();
     if let Some(obj) = stamped.as_object_mut() {
         obj.insert("pdfSha256".to_owned(), Value::String(pdf_sha256.to_owned()));
-        if let Some(file_name) = pdf_path.file_name().and_then(|s| s.to_str()) {
+        let resolved_name: Option<std::ffi::OsString> = {
+            #[cfg(windows)]
+            {
+                canonical_dir_entry_name(pdf_path).ok()
+            }
+            #[cfg(target_os = "linux")]
+            {
+                canonical_linux_dir_entry_name(pdf_path)
+            }
+            #[cfg(not(any(windows, target_os = "linux")))]
+            {
+                None
+            }
+        };
+        let file_name_os = resolved_name.as_deref().or_else(|| pdf_path.file_name());
+        if let Some(file_name) = file_name_os.and_then(|s| s.to_str()) {
             obj.insert(
                 "pdfFileName".to_owned(),
                 Value::String(file_name.to_owned()),
@@ -2314,8 +2367,27 @@ fn canonical_dir_entry_name(path: &Path) -> std::io::Result<std::ffi::OsString> 
     Ok(std::ffi::OsString::from_wide(&data.c_file_name[..nul]))
 }
 
+#[cfg(target_os = "linux")]
+fn canonical_linux_dir_entry_name(path: &Path) -> Option<std::ffi::OsString> {
+    use std::os::unix::io::AsRawFd;
+    let meta = fs::symlink_metadata(path).ok()?;
+    if meta.file_type().is_symlink() || !meta.is_file() {
+        return None;
+    }
+    let file = fs::File::open(path).ok()?;
+    let fd_path = format!("/proc/self/fd/{}", file.as_raw_fd());
+    let resolved = fs::read_link(fd_path).ok()?;
+    let resolved_parent = resolved.parent()?;
+    let orig_parent = path.parent()?;
+    if file_identity(resolved_parent).ok()? != file_identity(orig_parent).ok()? {
+        return None;
+    }
+    resolved.file_name().map(std::ffi::OsStr::to_os_string)
+}
+
 #[cfg(unix)]
 fn resolve_unix_dir_entry_name(
+    parent: &Path,
     entries: &[(std::ffi::OsString, FileId)],
     target_name: &std::ffi::OsStr,
     target_id: FileId,
@@ -2330,27 +2402,28 @@ fn resolve_unix_dir_entry_name(
     }
     if matching.len() == 1 {
         // Only one directory entry in `parent` points to `target_id`; any alternate
-        // spelling resolving to `target_id` (e.g. case-insensitive mount) maps to it.
+        // spelling resolving to `target_id` (e.g. case-insensitive/casefold mount) maps to it.
         return Some(matching[0].clone());
     }
-    // Multiple hard-linked entries share `target_id`: match the exact entry name first,
-    // or a unique case-folded match if on a case-insensitive filesystem with hard links.
+    // Multiple hard-linked entries share `target_id`: match the exact entry name first.
     if let Some(exact) = matching.iter().find(|n| n.as_os_str() == target_name) {
         return Some((*exact).clone());
     }
-    let target_folded = target_name.to_str()?.to_lowercase();
-    let folded: Vec<&std::ffi::OsString> = matching
-        .into_iter()
-        .filter(|n| {
-            n.to_str()
-                .is_some_and(|s| s.to_lowercase() == target_folded)
-        })
-        .collect();
-    if folded.len() == 1 {
-        Some(folded[0].clone())
-    } else {
-        None
+    // On Linux (e.g. ext4 casefold with NFC/NFD normalization and a hard-linked sibling),
+    // ask the kernel dentry cache for the actual on-disk directory entry name instead of
+    // guessing with lowercase string equality; fail closed if it cannot be uniquely resolved.
+    #[cfg(target_os = "linux")]
+    if let Some(actual) = canonical_linux_dir_entry_name(&parent.join(target_name)) {
+        if let Some(found) = matching
+            .iter()
+            .find(|n| n.as_os_str() == actual.as_os_str())
+        {
+            return Some((*found).clone());
+        }
     }
+    #[cfg(not(target_os = "linux"))]
+    let _ = parent;
+    None
 }
 
 #[cfg(all(not(unix), not(windows)))]
@@ -2432,11 +2505,13 @@ fn owner_name_matches_pdf(owner: &str, pdf_path: &Path) -> bool {
                         }
                     }
                     let owner_entry = resolve_unix_dir_entry_name(
+                        parent,
                         &dir_entries,
                         std::ffi::OsStr::new(owner),
                         owner_id,
                     );
-                    let self_entry = resolve_unix_dir_entry_name(&dir_entries, self_name, pdf_id);
+                    let self_entry =
+                        resolve_unix_dir_entry_name(parent, &dir_entries, self_name, pdf_id);
                     return matches!((owner_entry, self_entry), (Some(a), Some(b)) if a == b);
                 }
                 #[cfg(all(not(unix), not(windows)))]
@@ -2574,7 +2649,7 @@ fn sidecar_claimed_by_other_pdf(pdf_path: &Path, sidecar_path: &Path) -> Result<
             .iter()
             .map(|(n, _, id)| (n.clone(), *id))
             .collect();
-        resolve_unix_dir_entry_name(&name_ids, self_name, sid)
+        resolve_unix_dir_entry_name(parent, &name_ids, self_name, sid)
     });
     #[cfg(all(not(unix), not(windows)))]
     let self_dir_entry_name: Option<std::ffi::OsString> = self_id.map(|_| self_name.to_os_string());
@@ -2740,6 +2815,72 @@ pub fn is_template_path(rel: &str) -> bool {
         && parts.next().is_some()
 }
 
+fn is_path_in_templates_dir(root: &Path, normalized: &str) -> Result<bool> {
+    if is_template_path(normalized) {
+        return Ok(true);
+    }
+    let mut parts = normalized.split('/').filter(|s| !s.is_empty());
+    let Some(first) = parts.next() else {
+        return Ok(false);
+    };
+    if parts.next().is_none() {
+        return Ok(false);
+    }
+    let top_path = root.join(first);
+    let top_id = match file_identity(&top_path) {
+        Ok(id) => id,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => {
+            return Err(anyhow::Error::new(err).context(format!(
+                "failed to determine directory identity for {}",
+                top_path.display()
+            )));
+        }
+    };
+    let entries = fs::read_dir(root).with_context(|| {
+        format!(
+            "failed to inspect store root {} for template directory aliases",
+            root.display()
+        )
+    })?;
+    for entry_res in entries {
+        let entry = entry_res.with_context(|| {
+            format!(
+                "failed reading store root entry in {} for template directory aliases",
+                root.display()
+            )
+        })?;
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+        if !name_str.eq_ignore_ascii_case("templates") {
+            continue;
+        }
+        let ty = entry.file_type().with_context(|| {
+            format!(
+                "failed inspecting store root entry {} for template directory aliases",
+                entry.path().display()
+            )
+        })?;
+        if !ty.is_dir() {
+            continue;
+        }
+        match file_identity(&entry.path()) {
+            Ok(tpl_id) if tpl_id == top_id => return Ok(true),
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(anyhow::Error::new(err).context(format!(
+                    "failed to determine directory identity for {}",
+                    entry.path().display()
+                )));
+            }
+        }
+    }
+    Ok(false)
+}
+
 pub fn normalize_new_character_path(name: &str) -> Result<String> {
     let trimmed = name.trim().replace('\\', "/");
     if trimmed.is_empty() {
@@ -2828,67 +2969,66 @@ fn sheet_entry_from_path(root: &Path, abs: &Path) -> Result<SheetEntry> {
         .unwrap_or(0);
     let primary_sidecar = SheetStore::sidecar_path_for(abs);
     let legacy_sidecar = SheetStore::legacy_sidecar_path_for(abs);
-    let sidecar_candidate = if primary_sidecar.is_file() {
-        Some((primary_sidecar, false))
-    } else if legacy_sidecar.is_file() {
-        Some((legacy_sidecar, true))
-    } else {
-        None
-    };
-    let sidecar_json = sidecar_candidate.as_ref().and_then(|(p, is_legacy)| {
-        let sm = fs::symlink_metadata(p).ok()?;
-        if sm.file_type().is_symlink() || !sm.is_file() || sm.len() as usize > MAX_SIDECAR_BYTES {
-            return None;
-        }
-        let parsed = read_bounded(p, MAX_SIDECAR_BYTES)
-            .ok()
-            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())?;
-        // Enforce sidecar ownership: if `pdfFileName` is stamped, it must match this PDF;
-        // if unstamped, reject ambiguous sidecars that another existing PDF in the same
-        // directory also derives as its primary or legacy sidecar (e.g. `Hero.pdf` vs
-        // `Hero.pdf.pdf`, or case-variant siblings sharing `Hero.state.json`).
-        match parsed.get("pdfFileName").and_then(Value::as_str) {
-            Some(owner) => {
-                if !owner_name_matches_pdf(owner, abs) {
-                    return None;
+    // Evaluate primary first, then fall back to legacy if the primary candidate is
+    // absent, invalid, stale, or owned by another sheet (e.g. `Hero.pdf.pdf.state.json`
+    // belonging to `Hero.pdf.pdf.pdf` while `Hero.pdf.state.json` belongs to `Hero.pdf.pdf`).
+    let sidecar_json = [(primary_sidecar, false), (legacy_sidecar, true)]
+        .into_iter()
+        .find_map(|(p, is_legacy)| {
+            let sm = fs::symlink_metadata(&p).ok()?;
+            if sm.file_type().is_symlink() || !sm.is_file() || sm.len() as usize > MAX_SIDECAR_BYTES
+            {
+                return None;
+            }
+            let parsed = read_bounded(&p, MAX_SIDECAR_BYTES)
+                .ok()
+                .and_then(|b| serde_json::from_slice::<Value>(&b).ok())?;
+            // Enforce sidecar ownership: if `pdfFileName` is stamped, it must match this PDF;
+            // if unstamped, reject ambiguous sidecars that another existing PDF in the same
+            // directory also derives as its primary or legacy sidecar (e.g. `Hero.pdf` vs
+            // `Hero.pdf.pdf`, or case-variant siblings sharing `Hero.state.json`).
+            match parsed.get("pdfFileName").and_then(Value::as_str) {
+                Some(owner) => {
+                    if !owner_name_matches_pdf(owner, abs) {
+                        return None;
+                    }
+                }
+                None => {
+                    // Fail closed if directory enumeration fails so unverified unstamped
+                    // sidecars are never misattributed.
+                    if sidecar_claimed_by_other_pdf(abs, &p).unwrap_or(true) {
+                        return None;
+                    }
                 }
             }
-            None => {
-                // Fail closed if directory enumeration fails so unverified unstamped
-                // sidecars are never misattributed.
-                if sidecar_claimed_by_other_pdf(abs, p).unwrap_or(true) {
-                    return None;
+            // Use sidecar metadata only when its recorded PDF SHA-256 matches the
+            // current PDF bytes. Legacy pre-hash sidecars (without `pdfSha256` and
+            // without the v1 schema tag) are accepted only if they are at least as
+            // recent as the PDF file.
+            match parsed.get("pdfSha256").and_then(Value::as_str) {
+                Some(recorded) if recorded.eq_ignore_ascii_case(&pdf_sha) => Some(parsed),
+                Some(_) => None,
+                None => {
+                    let has_v1_schema = parsed.get("schema").is_some();
+                    let sidecar_fresh = match (sm.modified().ok(), pdf_modified) {
+                        (Some(sc_t), Some(pdf_t)) => sc_t >= pdf_t,
+                        _ => false,
+                    };
+                    if is_legacy && !has_v1_schema && sidecar_fresh {
+                        Some(parsed)
+                    } else {
+                        None
+                    }
                 }
             }
-        }
-        // Use sidecar metadata only when its recorded PDF SHA-256 matches the
-        // current PDF bytes. Legacy pre-hash sidecars (without `pdfSha256` and
-        // without the v1 schema tag) are accepted only if they are at least as
-        // recent as the PDF file.
-        match parsed.get("pdfSha256").and_then(Value::as_str) {
-            Some(recorded) if recorded.eq_ignore_ascii_case(&pdf_sha) => Some(parsed),
-            Some(_) => None,
-            None => {
-                let has_v1_schema = parsed.get("schema").is_some();
-                let sidecar_fresh = match (sm.modified().ok(), pdf_modified) {
-                    (Some(sc_t), Some(pdf_t)) => sc_t >= pdf_t,
-                    _ => false,
-                };
-                if *is_legacy && !has_v1_schema && sidecar_fresh {
-                    Some(parsed)
-                } else {
-                    None
-                }
-            }
-        }
-    });
+        });
     let str_opt = |v: &Value| {
         v.as_str()
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_owned)
     };
-    let is_template = is_template_path(&rel);
+    let is_template = is_path_in_templates_dir(root, &rel)?;
     Ok(SheetEntry {
         path: rel,
         name,
@@ -5408,6 +5548,217 @@ mod tests {
                 .unwrap();
             assert!(!listed_rev_dbl.has_state_sidecar);
             assert_eq!(listed_rev_dbl.character_name, None);
+        }
+
+        // 8. Primary-owned-by-another-sheet falls back to valid legacy sidecar in listing:
+        //    `Chain.pdf.pdf` owns `Chain.pdf.state.json` (legacy), while `Chain.pdf.pdf.pdf`
+        //    owns `Chain.pdf.pdf.state.json` (which is also `Chain.pdf.pdf`'s primary path).
+        {
+            store
+                .upload_sheet("Chain.pdf.pdf", &tpl_bytes, false)
+                .unwrap();
+            store
+                .upload_sheet("Chain.pdf.pdf.pdf", &tpl_bytes, false)
+                .unwrap();
+            let chain_legacy_sc = dir.join("Chain.pdf.state.json");
+            let chain_triple_sc = dir.join("Chain.pdf.pdf.state.json");
+            fs::write(
+                &chain_legacy_sc,
+                serde_json::to_vec_pretty(&json!({
+                    "pdfFileName": "Chain.pdf.pdf",
+                    "pdfSha256": tpl.sha256,
+                    "character": { "name": "Chain Legacy Owner", "level": "9" }
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            fs::write(
+                &chain_triple_sc,
+                serde_json::to_vec_pretty(&json!({
+                    "pdfFileName": "Chain.pdf.pdf.pdf",
+                    "pdfSha256": tpl.sha256,
+                    "character": { "name": "Chain Triple Owner", "level": "14" }
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            let listed_chain = store.list_sheets().unwrap();
+            let dbl = listed_chain
+                .iter()
+                .find(|s| s.path == "Chain.pdf.pdf")
+                .unwrap();
+            assert!(
+                dbl.has_state_sidecar,
+                "Chain.pdf.pdf must fall back to its valid legacy sidecar when its primary belongs to Chain.pdf.pdf.pdf"
+            );
+            assert_eq!(dbl.character_name.as_deref(), Some("Chain Legacy Owner"));
+            assert_eq!(dbl.level.as_deref(), Some("9"));
+            let triple = listed_chain
+                .iter()
+                .find(|s| s.path == "Chain.pdf.pdf.pdf")
+                .unwrap();
+            assert!(triple.has_state_sidecar);
+            assert_eq!(triple.character_name.as_deref(), Some("Chain Triple Owner"));
+            assert_eq!(triple.level.as_deref(), Some("14"));
+        }
+
+        // 9. Resolved template directory classification (guards against directory aliases
+        //    like Windows 8.3 short names or Linux ext4 casefold `templateſ`, while keeping
+        //    ordinary character subdirectories usable and failing closed on identity error).
+        {
+            // Ordinary subdirectory remains usable for creation and is not classified as template.
+            fs::create_dir_all(dir.join("campaigns")).unwrap();
+            assert!(!store
+                .is_template_resolved_path("campaigns/Bryn.pdf")
+                .unwrap());
+            let bryn = store
+                .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "campaigns/Bryn")
+                .unwrap();
+            assert_eq!(bryn.path, "campaigns/Bryn.pdf");
+            assert!(!bryn.is_template);
+
+            // Indeterminate top-level directory identity fails closed.
+            let camp_guard = fail_file_identity_for_path(canon_dir.join("campaigns"));
+            assert!(store
+                .is_template_resolved_path("campaigns/Bryn.pdf")
+                .is_err());
+            drop(camp_guard);
+
+            // Non-regular startup sidecar path (directory) is rejected before publication.
+            fs::create_dir_all(dir.join("NonRegSc.pdf.state.json")).unwrap();
+            let nonreg_err = store
+                .ensure_startup_sidecar_writable("NonRegSc.pdf")
+                .unwrap_err();
+            assert!(
+                format!("{nonreg_err:#}").contains("not a regular file"),
+                "nonregular startup sidecar path must fail: {nonreg_err:#}"
+            );
+
+            // On Linux casefold filesystems where `templateſ` (U+017F) resolves to `templates`,
+            // verify both direct-open classification and create-to-missing-file are blocked,
+            // and verify NFC/NFD normalization with a hard-linked sibling (`Backup.pdf`).
+            #[cfg(unix)]
+            {
+                let long_s_tpl = dir.join("template\u{017f}");
+                if matches!(
+                    (file_identity(&long_s_tpl), file_identity(&dir.join("templates"))),
+                    (Ok(a), Ok(b)) if a == b
+                ) {
+                    assert!(store
+                        .is_template_resolved_path("template\u{017f}/MPMB-2024-Blank.pdf")
+                        .unwrap());
+                    let err_create = store
+                        .create_sheet_from_template(
+                            "templates/MPMB-2024-Blank.pdf",
+                            "template\u{017f}/AliasEscape",
+                        )
+                        .unwrap_err();
+                    assert!(format!("{err_create:#}").contains("inside templates/"));
+                    assert!(!dir.join("templates/AliasEscape.pdf").exists());
+                    assert_eq!(
+                        fs::read(dir.join("templates/MPMB-2024-Blank.pdf")).unwrap(),
+                        tpl_bytes
+                    );
+
+                    // Casefold NFC/NFD + hard-linked sibling (`Élodie.pdf` + `Backup.pdf`):
+                    // saving via decomposed NFD stamps the actual on-disk NFC entry name,
+                    // an existing NFD-stamped sidecar still resolves to NFC `Élodie.pdf`,
+                    // and `Backup.pdf` is still rejected as a distinct directory entry.
+                    let nfc_name = "\u{00c9}lodie.pdf";
+                    let nfd_name = "E\u{0301}lodie.pdf";
+                    store.upload_sheet(nfc_name, &tpl_bytes, false).unwrap();
+                    fs::hard_link(dir.join(nfc_name), dir.join("Backup.pdf")).unwrap();
+                    store
+                        .write_sidecar_atomic(
+                            nfd_name,
+                            &tpl.sha256,
+                            &json!({ "character": { "name": "Casefold NFC Hero", "level": "11" } }),
+                        )
+                        .unwrap();
+                    let stamped_raw: Value = serde_json::from_slice(
+                        &fs::read(dir.join(format!("{nfc_name}.state.json"))).unwrap(),
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        stamped_raw["pdfFileName"].as_str(),
+                        Some(nfc_name),
+                        "sidecar saved via NFD spelling must stamp actual on-disk NFC entry name"
+                    );
+                    // Even when an external sidecar carries the NFD spelling directly,
+                    // Library must attribute it to `Élodie.pdf` and reject `Backup.pdf`.
+                    let nfd_sc_bytes = serde_json::to_vec_pretty(&json!({
+                        "pdfFileName": nfd_name,
+                        "pdfSha256": tpl.sha256,
+                        "character": { "name": "External NFD Stamp", "level": "16" }
+                    }))
+                    .unwrap();
+                    fs::write(dir.join(format!("{nfc_name}.state.json")), &nfd_sc_bytes).unwrap();
+                    let listed_cf = store.list_sheets().unwrap();
+                    let listed_elodie = listed_cf.iter().find(|s| s.path == nfc_name).unwrap();
+                    assert!(listed_elodie.has_state_sidecar);
+                    assert_eq!(
+                        listed_elodie.character_name.as_deref(),
+                        Some("External NFD Stamp")
+                    );
+                    assert_eq!(listed_elodie.level.as_deref(), Some("16"));
+                    let listed_backup = listed_cf.iter().find(|s| s.path == "Backup.pdf").unwrap();
+                    assert!(!listed_backup.has_state_sidecar);
+                    assert_eq!(listed_backup.character_name, None);
+                }
+            }
+
+            // On Windows, if the volume assigns an 8.3 short alias to `templates`, verify
+            // both direct-open classification and create-to-missing-file under that alias are blocked.
+            #[cfg(windows)]
+            {
+                use std::os::windows::ffi::{OsStrExt, OsStringExt};
+                #[link(name = "kernel32")]
+                extern "system" {
+                    fn GetShortPathNameW(
+                        lpsz_short_path: *const u16,
+                        lpsz_long_path: *mut u16,
+                        cch_buffer: u32,
+                    ) -> u32;
+                }
+                let tpl_dir = dir.join("templates");
+                let wide: Vec<u16> = tpl_dir
+                    .as_os_str()
+                    .encode_wide()
+                    .chain(std::iter::once(0))
+                    .collect();
+                let mut buf = vec![0u16; 512];
+                let len =
+                    unsafe { GetShortPathNameW(wide.as_ptr(), buf.as_mut_ptr(), buf.len() as u32) };
+                if len > 0 && (len as usize) < buf.len() {
+                    let short_path =
+                        PathBuf::from(std::ffi::OsString::from_wide(&buf[..len as usize]));
+                    if let Some(short_name) = short_path.file_name().and_then(|s| s.to_str()) {
+                        if !short_name.eq_ignore_ascii_case("templates") {
+                            let existing_alias = format!("{short_name}/MPMB-2024-Blank.pdf");
+                            let new_alias = format!("{short_name}/AliasEscape");
+                            assert!(
+                                store.is_template_resolved_path(&existing_alias).unwrap(),
+                                "Windows 8.3 alias {existing_alias} must classify as template"
+                            );
+                            let err_create = store
+                                .create_sheet_from_template(
+                                    "templates/MPMB-2024-Blank.pdf",
+                                    &new_alias,
+                                )
+                                .unwrap_err();
+                            assert!(
+                                format!("{err_create:#}").contains("inside templates/"),
+                                "Windows 8.3 alias destination {new_alias} must be rejected: {err_create:#}"
+                            );
+                            assert!(!dir.join("templates/AliasEscape.pdf").exists());
+                            assert_eq!(
+                                fs::read(dir.join("templates/MPMB-2024-Blank.pdf")).unwrap(),
+                                tpl_bytes
+                            );
+                        }
+                    }
+                }
+            }
         }
 
         // Indeterminate file identity on an existing sidecar must fail closed.

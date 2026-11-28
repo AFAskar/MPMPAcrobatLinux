@@ -1261,7 +1261,7 @@ impl SheetWorker {
         expected_session: Option<&str>,
     ) -> Result<Value> {
         let (norm, _) = self.store.resolve_safe_pdf_path(rel_path)?;
-        if crate::storage::is_template_path(&norm) {
+        if self.store.is_template_resolved_path(&norm)? {
             bail!(
                 "template sheets cannot be opened directly; create a new character from this template instead"
             );
@@ -1346,6 +1346,13 @@ impl SheetWorker {
             } else {
                 (bytes, sha, None, startup_dirty, None)
             };
+
+        // If startup edits require writing a sidecar immediately after publish, reject
+        // a non-regular sidecar path (e.g. a directory or symlink) BEFORE publishing the
+        // PDF so Git sync is never permanently blocked by an unwritable sidecar path.
+        if startup_sidecar.is_some() {
+            self.store.ensure_startup_sidecar_writable(&dest_norm)?;
+        }
 
         // Only now atomically publish with create-only semantics (O_CREAT|O_EXCL).
         // If another writer created the destination while startup was pending, this
@@ -7607,6 +7614,53 @@ mod tests {
             assert!(!base.join("UnusedDestForBadTpl.pdf").exists());
         }
 
+        // On casefold filesystems where `templateſ` (U+017F) aliases `templates/`,
+        // verify HTTP direct-open AND create-to-missing-file are both rejected without
+        // mutating the template fixture bytes.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let tpl_meta = std::fs::symlink_metadata(base.join("templates")).ok();
+            let alias_meta = std::fs::symlink_metadata(base.join("template\u{017f}")).ok();
+            if let (Some(tm), Some(am)) = (tpl_meta, alias_meta) {
+                if tm.dev() == am.dev() && tm.ino() == am.ino() {
+                    let (st_open_alias, body_open_alias) = post_json(
+                        &app,
+                        "/api/session/open",
+                        json!({ "path": "template\u{017f}/MPMB-2024-Blank.pdf" }),
+                    )
+                    .await;
+                    assert_eq!(
+                        st_open_alias,
+                        StatusCode::BAD_REQUEST,
+                        "direct open via template alias must fail: {body_open_alias}"
+                    );
+                    for open_flag in [false, true] {
+                        let (st_create_alias, body_create_alias) = post_json(
+                            &app,
+                            "/api/sheets/new",
+                            json!({
+                                "template": "templates/MPMB-2024-Blank.pdf",
+                                "name": "template\u{017f}/AliasEscape",
+                                "open": open_flag
+                            }),
+                        )
+                        .await;
+                        assert_eq!(
+                            st_create_alias,
+                            StatusCode::BAD_REQUEST,
+                            "create under template alias with open={open_flag} must fail: {body_create_alias}"
+                        );
+                    }
+                    assert!(!base.join("templates/AliasEscape.pdf").exists());
+                    assert_eq!(
+                        std::fs::read(base.join("templates/MPMB-2024-Blank.pdf")).unwrap(),
+                        tpl_bytes
+                    );
+                }
+            }
+        }
+
         // Upload with overwrite=true on absent RevDouble.pdf (colliding with RevDouble.pdf.pdf's
         // legacy RevDouble.pdf.state.json) must return 409 Conflict via HTTP.
         let upload_conflict_resp = app
@@ -7930,6 +7984,44 @@ mod tests {
         )
         .await;
         assert_eq!(st, StatusCode::OK);
+
+        // 7. When autosave=true and startup edits require writing a sidecar, a non-regular
+        //    entry (e.g. a directory) at the primary sidecar path must reject BEFORE
+        //    publishing the new sheet so Git sync is not permanently poisoned.
+        let bad_sidecar_dir = base.join("BadStartupSidecar.pdf.state.json");
+        std::fs::create_dir_all(&bad_sidecar_dir).unwrap();
+        let (st, paused) = post_json(
+            &app_auto,
+            "/api/sheets/new",
+            json!({ "template": "templates/StartupMutate.pdf", "name": "BadStartupSidecar", "open": true }),
+        )
+        .await;
+        assert_eq!(st, StatusCode::ACCEPTED);
+        let id = paused["interaction"]["id"].as_str().unwrap().to_owned();
+        let (st, err_body) = post_json(
+            &app_auto,
+            &format!("/api/session/interaction/{id}"),
+            json!({"button": 4}),
+        )
+        .await;
+        assert_eq!(
+            st,
+            StatusCode::BAD_REQUEST,
+            "nonregular startup sidecar path must reject before publishing: {err_body}"
+        );
+        let err_text = err_body["error"].as_str().unwrap_or("");
+        assert!(
+            err_text.contains("BadStartupSidecar.pdf.state.json")
+                && err_text.contains("not a regular file"),
+            "error must name the nonregular sidecar path: {err_body}"
+        );
+        assert!(
+            !base.join("BadStartupSidecar.pdf").exists(),
+            "new character PDF must NOT be published when required startup sidecar path is non-regular"
+        );
+        let (st_sess, sess) = get_json(&app_auto, "/api/session/state").await;
+        assert_eq!(st_sess, StatusCode::OK);
+        assert_eq!(sess["path"], "OtherClean.pdf");
 
         let _ = std::fs::remove_dir_all(&base);
     }
