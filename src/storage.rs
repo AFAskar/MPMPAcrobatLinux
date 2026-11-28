@@ -18,6 +18,78 @@ use std::{
 static TEMP_SEQ: AtomicU64 = AtomicU64::new(1);
 static CONFLICT_SEQ: AtomicU64 = AtomicU64::new(1);
 
+#[cfg(all(test, unix))]
+static FAIL_SIDECAR_REMOVE_PATHS: std::sync::LazyLock<
+    Mutex<std::collections::HashMap<PathBuf, usize>>,
+> = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+#[cfg(test)]
+static FAIL_POST_PUBLISH_READ_PATHS: std::sync::LazyLock<
+    Mutex<std::collections::HashMap<PathBuf, usize>>,
+> = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+#[cfg(test)]
+static FAIL_FILE_IDENTITY_PATHS: std::sync::LazyLock<
+    Mutex<std::collections::HashMap<PathBuf, usize>>,
+> = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+#[cfg(test)]
+pub(crate) struct ScopedPathFaultGuard {
+    map: &'static Mutex<std::collections::HashMap<PathBuf, usize>>,
+    path: PathBuf,
+}
+
+#[cfg(test)]
+impl Drop for ScopedPathFaultGuard {
+    fn drop(&mut self) {
+        let mut guard = self.map.lock().unwrap();
+        if let Some(count) = guard.get_mut(&self.path) {
+            if *count <= 1 {
+                guard.remove(&self.path);
+            } else {
+                *count -= 1;
+            }
+        }
+    }
+}
+
+#[cfg(all(test, unix))]
+pub(crate) fn fail_sidecar_remove_for_path(path: PathBuf) -> ScopedPathFaultGuard {
+    *FAIL_SIDECAR_REMOVE_PATHS
+        .lock()
+        .unwrap()
+        .entry(path.clone())
+        .or_insert(0) += 1;
+    ScopedPathFaultGuard {
+        map: &FAIL_SIDECAR_REMOVE_PATHS,
+        path,
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn fail_post_publish_read_for_path(path: PathBuf) -> ScopedPathFaultGuard {
+    *FAIL_POST_PUBLISH_READ_PATHS
+        .lock()
+        .unwrap()
+        .entry(path.clone())
+        .or_insert(0) += 1;
+    ScopedPathFaultGuard {
+        map: &FAIL_POST_PUBLISH_READ_PATHS,
+        path,
+    }
+}
+
+#[cfg(test)]
+fn fail_file_identity_for_path(path: PathBuf) -> ScopedPathFaultGuard {
+    *FAIL_FILE_IDENTITY_PATHS
+        .lock()
+        .unwrap()
+        .entry(path.clone())
+        .or_insert(0) += 1;
+    ScopedPathFaultGuard {
+        map: &FAIL_FILE_IDENTITY_PATHS,
+        path,
+    }
+}
+
 pub const MAX_PDF_BYTES: usize = 64 * 1024 * 1024;
 const MAX_SIDECAR_BYTES: usize = 4 * 1024 * 1024;
 const DEFAULT_GIT_TIMEOUT_SECS: u64 = 60;
@@ -31,6 +103,54 @@ const GIT_ENV_SCRUB_KEYS: &[&str] = &[
     "GIT_OBJECT_DIRECTORY",
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
 ];
+
+#[derive(Debug)]
+pub struct TemplateNotFoundError {
+    pub path: String,
+}
+
+impl std::fmt::Display for TemplateNotFoundError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "template not found: {}", self.path)
+    }
+}
+
+impl std::error::Error for TemplateNotFoundError {}
+
+#[derive(Debug)]
+pub struct SheetAlreadyExistsError {
+    pub path: String,
+    pub allow_overwrite_hint: bool,
+}
+
+impl std::fmt::Display for SheetAlreadyExistsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.allow_overwrite_hint {
+            write!(
+                f,
+                "sheet already exists: {} (pass overwrite=true to replace)",
+                self.path
+            )
+        } else {
+            write!(f, "sheet already exists: {}", self.path)
+        }
+    }
+}
+
+impl std::error::Error for SheetAlreadyExistsError {}
+
+#[derive(Debug)]
+pub struct SidecarConflictError {
+    pub message: String,
+}
+
+impl std::fmt::Display for SidecarConflictError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for SidecarConflictError {}
 
 #[derive(Clone, Debug)]
 pub struct GitConfig {
@@ -76,6 +196,8 @@ pub struct SheetEntry {
     pub size_bytes: u64,
     pub sha256: String,
     pub modified_unix: u64,
+    #[serde(default)]
+    pub is_template: bool,
     pub has_state_sidecar: bool,
     pub character_name: Option<String>,
     pub class_and_levels: Option<String>,
@@ -202,6 +324,14 @@ impl SheetStore {
         Ok((normalized, abs))
     }
 
+    /// Returns whether `rel` resolves inside the store's `templates/` directory,
+    /// accounting for case, Unicode, and Windows 8.3 short-name directory aliases
+    /// by comparing top-level directory filesystem identities (failing closed on error).
+    pub fn is_template_resolved_path(&self, rel: &str) -> Result<bool> {
+        let (normalized, _) = self.resolve_safe_pdf_path(rel)?;
+        is_path_in_templates_dir(&self.root, &normalized)
+    }
+
     fn ensure_within_store(&self, parts: &[String]) -> Result<PathBuf> {
         let mut cur = self.root.clone();
         for seg in parts {
@@ -244,10 +374,132 @@ impl SheetStore {
         pdf_path.with_file_name(format!("{stem}.state.json"))
     }
 
+    fn check_create_sidecar_conflicts(pdf_path: &Path) -> Result<()> {
+        let primary = Self::sidecar_path_for(pdf_path);
+        let legacy = Self::legacy_sidecar_path_for(pdf_path);
+        for (sc, is_primary) in [(primary, true), (legacy, false)] {
+            let meta = match fs::symlink_metadata(&sc) {
+                Ok(m) => m,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(err) => {
+                    return Err(anyhow::Error::new(err).context(format!(
+                        "failed to inspect sidecar destination {}",
+                        sc.display()
+                    )));
+                }
+            };
+            if !meta.is_file() || meta.file_type().is_symlink() {
+                if is_primary {
+                    bail!(
+                        "sidecar destination is not a regular file: {}",
+                        sc.display()
+                    );
+                }
+                continue;
+            }
+            if !sidecar_claimed_by_other_pdf(pdf_path, &sc)? {
+                continue;
+            }
+            let owner_matches = sidecar_explicit_owner_matches(&sc, pdf_path);
+            if owner_matches == Some(true) {
+                continue;
+            }
+            // Reject whenever creating `pdf_path` would either:
+            // - claim another existing sheet's legacy sidecar as `pdf_path`'s primary sidecar
+            //   (which would also collide on future saves), or
+            // - turn a pre-existing unstamped sidecar owned by another sheet ambiguous and
+            //   hide that sheet's metadata.
+            if is_primary || owner_matches.is_none() {
+                return Err(anyhow::Error::new(SidecarConflictError {
+                    message: format!(
+                        "conflict: destination sidecar {} belongs to another existing sheet; choose a different character name",
+                        sc.file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("sidecar")
+                    ),
+                }));
+            }
+        }
+        Ok(())
+    }
+
+    fn ensure_primary_sidecar_writable_for(pdf_path: &Path, sidecar_path: &Path) -> Result<()> {
+        let Ok(meta) = fs::symlink_metadata(sidecar_path) else {
+            return Ok(());
+        };
+        if meta.file_type().is_symlink() || !meta.is_file() {
+            bail!(
+                "sidecar destination is not a regular file: {}",
+                sidecar_path.display()
+            );
+        }
+        if sidecar_claimed_by_other_pdf(pdf_path, sidecar_path)?
+            && sidecar_explicit_owner_matches(sidecar_path, pdf_path) != Some(true)
+        {
+            return Err(anyhow::Error::new(SidecarConflictError {
+                message: format!(
+                    "conflict: sidecar destination {} is shared with another existing sheet and will not be overwritten",
+                    sidecar_path.display()
+                ),
+            }));
+        }
+        Ok(())
+    }
+
+    fn invalidate_sidecars_for(pdf_path: &Path) -> Result<()> {
+        for sc in [
+            Self::sidecar_path_for(pdf_path),
+            Self::legacy_sidecar_path_for(pdf_path),
+        ] {
+            let Ok(meta) = fs::symlink_metadata(&sc) else {
+                continue;
+            };
+            if !meta.is_file() || meta.file_type().is_symlink() {
+                continue;
+            }
+            // Never remove a sidecar that another existing PDF in the same directory
+            // derives as its primary or legacy sidecar (e.g. `Hero.pdf` vs `Hero.pdf.pdf`,
+            // or case-variant siblings like `Hero.PDF` vs `Hero.pdf`), unless the sidecar
+            // explicitly declares `pdf_path` as its sole owner via `pdfFileName`.
+            // Fail closed if directory ownership cannot be verified.
+            if sidecar_claimed_by_other_pdf(pdf_path, &sc)?
+                && sidecar_explicit_owner_matches(&sc, pdf_path) != Some(true)
+            {
+                continue;
+            }
+            #[cfg(all(test, unix))]
+            let remove_res = {
+                let injected = FAIL_SIDECAR_REMOVE_PATHS.lock().unwrap().contains_key(&sc);
+                if injected {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "injected orphan sidecar removal failure",
+                    ))
+                } else {
+                    fs::remove_file(&sc)
+                }
+            };
+            #[cfg(not(all(test, unix)))]
+            let remove_res = fs::remove_file(&sc);
+            match remove_res {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    return Err(anyhow::Error::new(err).context(format!(
+                        "failed to remove stale sidecar {}; delete or unlock it before retrying",
+                        sc.display()
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn list_sheets(&self) -> Result<Vec<SheetEntry>> {
         let _guard = self.lock.lock().unwrap();
+        let template_dir_ids = collect_template_dir_ids(&self.root)?;
         let mut out = Vec::new();
-        collect_pdfs(&self.root, &self.root, &mut out)?;
+        collect_pdfs(&self.root, &self.root, &template_dir_ids, None, &mut out)?;
         out.sort_by(|a, b| a.path.cmp(&b.path));
         Ok(out)
     }
@@ -291,56 +543,196 @@ impl SheetStore {
     pub fn commit_staged_upload(
         &self,
         rel: &str,
+        staged: StagedUpload,
+        overwrite: bool,
+    ) -> Result<SheetEntry> {
+        self.commit_staged_upload_inner(rel, staged, overwrite, true)
+    }
+
+    fn commit_staged_upload_inner(
+        &self,
+        rel: &str,
         mut staged: StagedUpload,
         overwrite: bool,
+        allow_overwrite_hint: bool,
     ) -> Result<SheetEntry> {
         staged.finish()?;
         // Fully parse the staged PDF before acquiring the store lock or touching
         // any existing PDF/sidecar so truncated or corrupted uploads can never
         // overwrite a valid character sheet.
         staged.validate_pdf()?;
+        let (staged_size, staged_sha) = staged.staged_size_and_sha256();
         let _guard = self.lock.lock().unwrap();
         let (normalized, abs) = self.resolve_safe_pdf_path(rel)?;
         if let Some(parent) = abs.parent() {
             fs::create_dir_all(parent)?;
         }
+        // Hold the cross-process store lock until after publication and entry assembly
+        // so the returned entry describes the exact bytes published by this operation.
+        let _commit_lock = acquire_store_lock(&self.root)?;
         if overwrite {
-            let _commit_lock = acquire_store_lock(&self.root)?;
-            if let Ok(meta) = fs::symlink_metadata(&abs) {
-                if meta.file_type().is_symlink() || !meta.is_file() {
+            let dest_absent = match fs::symlink_metadata(&abs) {
+                Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => {
                     bail!("cannot overwrite non-regular file at {normalized}");
                 }
+                Ok(_) => false,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => true,
+                Err(err) => {
+                    return Err(anyhow::Error::new(err)
+                        .context(format!("failed to stat destination {normalized}")));
+                }
+            };
+            if dest_absent {
+                // Creating an absent PDF via overwrite=true uses the same pre-publication
+                // sidecar ownership check and mandatory orphan cleanup as create-only mode
+                // so a locked matching-hash orphan aborts cleanly before publishing `abs`.
+                Self::check_create_sidecar_conflicts(&abs)?;
+                Self::invalidate_sidecars_for(&abs)?;
             }
             staged
                 .publish_replace(&abs)
                 .with_context(|| format!("failed replacing {}", abs.display()))?;
-            // Invalidate any previous sidecar metadata so stale character details are not advertised.
-            for sc in [
-                Self::sidecar_path_for(&abs),
-                Self::legacy_sidecar_path_for(&abs),
-            ] {
-                if let Ok(meta) = fs::symlink_metadata(&sc) {
-                    if meta.is_file() && !meta.file_type().is_symlink() {
-                        let _ = fs::remove_file(&sc);
-                    }
-                }
+            if !dest_absent {
+                // Invalidate any previous sidecar metadata so stale character details are not advertised.
+                let _ = Self::invalidate_sidecars_for(&abs);
             }
             sync_parent_dir(&abs);
         } else {
-            let _commit_lock = acquire_store_lock(&self.root)?;
+            if fs::symlink_metadata(&abs).is_ok() {
+                return Err(anyhow::Error::new(SheetAlreadyExistsError {
+                    path: normalized,
+                    allow_overwrite_hint,
+                }));
+            }
+            // Reject destinations whose sidecar path would collide with another existing
+            // sheet's sidecar (e.g. pre-PR unstamped sidecar or shared legacy sidecar),
+            // and clear true orphaned destination sidecars BEFORE atomic publication so
+            // any removal error aborts cleanly without creating `abs` or attaching stale metadata.
+            Self::check_create_sidecar_conflicts(&abs)?;
+            Self::invalidate_sidecars_for(&abs)?;
             if let Err(err) = staged.publish_create_new(&abs) {
                 if err
                     .downcast_ref::<std::io::Error>()
                     .is_some_and(|io| io.kind() == std::io::ErrorKind::AlreadyExists)
                     || abs.exists()
                 {
-                    bail!("sheet already exists: {normalized} (pass overwrite=true to replace)");
+                    return Err(anyhow::Error::new(SheetAlreadyExistsError {
+                        path: normalized,
+                        allow_overwrite_hint,
+                    }));
                 }
                 return Err(err);
             }
             sync_parent_dir(&abs);
         }
-        sheet_entry_from_path(&self.root, &abs)
+        // Once the file has been published on disk, never fail the commit if a post-publish
+        // stat/hash reread encounters an error; fall back to the exact pre-computed metadata
+        // of the staged bytes that were just published.
+        let committed_fallback = SheetEntry {
+            path: normalized.clone(),
+            name: abs
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(str::to_owned)
+                .unwrap_or_else(|| normalized.clone()),
+            size_bytes: staged_size,
+            sha256: staged_sha,
+            modified_unix: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            is_template: is_path_in_templates_dir(&self.root, &normalized)
+                .unwrap_or_else(|_| is_template_path(&normalized)),
+            has_state_sidecar: false,
+            character_name: None,
+            class_and_levels: None,
+            level: None,
+        };
+        #[cfg(test)]
+        if FAIL_POST_PUBLISH_READ_PATHS
+            .lock()
+            .unwrap()
+            .contains_key(&abs)
+        {
+            return Ok(committed_fallback);
+        }
+        Ok(sheet_entry_from_path(&self.root, &abs).unwrap_or(committed_fallback))
+    }
+
+    pub fn prepare_template_copy(
+        &self,
+        template_rel: &str,
+        character_name: &str,
+    ) -> Result<(String, PathBuf, Vec<u8>, String)> {
+        let dest_rel = normalize_new_character_path(character_name)?;
+        let (dest_norm, dest_abs, src_norm) = {
+            let _guard = self.lock.lock().unwrap();
+            let (norm, abs) = self.resolve_safe_pdf_path(&dest_rel)?;
+            if is_path_in_templates_dir(&self.root, &norm)? {
+                bail!("character path cannot be inside templates/");
+            }
+            // Fast-fail before running any template startup/JavaScript when a sheet
+            // already exists or its sidecar path collides with another existing sheet.
+            if fs::symlink_metadata(&abs).is_ok() {
+                return Err(anyhow::Error::new(SheetAlreadyExistsError {
+                    path: norm,
+                    allow_overwrite_hint: false,
+                }));
+            }
+            Self::check_create_sidecar_conflicts(&abs)?;
+            let (src_norm, _) = self.resolve_safe_pdf_path(template_rel)?;
+            if !is_path_in_templates_dir(&self.root, &src_norm)? {
+                bail!("source sheet must be a template inside templates/: {src_norm}");
+            }
+            (norm, abs, src_norm)
+        };
+        let (_, _, bytes, sha) = match self.read_sheet_bytes(&src_norm) {
+            Ok(v) => v,
+            Err(err)
+                if err.chain().any(|cause| {
+                    cause
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+                }) =>
+            {
+                return Err(anyhow::Error::new(TemplateNotFoundError { path: src_norm }));
+            }
+            Err(err) => return Err(err),
+        };
+        if bytes.is_empty() || bytes.len() > MAX_PDF_BYTES {
+            bail!("template PDF must be between 1 byte and 64 MiB");
+        }
+        if !bytes.starts_with(b"%PDF-") {
+            bail!("template file does not start with %PDF- header");
+        }
+        Ok((dest_norm, dest_abs, bytes, sha))
+    }
+
+    pub fn publish_new_sheet_bytes(&self, rel: &str, bytes: &[u8]) -> Result<SheetEntry> {
+        if bytes.is_empty() || bytes.len() > MAX_PDF_BYTES {
+            bail!("PDF upload must be between 1 byte and 64 MiB");
+        }
+        if !bytes.starts_with(b"%PDF-") {
+            bail!("PDF file does not start with %PDF- header");
+        }
+        if self.is_template_resolved_path(rel)? {
+            bail!("character path cannot be inside templates/");
+        }
+        let (dest_norm, mut staged) = self.start_staged_upload(rel)?;
+        staged.write_chunk(bytes)?;
+        // Unconditionally create-only (overwrite = false) so a racing writer's file
+        // is never overwritten or deleted, and suppress the `overwrite=true` hint
+        // because template creation does not accept overwrite.
+        self.commit_staged_upload_inner(&dest_norm, staged, false, false)
+    }
+
+    pub fn create_sheet_from_template(
+        &self,
+        template_rel: &str,
+        character_name: &str,
+    ) -> Result<SheetEntry> {
+        let (dest_norm, _, bytes, _) = self.prepare_template_copy(template_rel, character_name)?;
+        self.publish_new_sheet_bytes(&dest_norm, &bytes)
     }
 
     #[cfg(test)]
@@ -365,20 +757,14 @@ impl SheetStore {
         let _guard = self.lock.lock().unwrap();
         let (_normalized, abs) = self.resolve_safe_pdf_path(rel)?;
         let sidecar_path = Self::sidecar_path_for(&abs);
-        if let Ok(meta) = fs::symlink_metadata(&sidecar_path) {
-            if meta.file_type().is_symlink() || !meta.is_file() {
-                bail!(
-                    "sidecar destination is not a regular file: {}",
-                    sidecar_path.display()
-                );
-            }
-        }
-        let stamped = stamp_sidecar_sha(state_sidecar, expected_pdf_sha256);
+        Self::ensure_primary_sidecar_writable_for(&abs, &sidecar_path)?;
+        let stamped = stamp_sidecar_meta(state_sidecar, expected_pdf_sha256, &abs);
         let mut pretty = serde_json::to_vec_pretty(&stamped)?;
         pretty.push(b'\n');
         let staged_sidecar = StagedFile::create(&sidecar_path, &pretty)?;
 
         let _commit_lock = acquire_store_lock(&self.root)?;
+        Self::ensure_primary_sidecar_writable_for(&abs, &sidecar_path)?;
         let meta = match fs::symlink_metadata(&abs) {
             Ok(m) => m,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -459,15 +845,8 @@ impl SheetStore {
         // ensure staged files are always removed on any early return or error.
         let staged_sidecar = if let Some(sidecar) = state_sidecar {
             let sidecar_path = Self::sidecar_path_for(&abs);
-            if let Ok(meta) = fs::symlink_metadata(&sidecar_path) {
-                if meta.file_type().is_symlink() || !meta.is_file() {
-                    bail!(
-                        "sidecar destination is not a regular file: {}",
-                        sidecar_path.display()
-                    );
-                }
-            }
-            let stamped = stamp_sidecar_sha(sidecar, &new_sha);
+            Self::ensure_primary_sidecar_writable_for(&abs, &sidecar_path)?;
+            let stamped = stamp_sidecar_meta(sidecar, &new_sha, &abs);
             let mut pretty = serde_json::to_vec_pretty(&stamped)?;
             pretty.push(b'\n');
             let tmp = StagedFile::create(&sidecar_path, &pretty)?;
@@ -484,6 +863,24 @@ impl SheetStore {
         let _commit_lock = acquire_store_lock(&self.root)?;
         if let Some(conflict) = check_expected()? {
             return Ok(conflict);
+        }
+        let dest_absent = match fs::symlink_metadata(&abs) {
+            Ok(_) => false,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => true,
+            Err(err) => {
+                return Err(anyhow::Error::new(err)
+                    .context(format!("failed to stat destination {}", abs.display())));
+            }
+        };
+        if dest_absent {
+            // Recreating an absent PDF enforces both sidecar ownership conflicts and
+            // mandatory orphan cleanup BEFORE publishing `abs` so an unremovable
+            // matching-hash orphan aborts cleanly instead of attaching stale metadata.
+            Self::check_create_sidecar_conflicts(&abs)?;
+            Self::invalidate_sidecars_for(&abs)?;
+        }
+        if let Some((_, ref sidecar_path)) = staged_sidecar {
+            Self::ensure_primary_sidecar_writable_for(&abs, sidecar_path)?;
         }
 
         staged_pdf
@@ -581,6 +978,39 @@ impl SheetStore {
             last_conflict_branch,
             last_error: guard.last_error.clone(),
         })
+    }
+
+    /// Returns Git status, degrading gracefully to a status object carrying
+    /// `last_error` when `git status` itself fails (e.g. a corrupt `.git/index`),
+    /// so post-commit HTTP responses remain infallible once a sheet is saved or created.
+    pub fn git_status_best_effort(&self) -> GitStatus {
+        match self.git_status() {
+            Ok(status) => status,
+            Err(err) => {
+                let (enabled, repo_url, branch) = match &self.git {
+                    Some(cfg) => (
+                        true,
+                        Some(redact_url(&cfg.repo_url)),
+                        Some(cfg.branch.clone()),
+                    ),
+                    None => (false, None, None),
+                };
+                GitStatus {
+                    enabled,
+                    repo_url,
+                    branch,
+                    head_sha: None,
+                    head_subject: None,
+                    dirty: enabled,
+                    changed_files: Vec::new(),
+                    ahead: 0,
+                    behind: 0,
+                    head_backed_up: false,
+                    last_conflict_branch: None,
+                    last_error: Some(format!("git status unavailable: {err:#}")),
+                }
+            }
+        }
     }
 
     pub fn git_pull(&self) -> Result<PullResult> {
@@ -1502,10 +1932,31 @@ fn is_sheet_or_sidecar_path(path: &str) -> bool {
     lower.ends_with(".pdf") || lower.ends_with(".state.json")
 }
 
-fn stamp_sidecar_sha(sidecar: &Value, pdf_sha256: &str) -> Value {
+fn stamp_sidecar_meta(sidecar: &Value, pdf_sha256: &str, pdf_path: &Path) -> Value {
     let mut stamped = sidecar.clone();
     if let Some(obj) = stamped.as_object_mut() {
         obj.insert("pdfSha256".to_owned(), Value::String(pdf_sha256.to_owned()));
+        let resolved_name: Option<std::ffi::OsString> = {
+            #[cfg(windows)]
+            {
+                canonical_dir_entry_name(pdf_path).ok()
+            }
+            #[cfg(target_os = "linux")]
+            {
+                canonical_linux_dir_entry_name(pdf_path)
+            }
+            #[cfg(not(any(windows, target_os = "linux")))]
+            {
+                None
+            }
+        };
+        let file_name_os = resolved_name.as_deref().or_else(|| pdf_path.file_name());
+        if let Some(file_name) = file_name_os.and_then(|s| s.to_str()) {
+            obj.insert(
+                "pdfFileName".to_owned(),
+                Value::String(file_name.to_owned()),
+            );
+        }
     }
     stamped
 }
@@ -1574,6 +2025,7 @@ pub struct StagedUpload {
     file: Option<fs::File>,
     size: usize,
     header: Vec<u8>,
+    hasher: Sha256,
 }
 
 impl StagedUpload {
@@ -1601,6 +2053,7 @@ impl StagedUpload {
             file: Some(file),
             size: 0,
             header: Vec::with_capacity(5),
+            hasher: Sha256::new(),
         })
     }
 
@@ -1625,8 +2078,19 @@ impl StagedUpload {
             .as_mut()
             .ok_or_else(|| anyhow!("upload staging file already finalized"))?;
         file.write_all(chunk)?;
+        self.hasher.update(chunk);
         self.size = next_size;
         Ok(())
+    }
+
+    fn staged_size_and_sha256(&self) -> (u64, String) {
+        let digest = self.hasher.clone().finalize();
+        let mut out = String::with_capacity(digest.len() * 2);
+        for b in digest {
+            use std::fmt::Write;
+            let _ = write!(&mut out, "{b:02x}");
+        }
+        (self.size as u64, out)
     }
 
     fn finish(&mut self) -> Result<()> {
@@ -1665,30 +2129,559 @@ impl StagedUpload {
 
     fn publish_create_new(mut self, dest: &Path) -> Result<()> {
         let src = self.path.take().expect("staged upload already consumed");
+        let res = publish_file_create_new_atomic(&src, dest);
+        // On Unix, `hard_link` leaves `src` linked so we always unlink it; on Windows,
+        // `MoveFileExW` consumes `src` on success so we only clean it up on failure.
         #[cfg(unix)]
-        {
-            let link_res = fs::hard_link(&src, dest);
-            let _ = fs::remove_file(&src);
-            link_res.with_context(|| format!("failed creating {}", dest.display()))?;
-            Ok(())
-        }
+        let _ = fs::remove_file(&src);
         #[cfg(not(unix))]
-        {
-            let res = (|| -> std::io::Result<()> {
-                let mut reader = fs::File::open(&src)?;
-                let mut dst = fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(dest)?;
-                std::io::copy(&mut reader, &mut dst)?;
-                dst.sync_all()?;
-                Ok(())
-            })();
+        if res.is_err() {
             let _ = fs::remove_file(&src);
-            res.with_context(|| format!("failed creating {}", dest.display()))?;
-            Ok(())
+        }
+        res.with_context(|| format!("failed creating {}", dest.display()))?;
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn publish_file_create_new_atomic(src: &Path, dest: &Path) -> std::io::Result<()> {
+    // POSIX link(2) is atomic, same-filesystem, never replaces an existing destination
+    // (returns AlreadyExists), and never exposes partial bytes at `dest`.
+    fs::hard_link(src, dest)
+}
+
+#[cfg(windows)]
+fn publish_file_create_new_atomic(src: &Path, dest: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn MoveFileExW(
+            lp_existing_file_name: *const u16,
+            lp_new_file_name: *const u16,
+            dw_flags: u32,
+        ) -> i32;
+    }
+
+    let src_w: Vec<u16> = src.as_os_str().encode_wide().chain(Some(0)).collect();
+    let dest_w: Vec<u16> = dest.as_os_str().encode_wide().chain(Some(0)).collect();
+    if src_w[..src_w.len() - 1].contains(&0) || dest_w[..dest_w.len() - 1].contains(&0) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "path contains interior NUL character",
+        ));
+    }
+    // dwFlags = 0: same-volume atomic rename with neither MOVEFILE_REPLACE_EXISTING nor
+    // MOVEFILE_COPY_ALLOWED. Works on NTFS/ReFS/FAT32/exFAT/SMB, fails with
+    // ERROR_ALREADY_EXISTS if `dest` exists, and never copies partial bytes into `dest`.
+    // SAFETY: `src_w` and `dest_w` are valid NUL-terminated UTF-16 buffers alive for the call.
+    let ok = unsafe { MoveFileExW(src_w.as_ptr(), dest_w.as_ptr(), 0) };
+    if ok != 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn publish_file_create_new_atomic(_src: &Path, _dest: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "atomic create-only file publication is unsupported on this platform",
+    ))
+}
+
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FileId {
+    dev: u64,
+    ino: u64,
+}
+
+#[cfg(unix)]
+fn file_identity_os(path: &Path) -> std::io::Result<FileId> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = fs::symlink_metadata(path)?;
+    Ok(FileId {
+        dev: meta.dev(),
+        ino: meta.ino(),
+    })
+}
+
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FileId {
+    volume_serial: u64,
+    file_id: [u8; 16],
+}
+
+#[cfg(windows)]
+fn file_identity_os(path: &Path) -> std::io::Result<FileId> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+
+    #[repr(C)]
+    struct FileIdInfo {
+        volume_serial_number: u64,
+        file_id: [u8; 16],
+    }
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetFileInformationByHandleEx(
+            h_file: *mut std::ffi::c_void,
+            file_information_class: i32,
+            lp_file_information: *mut std::ffi::c_void,
+            dw_buffer_size: u32,
+        ) -> i32;
+    }
+
+    const FILE_ID_INFO_CLASS: i32 = 18;
+    const FILE_SHARE_READ: u32 = 0x0000_0001;
+    const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+    const FILE_SHARE_DELETE: u32 = 0x0000_0004;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+
+    // Open with zero data access (`access_mode(0)`) so querying identity succeeds
+    // even when another handle holds locks without FILE_SHARE_DELETE, and do not
+    // follow reparse points/symlinks. Use 128-bit `FileIdInfo` (unique on both
+    // NTFS and ReFS) and fail closed when a reliable ID cannot be obtained.
+    let file = fs::OpenOptions::new()
+        .access_mode(0)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)?;
+    let mut info = std::mem::MaybeUninit::<FileIdInfo>::zeroed();
+    // SAFETY: `file.as_raw_handle()` is a valid open Win32 HANDLE and `info` points
+    // to a properly aligned `FileIdInfo` buffer of exact size `size_of::<FileIdInfo>()`.
+    let ok = unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FILE_ID_INFO_CLASS,
+            info.as_mut_ptr().cast(),
+            std::mem::size_of::<FileIdInfo>() as u32,
+        )
+    };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: `GetFileInformationByHandleEx` returned nonzero and initialized `info`.
+    let info = unsafe { info.assume_init() };
+    if info.file_id == [0u8; 16] {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "filesystem returned an unreliable all-zero file ID",
+        ));
+    }
+    Ok(FileId {
+        volume_serial: info.volume_serial_number,
+        file_id: info.file_id,
+    })
+}
+
+#[cfg(windows)]
+fn canonical_dir_entry_name(path: &Path) -> std::io::Result<std::ffi::OsString> {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+    #[repr(C)]
+    #[allow(dead_code)]
+    struct FileTime {
+        low_date_time: u32,
+        high_date_time: u32,
+    }
+
+    #[repr(C)]
+    #[allow(dead_code)]
+    struct Win32FindDataW {
+        dw_file_attributes: u32,
+        ft_creation_time: FileTime,
+        ft_last_access_time: FileTime,
+        ft_last_write_time: FileTime,
+        n_file_size_high: u32,
+        n_file_size_low: u32,
+        dw_reserved0: u32,
+        dw_reserved1: u32,
+        c_file_name: [u16; 260],
+        c_alternate_file_name: [u16; 14],
+    }
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn FindFirstFileW(
+            lp_file_name: *const u16,
+            lp_find_file_data: *mut Win32FindDataW,
+        ) -> *mut std::ffi::c_void;
+        fn FindClose(h_find_file: *mut std::ffi::c_void) -> i32;
+    }
+
+    const INVALID_HANDLE_VALUE: *mut std::ffi::c_void = -1isize as *mut std::ffi::c_void;
+
+    // Validate wildcards ONLY in actual path components — never in the Win32
+    // verbatim prefix (`\\?\` or `\\?\UNC\...`) produced by `Path::canonicalize()`.
+    for comp in path.components() {
+        if let std::path::Component::Normal(seg) = comp {
+            if seg
+                .encode_wide()
+                .any(|c| c == u16::from(b'*') || c == u16::from(b'?'))
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "path component contains wildcard characters",
+                ));
+            }
         }
     }
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    let mut data = std::mem::MaybeUninit::<Win32FindDataW>::zeroed();
+    // SAFETY: `wide` is null-terminated UTF-16 and `data` is a valid `Win32FindDataW` buffer.
+    let handle = unsafe { FindFirstFileW(wide.as_ptr(), data.as_mut_ptr()) };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: `handle` is a valid search handle returned by `FindFirstFileW`.
+    unsafe {
+        FindClose(handle);
+    }
+    // SAFETY: `FindFirstFileW` succeeded and initialized `data`.
+    let data = unsafe { data.assume_init() };
+    let nul = data
+        .c_file_name
+        .iter()
+        .position(|&c| c == 0)
+        .unwrap_or(data.c_file_name.len());
+    Ok(std::ffi::OsString::from_wide(&data.c_file_name[..nul]))
+}
+
+#[cfg(target_os = "linux")]
+fn canonical_linux_dir_entry_name(path: &Path) -> Option<std::ffi::OsString> {
+    use std::os::unix::io::AsRawFd;
+    let meta = fs::symlink_metadata(path).ok()?;
+    if meta.file_type().is_symlink() || !meta.is_file() {
+        return None;
+    }
+    let file = fs::File::open(path).ok()?;
+    let fd_path = format!("/proc/self/fd/{}", file.as_raw_fd());
+    let resolved = fs::read_link(fd_path).ok()?;
+    let resolved_parent = resolved.parent()?;
+    let orig_parent = path.parent()?;
+    if file_identity(resolved_parent).ok()? != file_identity(orig_parent).ok()? {
+        return None;
+    }
+    resolved.file_name().map(std::ffi::OsStr::to_os_string)
+}
+
+#[cfg(unix)]
+fn resolve_unix_dir_entry_name(
+    parent: &Path,
+    entries: &[(std::ffi::OsString, FileId)],
+    target_name: &std::ffi::OsStr,
+    target_id: FileId,
+) -> Option<std::ffi::OsString> {
+    let matching: Vec<&std::ffi::OsString> = entries
+        .iter()
+        .filter(|(_, id)| *id == target_id)
+        .map(|(name, _)| name)
+        .collect();
+    if matching.is_empty() {
+        return None;
+    }
+    if matching.len() == 1 {
+        // Only one directory entry in `parent` points to `target_id`; any alternate
+        // spelling resolving to `target_id` (e.g. case-insensitive/casefold mount) maps to it.
+        return Some(matching[0].clone());
+    }
+    // Multiple hard-linked entries share `target_id`: match the exact entry name first.
+    if let Some(exact) = matching.iter().find(|n| n.as_os_str() == target_name) {
+        return Some((*exact).clone());
+    }
+    // On Linux (e.g. ext4 casefold with NFC/NFD normalization and a hard-linked sibling),
+    // ask the kernel dentry cache for the actual on-disk directory entry name instead of
+    // guessing with lowercase string equality; fail closed if it cannot be uniquely resolved.
+    #[cfg(target_os = "linux")]
+    if let Some(actual) = canonical_linux_dir_entry_name(&parent.join(target_name)) {
+        if let Some(found) = matching
+            .iter()
+            .find(|n| n.as_os_str() == actual.as_os_str())
+        {
+            return Some((*found).clone());
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = parent;
+    None
+}
+
+#[cfg(all(not(unix), not(windows)))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FileId;
+
+#[cfg(all(not(unix), not(windows)))]
+fn file_identity_os(_path: &Path) -> std::io::Result<FileId> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "file identity queries are unsupported on this platform",
+    ))
+}
+
+fn file_identity(path: &Path) -> std::io::Result<FileId> {
+    #[cfg(test)]
+    if FAIL_FILE_IDENTITY_PATHS.lock().unwrap().contains_key(path) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "injected file identity query failure",
+        ));
+    }
+    file_identity_os(path)
+}
+
+fn owner_name_matches_pdf(owner: &str, pdf_path: &Path) -> bool {
+    let mut comps = Path::new(owner).components();
+    if !matches!(
+        (comps.next(), comps.next()),
+        (Some(std::path::Component::Normal(_)), None)
+    ) {
+        return false;
+    }
+    let Some(self_name) = pdf_path.file_name() else {
+        return false;
+    };
+    if std::ffi::OsStr::new(owner) == self_name {
+        return true;
+    }
+    if let Some(parent) = pdf_path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        let owner_path = parent.join(owner);
+        match (file_identity(&owner_path), file_identity(pdf_path)) {
+            (Ok(owner_id), Ok(pdf_id)) => {
+                if owner_id != pdf_id {
+                    return false;
+                }
+                // Same underlying file object: distinguish a case-insensitive alias of
+                // the same directory entry from two distinct hard-linked sibling PDFs.
+                #[cfg(windows)]
+                {
+                    return matches!(
+                        (
+                            canonical_dir_entry_name(&owner_path),
+                            canonical_dir_entry_name(pdf_path)
+                        ),
+                        (Ok(owner_entry), Ok(pdf_entry)) if owner_entry == pdf_entry
+                    );
+                }
+                #[cfg(unix)]
+                {
+                    let Ok(entries_iter) = fs::read_dir(parent) else {
+                        return false;
+                    };
+                    let mut dir_entries = Vec::new();
+                    for entry_res in entries_iter {
+                        let Ok(entry) = entry_res else {
+                            return false;
+                        };
+                        let Ok(ty) = entry.file_type() else {
+                            return false;
+                        };
+                        if !ty.is_file() {
+                            continue;
+                        }
+                        match file_identity(&entry.path()) {
+                            Ok(id) => dir_entries.push((entry.file_name(), id)),
+                            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                            Err(_) => return false,
+                        }
+                    }
+                    let owner_entry = resolve_unix_dir_entry_name(
+                        parent,
+                        &dir_entries,
+                        std::ffi::OsStr::new(owner),
+                        owner_id,
+                    );
+                    let self_entry =
+                        resolve_unix_dir_entry_name(parent, &dir_entries, self_name, pdf_id);
+                    return matches!((owner_entry, self_entry), (Some(a), Some(b)) if a == b);
+                }
+                #[cfg(all(not(unix), not(windows)))]
+                {
+                    return false;
+                }
+            }
+            // If exactly one path resolves to an existing file, they cannot refer to the same entry.
+            (Ok(_), Err(err)) | (Err(err), Ok(_)) if err.kind() == std::io::ErrorKind::NotFound => {
+                return false;
+            }
+            // Fail closed on non-NotFound identity errors rather than falling back to name comparison.
+            (Err(err), _) | (_, Err(err)) if err.kind() != std::io::ErrorKind::NotFound => {
+                return false;
+            }
+            _ => {}
+        }
+    }
+    let Some(self_name_str) = self_name.to_str() else {
+        return false;
+    };
+    #[cfg(windows)]
+    {
+        owner.eq_ignore_ascii_case(self_name_str)
+    }
+    #[cfg(not(windows))]
+    {
+        owner == self_name_str
+    }
+}
+
+/// Returns whether any *other* existing regular `.pdf` directory entry in `pdf_path`'s
+/// parent directory derives a primary (`<name>.state.json`) or legacy (`<stem>.state.json`)
+/// sidecar path that resolves to the same underlying filesystem file identity as
+/// `sidecar_path`. Hard-linked sibling `.pdf` entries are checked as distinct siblings,
+/// while alternate spellings of `pdf_path`'s own single directory entry are skipped.
+/// Fails closed (`Err`) if the directory cannot be enumerated or if an existing file's
+/// identity cannot be determined.
+fn sidecar_claimed_by_other_pdf(pdf_path: &Path, sidecar_path: &Path) -> Result<bool> {
+    let parent = pdf_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .ok_or_else(|| {
+            anyhow!(
+                "cannot determine parent directory for {}",
+                pdf_path.display()
+            )
+        })?;
+    let self_name = pdf_path
+        .file_name()
+        .ok_or_else(|| anyhow!("cannot determine filename for {}", pdf_path.display()))?;
+    #[cfg(windows)]
+    let _ = self_name;
+    let target_sc_id = match file_identity(sidecar_path) {
+        Ok(id) => id,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => {
+            return Err(anyhow::Error::new(err).context(format!(
+                "failed to determine file identity of sidecar {}",
+                sidecar_path.display()
+            )));
+        }
+    };
+    let self_id = match file_identity(pdf_path) {
+        Ok(id) => Some(id),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => {
+            return Err(anyhow::Error::new(err).context(format!(
+                "failed to determine file identity of sheet {}",
+                pdf_path.display()
+            )));
+        }
+    };
+    #[cfg(windows)]
+    let self_dir_entry_name = if self_id.is_some() {
+        match canonical_dir_entry_name(pdf_path) {
+            Ok(name) => Some(name),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+            Err(err) => {
+                return Err(anyhow::Error::new(err).context(format!(
+                    "failed to determine directory entry name of sheet {}",
+                    pdf_path.display()
+                )));
+            }
+        }
+    } else {
+        None
+    };
+    let entries = fs::read_dir(parent).with_context(|| {
+        format!(
+            "failed to inspect directory {} for sidecar ownership",
+            parent.display()
+        )
+    })?;
+    let mut pdf_entries: Vec<(std::ffi::OsString, PathBuf, FileId)> = Vec::new();
+    for entry_res in entries {
+        let entry = entry_res.with_context(|| {
+            format!(
+                "failed reading directory entry in {} for sidecar ownership",
+                parent.display()
+            )
+        })?;
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+        if !name_str.to_ascii_lowercase().ends_with(".pdf") {
+            continue;
+        }
+        let ty = entry.file_type().with_context(|| {
+            format!(
+                "failed inspecting directory entry {} for sidecar ownership",
+                entry.path().display()
+            )
+        })?;
+        if !ty.is_file() {
+            continue;
+        }
+        let other_path = entry.path();
+        let other_id = match file_identity(&other_path) {
+            Ok(id) => id,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => {
+                return Err(anyhow::Error::new(err).context(format!(
+                    "failed to determine file identity of sibling sheet {}",
+                    other_path.display()
+                )));
+            }
+        };
+        pdf_entries.push((name, other_path, other_id));
+    }
+    #[cfg(unix)]
+    let self_dir_entry_name = self_id.and_then(|sid| {
+        let name_ids: Vec<(std::ffi::OsString, FileId)> = pdf_entries
+            .iter()
+            .map(|(n, _, id)| (n.clone(), *id))
+            .collect();
+        resolve_unix_dir_entry_name(parent, &name_ids, self_name, sid)
+    });
+    #[cfg(all(not(unix), not(windows)))]
+    let self_dir_entry_name: Option<std::ffi::OsString> = self_id.map(|_| self_name.to_os_string());
+
+    for (entry_name, other_path, _other_id) in pdf_entries {
+        if self_dir_entry_name.as_deref() == Some(entry_name.as_os_str()) {
+            continue;
+        }
+        for cand in [
+            SheetStore::sidecar_path_for(&other_path),
+            SheetStore::legacy_sidecar_path_for(&other_path),
+        ] {
+            match file_identity(&cand) {
+                Ok(cand_id) if cand_id == target_sc_id => return Ok(true),
+                Ok(_) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    return Err(anyhow::Error::new(err).context(format!(
+                        "failed to determine file identity of candidate sidecar {}",
+                        cand.display()
+                    )));
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// Inspects a sidecar file for an explicit `pdfFileName` ownership tag and returns
+/// `Some(true)` if it matches `pdf_path`, `Some(false)` if it names another PDF, or
+/// `None` if the sidecar is unstamped or unreadable.
+fn sidecar_explicit_owner_matches(sidecar_path: &Path, pdf_path: &Path) -> Option<bool> {
+    let sm = fs::symlink_metadata(sidecar_path).ok()?;
+    if sm.file_type().is_symlink() || !sm.is_file() || sm.len() as usize > MAX_SIDECAR_BYTES {
+        return None;
+    }
+    let parsed = read_bounded(sidecar_path, MAX_SIDECAR_BYTES)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())?;
+    let owner = parsed.get("pdfFileName").and_then(Value::as_str)?;
+    Some(owner_name_matches_pdf(owner, pdf_path))
 }
 
 impl Drop for StagedUpload {
@@ -1738,7 +2731,13 @@ pub fn write_file_atomic_replace(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn collect_pdfs(root: &Path, dir: &Path, out: &mut Vec<SheetEntry>) -> Result<()> {
+fn collect_pdfs(
+    root: &Path,
+    dir: &Path,
+    template_dir_ids: &[FileId],
+    in_template_dir: Option<bool>,
+    out: &mut Vec<SheetEntry>,
+) -> Result<()> {
     if !dir.exists() {
         return Ok(());
     }
@@ -1759,9 +2758,34 @@ fn collect_pdfs(root: &Path, dir: &Path, out: &mut Vec<SheetEntry>) -> Result<()
             continue;
         }
         if ty.is_dir() {
-            collect_pdfs(root, &path, out)?;
+            // Resolve template-directory alias state ONCE per top-level directory and
+            // reuse the cached classification for every nested directory and PDF under it.
+            let child_is_template = match in_template_dir {
+                Some(flag) => flag,
+                None => {
+                    if name_str.eq_ignore_ascii_case("templates") {
+                        true
+                    } else if template_dir_ids.is_empty() {
+                        false
+                    } else {
+                        match file_identity(&path) {
+                            Ok(id) => template_dir_ids.contains(&id),
+                            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                            Err(err) => {
+                                eprintln!(
+                                    "WARN: skipping directory {} (identity error): {err:#}",
+                                    path.display()
+                                );
+                                continue;
+                            }
+                        }
+                    }
+                }
+            };
+            collect_pdfs(root, &path, template_dir_ids, Some(child_is_template), out)?;
         } else if ty.is_file() && name_str.to_ascii_lowercase().ends_with(".pdf") {
-            match sheet_entry_from_path(root, &path) {
+            let is_template = in_template_dir.unwrap_or(false);
+            match sheet_entry_from_path_with_template(root, &path, Some(is_template)) {
                 Ok(item) => out.push(item),
                 Err(err) => {
                     eprintln!("WARN: skipping sheet {}: {err:#}", path.display());
@@ -1801,6 +2825,108 @@ fn collect_stageable_paths(root: &Path, dir: &Path, out: &mut Vec<String>) -> Re
         }
     }
     Ok(())
+}
+
+pub fn is_template_path(rel: &str) -> bool {
+    let raw = rel.replace('\\', "/");
+    let mut parts = Path::new(&raw).components().filter_map(|c| match c {
+        Component::Normal(seg) => seg.to_str(),
+        _ => None,
+    });
+    matches!(parts.next(), Some(first) if first.eq_ignore_ascii_case("templates"))
+        && parts.next().is_some()
+}
+
+fn collect_template_dir_ids(root: &Path) -> Result<Vec<FileId>> {
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+    let entries = fs::read_dir(root).with_context(|| {
+        format!(
+            "failed to inspect store root {} for template directory aliases",
+            root.display()
+        )
+    })?;
+    let mut ids = Vec::new();
+    for entry_res in entries {
+        let entry = entry_res.with_context(|| {
+            format!(
+                "failed reading store root entry in {} for template directory aliases",
+                root.display()
+            )
+        })?;
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+        if !name_str.eq_ignore_ascii_case("templates") {
+            continue;
+        }
+        let ty = entry.file_type().with_context(|| {
+            format!(
+                "failed inspecting store root entry {} for template directory aliases",
+                entry.path().display()
+            )
+        })?;
+        if !ty.is_dir() {
+            continue;
+        }
+        match file_identity(&entry.path()) {
+            Ok(tpl_id) => ids.push(tpl_id),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(anyhow::Error::new(err).context(format!(
+                    "failed to determine directory identity for {}",
+                    entry.path().display()
+                )));
+            }
+        }
+    }
+    Ok(ids)
+}
+
+fn is_path_in_templates_dir(root: &Path, normalized: &str) -> Result<bool> {
+    if is_template_path(normalized) {
+        return Ok(true);
+    }
+    let mut parts = normalized.split('/').filter(|s| !s.is_empty());
+    let Some(first) = parts.next() else {
+        return Ok(false);
+    };
+    if parts.next().is_none() {
+        return Ok(false);
+    }
+    let top_path = root.join(first);
+    let top_id = match file_identity(&top_path) {
+        Ok(id) => id,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => {
+            return Err(anyhow::Error::new(err).context(format!(
+                "failed to determine directory identity for {}",
+                top_path.display()
+            )));
+        }
+    };
+    let template_dir_ids = collect_template_dir_ids(root)?;
+    Ok(template_dir_ids.contains(&top_id))
+}
+
+pub fn normalize_new_character_path(name: &str) -> Result<String> {
+    let trimmed = name.trim().replace('\\', "/");
+    if trimmed.is_empty() {
+        bail!("character name cannot be empty");
+    }
+    let with_ext = if trimmed.to_ascii_lowercase().ends_with(".pdf") {
+        trimmed
+    } else {
+        format!("{trimmed}.pdf")
+    };
+    let parts = validate_safe_rel_pdf_path(&with_ext)?;
+    let normalized = parts.join("/");
+    if is_template_path(&normalized) {
+        bail!("character path cannot be inside templates/");
+    }
+    Ok(normalized)
 }
 
 fn validate_safe_rel_pdf_path(rel: &str) -> Result<Vec<String>> {
@@ -1843,6 +2969,14 @@ fn validate_safe_rel_pdf_path(rel: &str) -> Result<Vec<String>> {
 }
 
 fn sheet_entry_from_path(root: &Path, abs: &Path) -> Result<SheetEntry> {
+    sheet_entry_from_path_with_template(root, abs, None)
+}
+
+fn sheet_entry_from_path_with_template(
+    root: &Path,
+    abs: &Path,
+    is_template_override: Option<bool>,
+) -> Result<SheetEntry> {
     let rel_path = abs.strip_prefix(root).unwrap_or(abs);
     let rel = rel_path
         .to_str()
@@ -1873,47 +3007,68 @@ fn sheet_entry_from_path(root: &Path, abs: &Path) -> Result<SheetEntry> {
         .unwrap_or(0);
     let primary_sidecar = SheetStore::sidecar_path_for(abs);
     let legacy_sidecar = SheetStore::legacy_sidecar_path_for(abs);
-    let sidecar_candidate = if primary_sidecar.is_file() {
-        Some((primary_sidecar, false))
-    } else if legacy_sidecar.is_file() {
-        Some((legacy_sidecar, true))
-    } else {
-        None
-    };
-    let sidecar_json = sidecar_candidate.as_ref().and_then(|(p, is_legacy)| {
-        let sm = fs::symlink_metadata(p).ok()?;
-        if sm.file_type().is_symlink() || !sm.is_file() || sm.len() as usize > MAX_SIDECAR_BYTES {
-            return None;
-        }
-        let parsed = read_bounded(p, MAX_SIDECAR_BYTES)
-            .ok()
-            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())?;
-        // Use sidecar metadata only when its recorded PDF SHA-256 matches the
-        // current PDF bytes. Legacy pre-hash sidecars (without `pdfSha256` and
-        // without the v1 schema tag) are accepted only if they are at least as
-        // recent as the PDF file.
-        match parsed.get("pdfSha256").and_then(Value::as_str) {
-            Some(recorded) if recorded.eq_ignore_ascii_case(&pdf_sha) => Some(parsed),
-            Some(_) => None,
-            None => {
-                let has_v1_schema = parsed.get("schema").is_some();
-                let sidecar_fresh = match (sm.modified().ok(), pdf_modified) {
-                    (Some(sc_t), Some(pdf_t)) => sc_t >= pdf_t,
-                    _ => false,
-                };
-                if *is_legacy && !has_v1_schema && sidecar_fresh {
-                    Some(parsed)
-                } else {
-                    None
+    // Evaluate primary first, then fall back to legacy if the primary candidate is
+    // absent, invalid, stale, or owned by another sheet (e.g. `Hero.pdf.pdf.state.json`
+    // belonging to `Hero.pdf.pdf.pdf` while `Hero.pdf.state.json` belongs to `Hero.pdf.pdf`).
+    let sidecar_json = [(primary_sidecar, false), (legacy_sidecar, true)]
+        .into_iter()
+        .find_map(|(p, is_legacy)| {
+            let sm = fs::symlink_metadata(&p).ok()?;
+            if sm.file_type().is_symlink() || !sm.is_file() || sm.len() as usize > MAX_SIDECAR_BYTES
+            {
+                return None;
+            }
+            let parsed = read_bounded(&p, MAX_SIDECAR_BYTES)
+                .ok()
+                .and_then(|b| serde_json::from_slice::<Value>(&b).ok())?;
+            // Enforce sidecar ownership: if `pdfFileName` is stamped, it must match this PDF;
+            // if unstamped, reject ambiguous sidecars that another existing PDF in the same
+            // directory also derives as its primary or legacy sidecar (e.g. `Hero.pdf` vs
+            // `Hero.pdf.pdf`, or case-variant siblings sharing `Hero.state.json`).
+            match parsed.get("pdfFileName").and_then(Value::as_str) {
+                Some(owner) => {
+                    if !owner_name_matches_pdf(owner, abs) {
+                        return None;
+                    }
+                }
+                None => {
+                    // Fail closed if directory enumeration fails so unverified unstamped
+                    // sidecars are never misattributed.
+                    if sidecar_claimed_by_other_pdf(abs, &p).unwrap_or(true) {
+                        return None;
+                    }
                 }
             }
-        }
-    });
+            // Use sidecar metadata only when its recorded PDF SHA-256 matches the
+            // current PDF bytes. Legacy pre-hash sidecars (without `pdfSha256` and
+            // without the v1 schema tag) are accepted only if they are at least as
+            // recent as the PDF file.
+            match parsed.get("pdfSha256").and_then(Value::as_str) {
+                Some(recorded) if recorded.eq_ignore_ascii_case(&pdf_sha) => Some(parsed),
+                Some(_) => None,
+                None => {
+                    let has_v1_schema = parsed.get("schema").is_some();
+                    let sidecar_fresh = match (sm.modified().ok(), pdf_modified) {
+                        (Some(sc_t), Some(pdf_t)) => sc_t >= pdf_t,
+                        _ => false,
+                    };
+                    if is_legacy && !has_v1_schema && sidecar_fresh {
+                        Some(parsed)
+                    } else {
+                        None
+                    }
+                }
+            }
+        });
     let str_opt = |v: &Value| {
         v.as_str()
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_owned)
+    };
+    let is_template = match is_template_override {
+        Some(flag) => flag,
+        None => is_path_in_templates_dir(root, &rel)?,
     };
     Ok(SheetEntry {
         path: rel,
@@ -1921,6 +3076,7 @@ fn sheet_entry_from_path(root: &Path, abs: &Path) -> Result<SheetEntry> {
         size_bytes: meta.len(),
         sha256: pdf_sha,
         modified_unix,
+        is_template,
         has_state_sidecar: sidecar_json.is_some(),
         character_name: sidecar_json
             .as_ref()
@@ -3195,5 +4351,1497 @@ mod tests {
         assert!(store.git_pull().is_err());
 
         let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn template_path_rules_and_create_sheet_from_template() {
+        assert!(is_template_path("templates/MPMB-2024.pdf"));
+        assert!(is_template_path("Templates/nested/blank.pdf"));
+        assert!(!is_template_path("templates.pdf"));
+        assert!(!is_template_path("aelar.pdf"));
+        assert!(!is_template_path("campaigns/templates/aelar.pdf"));
+
+        assert_eq!(
+            normalize_new_character_path("  Aelar Stormwind  ").unwrap(),
+            "Aelar Stormwind.pdf"
+        );
+        assert_eq!(
+            normalize_new_character_path("party/Bryn.pdf").unwrap(),
+            "party/Bryn.pdf"
+        );
+        assert!(normalize_new_character_path("").is_err());
+        assert!(normalize_new_character_path("templates/Nope").is_err());
+        assert!(normalize_new_character_path("Templates/Nope.pdf").is_err());
+        assert!(normalize_new_character_path("../escape.pdf").is_err());
+
+        let dir = temp_dir("template-copy");
+        let store = SheetStore::open(StoreConfig {
+            root: dir.clone(),
+            git: None,
+        })
+        .unwrap();
+
+        let tpl = store
+            .upload_sheet(
+                "templates/MPMB-2024-Blank.pdf",
+                &valid_test_pdf("Blank"),
+                false,
+            )
+            .unwrap();
+        assert!(tpl.is_template);
+        // Write a sidecar beside the template to ensure it is NOT copied to new characters.
+        store
+            .write_sidecar_atomic(
+                "templates/MPMB-2024-Blank.pdf",
+                &tpl.sha256,
+                &json!({"character": {"name": "TemplateMeta"}}),
+            )
+            .unwrap();
+
+        let created = store
+            .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "Aelar")
+            .unwrap();
+        assert_eq!(created.path, "Aelar.pdf");
+        assert!(!created.is_template);
+        assert_eq!(created.sha256, tpl.sha256);
+        assert!(!created.has_state_sidecar);
+
+        // Duplicate creation always fails cleanly (create-only).
+        let dup = store
+            .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "Aelar")
+            .unwrap_err();
+        assert!(format!("{dup:#}").contains("already exists"));
+
+        // Non-template source is rejected.
+        let non_tpl = store
+            .create_sheet_from_template("Aelar.pdf", "Clone")
+            .unwrap_err();
+        assert!(format!("{non_tpl:#}").contains("must be a template"));
+
+        // Destination inside templates/ is rejected.
+        let bad_dest = store
+            .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "templates/Clone")
+            .unwrap_err();
+        assert!(format!("{bad_dest:#}").contains("inside templates/"));
+
+        // prepare_template_copy fast-fails on existing destination without touching disk,
+        // and publish_new_sheet_bytes atomically refuses to overwrite an existing file.
+        let prep_dup = store
+            .prepare_template_copy("templates/MPMB-2024-Blank.pdf", "Aelar")
+            .unwrap_err();
+        assert!(format!("{prep_dup:#}").contains("already exists"));
+        let (dest_norm, _, bytes, _) = store
+            .prepare_template_copy("templates/MPMB-2024-Blank.pdf", "RaceDest")
+            .unwrap();
+        assert_eq!(dest_norm, "RaceDest.pdf");
+        assert!(!dir.join("RaceDest.pdf").exists());
+        // Simulate a competing writer creating RaceDest.pdf before publish_new_sheet_bytes.
+        let competing = valid_test_pdf("Competing");
+        store
+            .upload_sheet("RaceDest.pdf", &competing, false)
+            .unwrap();
+        let pub_err = store
+            .publish_new_sheet_bytes(&dest_norm, &bytes)
+            .unwrap_err();
+        let pub_err_msg = format!("{pub_err:#}");
+        assert!(pub_err_msg.contains("already exists"));
+        assert!(
+            !pub_err_msg.contains("overwrite=true"),
+            "template publication conflict must not suggest overwrite=true: {pub_err_msg}"
+        );
+        // Upload duplicate conflicts must still include the overwrite=true hint.
+        let upload_dup = store
+            .upload_sheet("RaceDest.pdf", &bytes, false)
+            .unwrap_err();
+        assert!(
+            format!("{upload_dup:#}").contains("overwrite=true"),
+            "upload duplicate conflict should keep overwrite=true hint: {upload_dup:#}"
+        );
+        assert_eq!(fs::read(dir.join("RaceDest.pdf")).unwrap(), competing);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn template_create_invalidates_orphaned_primary_and_legacy_sidecars_and_reports_missing_template(
+    ) {
+        let dir = temp_dir("template-orphan-sidecars");
+        let store = SheetStore::open(StoreConfig {
+            root: dir.clone(),
+            git: None,
+        })
+        .unwrap();
+
+        let tpl = store
+            .upload_sheet(
+                "templates/MPMB-2024-Blank.pdf",
+                &valid_test_pdf("Blank"),
+                false,
+            )
+            .unwrap();
+
+        // Missing template returns typed TemplateNotFoundError.
+        let missing_err = store
+            .prepare_template_copy("templates/Missing.pdf", "FreshHero")
+            .unwrap_err();
+        assert!(
+            missing_err
+                .downcast_ref::<TemplateNotFoundError>()
+                .is_some(),
+            "expected typed TemplateNotFoundError, got: {missing_err:#}"
+        );
+
+        // 1. Orphaned primary sidecar (<name>.pdf.state.json) matching template SHA-256.
+        let primary_orphan = dir.join("OrphanPrimary.pdf.state.json");
+        fs::write(
+            &primary_orphan,
+            serde_json::to_vec_pretty(&json!({
+                "schema": "mpmb-sheet-state-v1",
+                "pdfSha256": tpl.sha256,
+                "character": { "name": "Stale Primary Hero", "classAndLevels": "Wizard 9", "level": "9" }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let created_primary = store
+            .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "OrphanPrimary")
+            .unwrap();
+        assert!(!created_primary.has_state_sidecar);
+        assert_eq!(created_primary.character_name, None);
+        assert_eq!(created_primary.class_and_levels, None);
+        assert_eq!(created_primary.level, None);
+        assert!(
+            !primary_orphan.exists(),
+            "orphaned primary sidecar should be invalidated"
+        );
+
+        // 2. Orphaned legacy sidecar (<stem>.state.json) matching template SHA-256.
+        let legacy_hashed_orphan = dir.join("OrphanLegacyHashed.state.json");
+        fs::write(
+            &legacy_hashed_orphan,
+            serde_json::to_vec_pretty(&json!({
+                "pdfSha256": tpl.sha256,
+                "character": { "name": "Stale Legacy Hashed", "classAndLevels": "Rogue 7", "level": "7" }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let created_legacy_hashed = store
+            .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "OrphanLegacyHashed")
+            .unwrap();
+        assert!(!created_legacy_hashed.has_state_sidecar);
+        assert_eq!(created_legacy_hashed.character_name, None);
+        assert_eq!(created_legacy_hashed.level, None);
+        assert!(
+            !legacy_hashed_orphan.exists(),
+            "orphaned hashed legacy sidecar should be invalidated"
+        );
+
+        // 3. Orphaned pre-hash legacy sidecar (<stem>.state.json without pdfSha256/schema).
+        let legacy_prehash_orphan = dir.join("OrphanLegacyPreHash.state.json");
+        fs::write(
+            &legacy_prehash_orphan,
+            serde_json::to_vec_pretty(&json!({
+                "character": { "name": "Stale Legacy PreHash", "classAndLevels": "Bard 5", "level": "5" }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let created_legacy_prehash = store
+            .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "OrphanLegacyPreHash")
+            .unwrap();
+        assert!(!created_legacy_prehash.has_state_sidecar);
+        assert_eq!(created_legacy_prehash.character_name, None);
+        assert_eq!(created_legacy_prehash.level, None);
+        assert!(
+            !legacy_prehash_orphan.exists(),
+            "orphaned pre-hash legacy sidecar should be invalidated"
+        );
+
+        // 4. Duplicate create attempt must NEVER touch an existing sheet's sidecar.
+        store
+            .write_sidecar_atomic(
+                "OrphanPrimary.pdf",
+                &created_primary.sha256,
+                &json!({"character": {"name": "Real Live Hero", "level": "3"}}),
+            )
+            .unwrap();
+        let dup_err = store
+            .publish_new_sheet_bytes("OrphanPrimary.pdf", &valid_test_pdf("Other"))
+            .unwrap_err();
+        assert!(format!("{dup_err:#}").contains("already exists"));
+        let listed = store.list_sheets().unwrap();
+        let live = listed
+            .iter()
+            .find(|s| s.path == "OrphanPrimary.pdf")
+            .unwrap();
+        assert!(live.has_state_sidecar);
+        assert_eq!(live.character_name.as_deref(), Some("Real Live Hero"));
+
+        // 5. Creating `Hero.pdf.pdf` must NOT delete `Hero.pdf`'s primary sidecar
+        //    (`Hero.pdf.state.json`) and must NOT attach `Hero.pdf`'s metadata to
+        //    `Hero.pdf.pdf` even when both share the exact same template hash.
+        let hero_entry = store
+            .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "Hero")
+            .unwrap();
+        store
+            .write_sidecar_atomic(
+                "Hero.pdf",
+                &hero_entry.sha256,
+                &json!({"character": {"name": "Original Hero", "level": "12"}}),
+            )
+            .unwrap();
+        let hero_sidecar_path = dir.join("Hero.pdf.state.json");
+        let hero_sidecar_bytes = fs::read(&hero_sidecar_path).unwrap();
+
+        let double_pdf = store
+            .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "Hero.pdf.pdf")
+            .unwrap();
+        assert_eq!(double_pdf.path, "Hero.pdf.pdf");
+        assert!(
+            !double_pdf.has_state_sidecar,
+            "Hero.pdf.pdf must not attach Hero.pdf's primary sidecar as a legacy sidecar"
+        );
+        assert_eq!(double_pdf.character_name, None);
+        assert_eq!(double_pdf.level, None);
+        assert_eq!(
+            fs::read(&hero_sidecar_path).unwrap(),
+            hero_sidecar_bytes,
+            "creating Hero.pdf.pdf must not modify or delete Hero.pdf.state.json"
+        );
+        let listed_after_double = store.list_sheets().unwrap();
+        let hero_listed = listed_after_double
+            .iter()
+            .find(|s| s.path == "Hero.pdf")
+            .unwrap();
+        assert!(hero_listed.has_state_sidecar);
+        assert_eq!(hero_listed.character_name.as_deref(), Some("Original Hero"));
+        let double_listed = listed_after_double
+            .iter()
+            .find(|s| s.path == "Hero.pdf.pdf")
+            .unwrap();
+        assert!(!double_listed.has_state_sidecar);
+        assert_eq!(double_listed.character_name, None);
+
+        // 6. Real pre-PR upgrade case: when `PrePrHero.pdf` exists with an UNSTAMPED
+        //    primary sidecar `PrePrHero.pdf.state.json` (no `pdfFileName`), creating
+        //    `PrePrHero.pdf.pdf` is rejected with a conflict BEFORE publishing so the
+        //    preexisting character's metadata is never hidden by ambiguity.
+        let tpl_bytes = fs::read(dir.join("templates/MPMB-2024-Blank.pdf")).unwrap();
+        store
+            .upload_sheet("PrePrHero.pdf", &tpl_bytes, false)
+            .unwrap();
+        let pre_pr_sidecar_path = dir.join("PrePrHero.pdf.state.json");
+        let pre_pr_sidecar_bytes = serde_json::to_vec_pretty(&json!({
+            "schema": "mpmb-sheet-state/v1",
+            "pdfSha256": tpl.sha256,
+            "character": { "name": "Pre-PR Hero", "level": "13" }
+        }))
+        .unwrap();
+        fs::write(&pre_pr_sidecar_path, &pre_pr_sidecar_bytes).unwrap();
+        let pre_pr_before = store
+            .list_sheets()
+            .unwrap()
+            .into_iter()
+            .find(|s| s.path == "PrePrHero.pdf")
+            .unwrap();
+        assert!(pre_pr_before.has_state_sidecar);
+        assert_eq!(pre_pr_before.character_name.as_deref(), Some("Pre-PR Hero"));
+        assert_eq!(pre_pr_before.level.as_deref(), Some("13"));
+        let pre_pr_err = store
+            .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "PrePrHero.pdf.pdf")
+            .unwrap_err();
+        assert!(
+            format!("{pre_pr_err:#}").contains("conflict"),
+            "creating sibling that makes pre-PR unstamped sidecar ambiguous must conflict: {pre_pr_err:#}"
+        );
+        assert!(!dir.join("PrePrHero.pdf.pdf").exists());
+        assert_eq!(
+            fs::read(&pre_pr_sidecar_path).unwrap(),
+            pre_pr_sidecar_bytes
+        );
+        let listed_pre_pr = store.list_sheets().unwrap();
+        let pre_pr_listed = listed_pre_pr
+            .iter()
+            .find(|s| s.path == "PrePrHero.pdf")
+            .unwrap();
+        assert!(pre_pr_listed.has_state_sidecar);
+        assert_eq!(pre_pr_listed.character_name.as_deref(), Some("Pre-PR Hero"));
+        assert_eq!(pre_pr_listed.level.as_deref(), Some("13"));
+
+        // 7. Reverse direction: when `Reverse.pdf.pdf` already exists with a legacy
+        //    sidecar `Reverse.pdf.state.json`, creating `Reverse.pdf` is rejected with
+        //    conflict BEFORE publishing so `Reverse.pdf.state.json` is neither deleted
+        //    nor clobbered, and `Reverse.pdf.pdf` keeps its metadata.
+        store
+            .upload_sheet("Reverse.pdf.pdf", &tpl_bytes, false)
+            .unwrap();
+        let reverse_legacy_path = dir.join("Reverse.pdf.state.json");
+        let reverse_legacy_bytes = serde_json::to_vec_pretty(&json!({
+            "pdfSha256": tpl.sha256,
+            "character": { "name": "Legacy Double PDF Owner", "level": "14" }
+        }))
+        .unwrap();
+        fs::write(&reverse_legacy_path, &reverse_legacy_bytes).unwrap();
+        let reverse_before = store
+            .list_sheets()
+            .unwrap()
+            .into_iter()
+            .find(|s| s.path == "Reverse.pdf.pdf")
+            .unwrap();
+        assert!(reverse_before.has_state_sidecar);
+        assert_eq!(
+            reverse_before.character_name.as_deref(),
+            Some("Legacy Double PDF Owner")
+        );
+        assert_eq!(reverse_before.level.as_deref(), Some("14"));
+
+        let reverse_err = store
+            .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "Reverse")
+            .unwrap_err();
+        assert!(
+            format!("{reverse_err:#}").contains("conflict"),
+            "creating Reverse.pdf over Reverse.pdf.pdf's legacy sidecar must conflict: {reverse_err:#}"
+        );
+        assert!(!dir.join("Reverse.pdf").exists());
+        assert_eq!(
+            fs::read(&reverse_legacy_path).unwrap(),
+            reverse_legacy_bytes,
+            "Reverse.pdf.state.json bytes must remain untouched"
+        );
+        let listed_after_reverse = store.list_sheets().unwrap();
+        let reverse_dbl_listed = listed_after_reverse
+            .iter()
+            .find(|s| s.path == "Reverse.pdf.pdf")
+            .unwrap();
+        assert!(reverse_dbl_listed.has_state_sidecar);
+        assert_eq!(
+            reverse_dbl_listed.character_name.as_deref(),
+            Some("Legacy Double PDF Owner")
+        );
+        assert_eq!(reverse_dbl_listed.level.as_deref(), Some("14"));
+
+        // 8. Later saves cannot clobber a shared legacy sidecar even if both PDFs
+        //    already coexist externally on disk.
+        let extern_pdf = dir.join("Extern.pdf");
+        fs::write(&extern_pdf, &tpl_bytes).unwrap();
+        fs::write(dir.join("Extern.pdf.pdf"), &tpl_bytes).unwrap();
+        let extern_legacy_sc = dir.join("Extern.pdf.state.json");
+        let extern_legacy_bytes = serde_json::to_vec_pretty(&json!({
+            "pdfSha256": tpl.sha256,
+            "character": { "name": "Extern Double Owner", "level": "16" }
+        }))
+        .unwrap();
+        fs::write(&extern_legacy_sc, &extern_legacy_bytes).unwrap();
+        let new_pdf_bytes = valid_test_pdf("ExternEdited");
+        let save_err = store
+            .save_sheet_atomic(
+                "Extern.pdf",
+                &new_pdf_bytes,
+                Some(&tpl.sha256),
+                Some(&json!({"character": {"name": "Clobber Attempt"}})),
+                false,
+            )
+            .unwrap_err();
+        assert!(
+            format!("{save_err:#}").contains("conflict"),
+            "save_sheet_atomic must not clobber shared legacy sidecar: {save_err:#}"
+        );
+        assert_eq!(fs::read(&extern_pdf).unwrap(), tpl_bytes);
+        assert_eq!(fs::read(&extern_legacy_sc).unwrap(), extern_legacy_bytes);
+        let sc_err = store
+            .write_sidecar_atomic(
+                "Extern.pdf",
+                &tpl.sha256,
+                &json!({"character": {"name": "Clobber Attempt"}}),
+            )
+            .unwrap_err();
+        assert!(
+            format!("{sc_err:#}").contains("conflict"),
+            "write_sidecar_atomic must not clobber shared legacy sidecar: {sc_err:#}"
+        );
+        assert_eq!(fs::read(&extern_legacy_sc).unwrap(), extern_legacy_bytes);
+
+        // 9. On case-sensitive filesystems, when `Sibling.PDF` exists with an unstamped
+        //    legacy `Sibling.state.json`, creating `Sibling.pdf` is rejected with conflict
+        //    BEFORE publishing so `Sibling.PDF` keeps its metadata and sidecar bytes.
+        let sibling_upper = dir.join("Sibling.PDF");
+        let sibling_lower = dir.join("Sibling.pdf");
+        fs::write(&sibling_upper, &tpl_bytes).unwrap();
+        if !sibling_lower.exists() {
+            let sibling_legacy = dir.join("Sibling.state.json");
+            let sibling_legacy_bytes = serde_json::to_vec_pretty(&json!({
+                "pdfSha256": tpl.sha256,
+                "character": { "name": "Upper Owner", "level": "11" }
+            }))
+            .unwrap();
+            fs::write(&sibling_legacy, &sibling_legacy_bytes).unwrap();
+            let sibling_before = store
+                .list_sheets()
+                .unwrap()
+                .into_iter()
+                .find(|s| s.path == "Sibling.PDF")
+                .unwrap();
+            assert!(sibling_before.has_state_sidecar);
+            assert_eq!(
+                sibling_before.character_name.as_deref(),
+                Some("Upper Owner")
+            );
+            assert_eq!(sibling_before.level.as_deref(), Some("11"));
+            let sibling_err = store
+                .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "Sibling")
+                .unwrap_err();
+            assert!(
+                format!("{sibling_err:#}").contains("conflict"),
+                "creating case-variant sibling over shared unstamped legacy sidecar must conflict: {sibling_err:#}"
+            );
+            assert!(!sibling_lower.exists());
+            assert_eq!(
+                fs::read(&sibling_legacy).unwrap(),
+                sibling_legacy_bytes,
+                "legacy sidecar belonging to Sibling.PDF must not be deleted or modified"
+            );
+            let listed_after_sibling = store.list_sheets().unwrap();
+            let sibling_upper_listed = listed_after_sibling
+                .iter()
+                .find(|s| s.path == "Sibling.PDF")
+                .unwrap();
+            assert!(sibling_upper_listed.has_state_sidecar);
+            assert_eq!(
+                sibling_upper_listed.character_name.as_deref(),
+                Some("Upper Owner")
+            );
+            assert_eq!(sibling_upper_listed.level.as_deref(), Some("11"));
+        }
+
+        // 10. Unremovable orphaned sidecar fails cleanly before publication AND retrying
+        //     the same name succeeds cleanly once the orphan is unlocked/removable.
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_SHARE_READ: u32 = 0x0000_0001;
+            const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+            let locked_orphan = dir.join("LockedOrphan.pdf.state.json");
+            let locked_orphan_bytes = serde_json::to_vec_pretty(&json!({
+                "pdfSha256": tpl.sha256,
+                "character": { "name": "Locked Stale Hero" }
+            }))
+            .unwrap();
+            fs::write(&locked_orphan, &locked_orphan_bytes).unwrap();
+            // Hold a real Windows handle denying FILE_SHARE_DELETE (read/write sharing only)
+            // so `fs::remove_file` deterministically fails while the sidecar stays readable.
+            let lock_handle = fs::OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                .open(&locked_orphan)
+                .unwrap();
+            let locked_err = store
+                .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "LockedOrphan")
+                .unwrap_err();
+            assert!(
+                format!("{locked_err:#}").contains("failed to remove stale sidecar"),
+                "expected stale sidecar removal error, got: {locked_err:#}"
+            );
+            assert!(
+                !dir.join("LockedOrphan.pdf").exists(),
+                "destination PDF must not be published when orphaned sidecar cannot be removed"
+            );
+            assert_eq!(fs::read(&locked_orphan).unwrap(), locked_orphan_bytes);
+            assert!(
+                !store
+                    .list_sheets()
+                    .unwrap()
+                    .iter()
+                    .any(|s| s.path == "LockedOrphan.pdf"),
+                "failed create must not appear in sheet listing"
+            );
+            drop(lock_handle);
+            let retried = store
+                .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "LockedOrphan")
+                .unwrap();
+            assert_eq!(retried.path, "LockedOrphan.pdf");
+            assert!(!retried.has_state_sidecar);
+            assert_eq!(retried.character_name, None);
+            assert!(!locked_orphan.exists());
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let ro_dir = dir.join("readonly-orphan-dir");
+            fs::create_dir_all(&ro_dir).unwrap();
+            let locked_orphan = ro_dir.join("LockedOrphan.pdf.state.json");
+            let locked_orphan_bytes = serde_json::to_vec_pretty(&json!({
+                "pdfSha256": tpl.sha256,
+                "character": { "name": "Locked Stale Hero" }
+            }))
+            .unwrap();
+            fs::write(&locked_orphan, &locked_orphan_bytes).unwrap();
+            // Stage the upload while the directory is writable, then make the directory
+            // read-only so `commit_staged_upload` deterministically hits the failed
+            // `remove_file` path inside `invalidate_sidecars_for` BEFORE `publish_create_new`.
+            let (norm, mut staged) = store
+                .start_staged_upload("readonly-orphan-dir/LockedOrphan.pdf")
+                .unwrap();
+            staged.write_chunk(&tpl_bytes).unwrap();
+            fs::set_permissions(&ro_dir, fs::Permissions::from_mode(0o555)).unwrap();
+            let commit_res = store.commit_staged_upload(&norm, staged, false);
+            fs::set_permissions(&ro_dir, fs::Permissions::from_mode(0o755)).unwrap();
+            // Skip failure assertion only when running as UID 0 (root bypasses 0555 dir checks).
+            if locked_orphan.exists() {
+                let err = commit_res.unwrap_err();
+                assert!(
+                    format!("{err:#}").contains("failed to remove stale sidecar"),
+                    "expected stale sidecar removal error, got: {err:#}"
+                );
+                assert!(
+                    !ro_dir.join("LockedOrphan.pdf").exists(),
+                    "destination PDF must not be published when orphaned sidecar removal fails"
+                );
+                assert_eq!(fs::read(&locked_orphan).unwrap(), locked_orphan_bytes);
+                let listed_after_fail = store.list_sheets().unwrap();
+                assert!(
+                    !listed_after_fail
+                        .iter()
+                        .any(|s| s.path == "readonly-orphan-dir/LockedOrphan.pdf"),
+                    "failed create must not appear in sheet listing"
+                );
+                // Once directory is writable again, retrying the exact same destination succeeds cleanly.
+                let retried = store
+                    .create_sheet_from_template(
+                        "templates/MPMB-2024-Blank.pdf",
+                        "readonly-orphan-dir/LockedOrphan",
+                    )
+                    .unwrap();
+                assert_eq!(retried.path, "readonly-orphan-dir/LockedOrphan.pdf");
+                assert!(!retried.has_state_sidecar);
+                assert_eq!(retried.character_name, None);
+                assert!(!locked_orphan.exists());
+            }
+
+            // 11. Write+exec, non-enumerable directory (`0o333`): directory enumeration
+            //     fails closed so an existing sibling's sidecar is NEVER deleted as an
+            //     apparent orphan and creation aborts cleanly.
+            let wo_dir = dir.join("write-only-dir");
+            fs::create_dir_all(&wo_dir).unwrap();
+            let wo_upper = wo_dir.join("WoSibling.PDF");
+            let wo_lower = wo_dir.join("WoSibling.pdf");
+            fs::write(&wo_upper, &tpl_bytes).unwrap();
+            if !wo_lower.exists() {
+                let wo_legacy = wo_dir.join("WoSibling.state.json");
+                let wo_legacy_bytes = serde_json::to_vec_pretty(&json!({
+                    "pdfSha256": tpl.sha256,
+                    "character": { "name": "WriteOnly Sibling", "level": "17" }
+                }))
+                .unwrap();
+                fs::write(&wo_legacy, &wo_legacy_bytes).unwrap();
+                let wo_before = store
+                    .list_sheets()
+                    .unwrap()
+                    .into_iter()
+                    .find(|s| s.path == "write-only-dir/WoSibling.PDF")
+                    .unwrap();
+                assert!(wo_before.has_state_sidecar);
+                assert_eq!(
+                    wo_before.character_name.as_deref(),
+                    Some("WriteOnly Sibling")
+                );
+                assert_eq!(wo_before.level.as_deref(), Some("17"));
+
+                // Stage while writable+readable, then drop read bit (`0o333`) so
+                // `read_dir` fails while `lstat`, `unlink`, and `hard_link` would succeed.
+                let (wo_norm, mut wo_staged) = store
+                    .start_staged_upload("write-only-dir/WoSibling.pdf")
+                    .unwrap();
+                wo_staged.write_chunk(&tpl_bytes).unwrap();
+                fs::set_permissions(&wo_dir, fs::Permissions::from_mode(0o333)).unwrap();
+                let read_dir_blocked = fs::read_dir(&wo_dir).is_err();
+                let wo_create_res = store.create_sheet_from_template(
+                    "templates/MPMB-2024-Blank.pdf",
+                    "write-only-dir/WoSibling",
+                );
+                let wo_commit_res = store.commit_staged_upload(&wo_norm, wo_staged, false);
+                fs::set_permissions(&wo_dir, fs::Permissions::from_mode(0o755)).unwrap();
+                if read_dir_blocked {
+                    let create_err = wo_create_res.unwrap_err();
+                    assert!(
+                        format!("{create_err:#}").contains("failed to inspect directory"),
+                        "expected fail-closed ownership scan error on create, got: {create_err:#}"
+                    );
+                    let commit_err = wo_commit_res.unwrap_err();
+                    assert!(
+                        format!("{commit_err:#}").contains("failed to inspect directory"),
+                        "expected fail-closed ownership scan error on commit, got: {commit_err:#}"
+                    );
+                    assert!(
+                        !wo_lower.exists(),
+                        "destination PDF must not be created when ownership scan fails"
+                    );
+                    assert_eq!(
+                        fs::read(&wo_legacy).unwrap(),
+                        wo_legacy_bytes,
+                        "sibling legacy sidecar must NOT be deleted when directory enumeration fails"
+                    );
+                    let wo_after = store
+                        .list_sheets()
+                        .unwrap()
+                        .into_iter()
+                        .find(|s| s.path == "write-only-dir/WoSibling.PDF")
+                        .unwrap();
+                    assert!(wo_after.has_state_sidecar);
+                    assert_eq!(
+                        wo_after.character_name.as_deref(),
+                        Some("WriteOnly Sibling")
+                    );
+                    assert_eq!(wo_after.level.as_deref(), Some("17"));
+                }
+            }
+        }
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn publish_create_new_is_atomic_and_refuses_overwrite_without_copy_fallback() {
+        let dir = temp_dir("publish-create-new");
+        let target = dir.join("Hero.pdf");
+        let payload = valid_test_pdf("Hero");
+
+        // 1. StagedUpload::publish_create_new publishes atomically and cleans up staging file.
+        let mut staged = StagedUpload::create(&target).unwrap();
+        staged.write_chunk(&payload).unwrap();
+        staged.finish().unwrap();
+        staged.publish_create_new(&target).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), payload);
+        let leftover_tmp = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().starts_with(STAGING_PREFIX));
+        assert!(!leftover_tmp, "staging temp file must be cleaned up");
+
+        // 2. publish_create_new refuses to overwrite an existing destination, keeps its
+        //    bytes intact, and removes the staging temp file.
+        let mut staged2 = StagedUpload::create(&target).unwrap();
+        staged2.write_chunk(&valid_test_pdf("Other")).unwrap();
+        staged2.finish().unwrap();
+        let err = staged2.publish_create_new(&target).unwrap_err();
+        assert!(
+            err.downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.kind() == std::io::ErrorKind::AlreadyExists),
+            "expected AlreadyExists, got: {err:#}"
+        );
+        assert_eq!(fs::read(&target).unwrap(), payload);
+        let leftover_tmp2 = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().starts_with(STAGING_PREFIX));
+        assert!(
+            !leftover_tmp2,
+            "staging temp file must be cleaned up after AlreadyExists"
+        );
+
+        // 3. Failing atomic publication into a missing parent fails cleanly without leaving
+        //    any partial destination file or staging file behind.
+        let missing_dest = dir.join("no-such-dir").join("Ghost.pdf");
+        let mut staged3 = StagedUpload::create(&target).unwrap();
+        staged3.write_chunk(&payload).unwrap();
+        staged3.finish().unwrap();
+        assert!(staged3.publish_create_new(&missing_dest).is_err());
+        assert!(!missing_dest.exists());
+        let leftover_tmp3 = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().starts_with(STAGING_PREFIX));
+        assert!(
+            !leftover_tmp3,
+            "staging temp file must be cleaned up after publish error"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn overwrite_upload_and_sidecarless_save_enforce_absent_pdf_conflicts_and_survive_post_publish_read_error(
+    ) {
+        let dir = temp_dir("overwrite-save-post-publish");
+        let store = SheetStore::open(StoreConfig {
+            root: dir.clone(),
+            git: None,
+        })
+        .unwrap();
+
+        let tpl_bytes = valid_test_pdf("Blank");
+        let tpl = store
+            .upload_sheet("templates/MPMB-2024-Blank.pdf", &tpl_bytes, false)
+            .unwrap();
+
+        // 1. Overwrite=true upload on an ABSENT destination must reject creating `Hero.pdf`
+        //    when unstamped `Hero.pdf.state.json` belongs to `Hero.pdf.pdf`, leaving
+        //    `Hero.pdf.pdf`'s sidecar and metadata untouched.
+        store
+            .upload_sheet("Hero.pdf.pdf", &tpl_bytes, false)
+            .unwrap();
+        let hero_legacy_sc = dir.join("Hero.pdf.state.json");
+        let hero_legacy_bytes = serde_json::to_vec_pretty(&json!({
+            "pdfSha256": tpl.sha256,
+            "character": { "name": "Existing Double Owner", "level": "8" }
+        }))
+        .unwrap();
+        fs::write(&hero_legacy_sc, &hero_legacy_bytes).unwrap();
+
+        let ov_err = store
+            .upload_sheet("Hero.pdf", &tpl_bytes, true)
+            .unwrap_err();
+        assert!(
+            format!("{ov_err:#}").contains("conflict"),
+            "overwrite=true upload on absent PDF colliding with sibling sidecar must conflict: {ov_err:#}"
+        );
+        assert!(!dir.join("Hero.pdf").exists());
+        assert_eq!(fs::read(&hero_legacy_sc).unwrap(), hero_legacy_bytes);
+
+        // 2. save_sheet_atomic without a state_sidecar payload on an ABSENT destination must
+        //    likewise reject recreating `Hero.pdf`.
+        let save_err = store
+            .save_sheet_atomic("Hero.pdf", &tpl_bytes, None, None, true)
+            .unwrap_err();
+        assert!(
+            format!("{save_err:#}").contains("conflict"),
+            "sidecarless save_sheet_atomic on absent PDF colliding with sibling sidecar must conflict: {save_err:#}"
+        );
+        assert!(!dir.join("Hero.pdf").exists());
+        assert_eq!(fs::read(&hero_legacy_sc).unwrap(), hero_legacy_bytes);
+
+        let listed = store.list_sheets().unwrap();
+        let dbl = listed.iter().find(|s| s.path == "Hero.pdf.pdf").unwrap();
+        assert!(dbl.has_state_sidecar);
+        assert_eq!(dbl.character_name.as_deref(), Some("Existing Double Owner"));
+        assert_eq!(dbl.level.as_deref(), Some("8"));
+
+        // Replacing an EXISTING PDF with overwrite=true still succeeds normally.
+        let replacement = valid_test_pdf("Replacement");
+        let replaced = store
+            .upload_sheet("Hero.pdf.pdf", &replacement, true)
+            .unwrap();
+        assert_eq!(replaced.path, "Hero.pdf.pdf");
+        assert_eq!(replaced.sha256, sha256_hex(&replacement));
+
+        // 3. Absent-destination overwrite=true upload and sidecarless save_sheet_atomic
+        //    both clear removable matching-hash orphans AND fail cleanly before publishing
+        //    when a matching-hash orphan is locked/unremovable (succeeding on retry).
+        let ov_orphan = dir.join("OverwriteOrphan.pdf.state.json");
+        fs::write(
+            &ov_orphan,
+            serde_json::to_vec_pretty(&json!({
+                "pdfSha256": tpl.sha256,
+                "character": { "name": "Stale Overwrite Orphan", "level": "6" }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let ov_created = store
+            .upload_sheet("OverwriteOrphan.pdf", &tpl_bytes, true)
+            .unwrap();
+        assert!(!ov_created.has_state_sidecar);
+        assert_eq!(ov_created.character_name, None);
+        assert!(!ov_orphan.exists());
+
+        let save_orphan = dir.join("SaveOrphan.pdf.state.json");
+        let save_legacy_orphan = dir.join("SaveOrphan.state.json");
+        for p in [&save_orphan, &save_legacy_orphan] {
+            fs::write(
+                p,
+                serde_json::to_vec_pretty(&json!({
+                    "pdfSha256": tpl.sha256,
+                    "character": { "name": "Stale Save Orphan", "level": "7" }
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        let save_res = store
+            .save_sheet_atomic("SaveOrphan.pdf", &tpl_bytes, None, None, true)
+            .unwrap();
+        assert!(matches!(save_res, SaveResult::Saved { .. }));
+        assert!(!save_orphan.exists());
+        assert!(!save_legacy_orphan.exists());
+        let save_listed = store
+            .list_sheets()
+            .unwrap()
+            .into_iter()
+            .find(|s| s.path == "SaveOrphan.pdf")
+            .unwrap();
+        assert!(!save_listed.has_state_sidecar);
+        assert_eq!(save_listed.character_name, None);
+
+        // Locked/unremovable matching-hash orphans for BOTH overwrite=true upload and
+        // sidecarless save_sheet_atomic abort before publishing and succeed cleanly on retry.
+        for (sheet_name, via_save) in [
+            ("LockedOverwriteOrphan.pdf", false),
+            ("LockedSaveOrphan.pdf", true),
+        ] {
+            let locked_sc = dir.join(format!("{sheet_name}.state.json"));
+            let locked_bytes = serde_json::to_vec_pretty(&json!({
+                "pdfSha256": tpl.sha256,
+                "character": { "name": "Locked Matching Orphan", "level": "9" }
+            }))
+            .unwrap();
+            fs::write(&locked_sc, &locked_bytes).unwrap();
+
+            #[cfg(windows)]
+            let lock_guard = {
+                use std::os::windows::fs::OpenOptionsExt;
+                const FILE_SHARE_READ: u32 = 0x0000_0001;
+                const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+                fs::OpenOptions::new()
+                    .read(true)
+                    .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                    .open(&locked_sc)
+                    .unwrap()
+            };
+            #[cfg(unix)]
+            let lock_guard = {
+                let canonical_sc = dir
+                    .canonicalize()
+                    .unwrap_or_else(|_| dir.clone())
+                    .join(format!("{sheet_name}.state.json"));
+                fail_sidecar_remove_for_path(canonical_sc)
+            };
+
+            let err = if via_save {
+                store
+                    .save_sheet_atomic(sheet_name, &tpl_bytes, None, None, true)
+                    .unwrap_err()
+            } else {
+                store
+                    .upload_sheet(sheet_name, &tpl_bytes, true)
+                    .unwrap_err()
+            };
+            assert!(
+                format!("{err:#}").contains("failed to remove stale sidecar"),
+                "expected stale sidecar removal error for {sheet_name}, got: {err:#}"
+            );
+            assert!(
+                !dir.join(sheet_name).exists(),
+                "{sheet_name} must not be published when orphan removal fails"
+            );
+            assert_eq!(fs::read(&locked_sc).unwrap(), locked_bytes);
+
+            drop(lock_guard);
+            if via_save {
+                let retried = store
+                    .save_sheet_atomic(sheet_name, &tpl_bytes, None, None, true)
+                    .unwrap();
+                assert!(matches!(retried, SaveResult::Saved { .. }));
+            } else {
+                let retried = store.upload_sheet(sheet_name, &tpl_bytes, true).unwrap();
+                assert!(!retried.has_state_sidecar);
+                assert_eq!(retried.character_name, None);
+            }
+            assert!(!locked_sc.exists());
+            let listed_retry = store
+                .list_sheets()
+                .unwrap()
+                .into_iter()
+                .find(|s| s.path == sheet_name)
+                .unwrap();
+            assert!(!listed_retry.has_state_sidecar);
+            assert_eq!(listed_retry.character_name, None);
+        }
+
+        // 4. Overlapping path-scoped fault guards never interfere with each other:
+        //    dropping one path's guard clears only its own path while another active
+        //    path remains armed.
+        #[cfg(unix)]
+        {
+            let sc_a = dir.join("OverlapA.pdf.state.json");
+            let sc_b = dir.join("OverlapB.pdf.state.json");
+            for sc in [&sc_a, &sc_b] {
+                fs::write(
+                    sc,
+                    serde_json::to_vec_pretty(&json!({
+                        "pdfSha256": tpl.sha256,
+                        "character": { "name": "Overlap Orphan" }
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+            }
+            let canon_dir = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+            let guard_a = fail_sidecar_remove_for_path(canon_dir.join("OverlapA.pdf.state.json"));
+            let guard_b = fail_sidecar_remove_for_path(canon_dir.join("OverlapB.pdf.state.json"));
+            assert!(store
+                .upload_sheet("OverlapA.pdf", &tpl_bytes, true)
+                .is_err());
+            assert!(store
+                .upload_sheet("OverlapB.pdf", &tpl_bytes, true)
+                .is_err());
+            // Dropping guard_a must NOT disarm guard_b.
+            drop(guard_a);
+            assert!(store.upload_sheet("OverlapA.pdf", &tpl_bytes, true).is_ok());
+            assert!(
+                store
+                    .upload_sheet("OverlapB.pdf", &tpl_bytes, true)
+                    .is_err(),
+                "dropping guard_a must not clear guard_b"
+            );
+            drop(guard_b);
+            assert!(store.upload_sheet("OverlapB.pdf", &tpl_bytes, true).is_ok());
+        }
+
+        // 5. If post-publish `sheet_entry_from_path` fails after commit, `commit_staged_upload`
+        //    must STILL return Ok(committed_entry) with exact size/hash and keep the published file.
+        let canon_dir = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+        let post_target = dir.join("PostPublishOk.pdf");
+        let post_other = dir.join("PostPublishOther.pdf");
+        let post_bytes = valid_test_pdf("PostPublishOk");
+        let expected_sha = sha256_hex(&post_bytes);
+        let guard_post_a = fail_post_publish_read_for_path(canon_dir.join("PostPublishOk.pdf"));
+        let guard_post_b = fail_post_publish_read_for_path(canon_dir.join("PostPublishOther.pdf"));
+        assert!(FAIL_POST_PUBLISH_READ_PATHS
+            .lock()
+            .unwrap()
+            .contains_key(&canon_dir.join("PostPublishOk.pdf")));
+        assert!(FAIL_POST_PUBLISH_READ_PATHS
+            .lock()
+            .unwrap()
+            .contains_key(&canon_dir.join("PostPublishOther.pdf")));
+        drop(guard_post_b);
+        assert!(
+            FAIL_POST_PUBLISH_READ_PATHS
+                .lock()
+                .unwrap()
+                .contains_key(&canon_dir.join("PostPublishOk.pdf")),
+            "dropping another path's guard must keep PostPublishOk.pdf armed"
+        );
+        let entry = store
+            .publish_new_sheet_bytes("PostPublishOk.pdf", &post_bytes)
+            .unwrap();
+        drop(guard_post_a);
+        assert!(!post_other.exists());
+        assert_eq!(entry.path, "PostPublishOk.pdf");
+        assert_eq!(entry.size_bytes, post_bytes.len() as u64);
+        assert_eq!(entry.sha256, expected_sha);
+        assert!(!entry.has_state_sidecar);
+        assert_eq!(fs::read(&post_target).unwrap(), post_bytes);
+
+        // 6. File-identity sidecar ownership checks:
+        //    - On Windows NTFS, non-ASCII case aliases (`Élodie.pdf.pdf` owning
+        //      `Élodie.pdf.state.json` vs creating `élodie.pdf`) share one FileId and
+        //      must conflict without deleting the existing sheet's sidecar.
+        //    - On Unix, two differently named sidecar paths hard-linked to the same
+        //      `(dev, ino)` simulate a case-insensitive mount alias and must conflict.
+        //    - When file identity cannot be determined for an existing sidecar, creation
+        //      must fail closed without deleting the sidecar.
+        #[cfg(windows)]
+        {
+            store
+                .upload_sheet("Élodie.pdf.pdf", &tpl_bytes, false)
+                .unwrap();
+            let ntfs_sc = dir.join("Élodie.pdf.state.json");
+            let ntfs_bytes = serde_json::to_vec_pretty(&json!({
+                "pdfSha256": tpl.sha256,
+                "character": { "name": "Élodie NTFS Owner", "level": "12" }
+            }))
+            .unwrap();
+            fs::write(&ntfs_sc, &ntfs_bytes).unwrap();
+            let alias_sc = dir.join("élodie.pdf.state.json");
+            let has_case_alias = matches!(
+                (file_identity(&ntfs_sc), file_identity(&alias_sc)),
+                (Ok(a), Ok(b)) if a == b
+            );
+            if !has_case_alias {
+                // If the temp directory is case-sensitive NTFS, create a hard link so
+                // file-identity alias detection is still exercised deterministically.
+                fs::hard_link(&ntfs_sc, &alias_sc).unwrap();
+            }
+            assert_eq!(
+                file_identity(&ntfs_sc).unwrap(),
+                file_identity(&alias_sc).unwrap(),
+                "aliased sidecar paths must report identical 128-bit FileIdInfo"
+            );
+            // Verify `canonical_dir_entry_name` works with canonicalized Win32 verbatim
+            // paths (`\\?\...`) produced by `SheetStore::open`'s `root.canonicalize()`,
+            // while still rejecting wildcard characters in actual filename components.
+            let canon_ntfs_sc = canon_dir.join("Élodie.pdf.state.json");
+            let canon_alias_sc = canon_dir.join("élodie.pdf.state.json");
+            assert_eq!(
+                canonical_dir_entry_name(&canon_ntfs_sc).unwrap(),
+                std::ffi::OsStr::new("Élodie.pdf.state.json")
+            );
+            if has_case_alias {
+                assert_eq!(
+                    canonical_dir_entry_name(&canon_alias_sc).unwrap(),
+                    std::ffi::OsStr::new("Élodie.pdf.state.json")
+                );
+            }
+            assert_eq!(
+                canonical_dir_entry_name(&canon_dir.join("bad?name.pdf"))
+                    .unwrap_err()
+                    .kind(),
+                std::io::ErrorKind::InvalidInput
+            );
+            assert_eq!(
+                canonical_dir_entry_name(&canon_dir.join("bad*name.pdf"))
+                    .unwrap_err()
+                    .kind(),
+                std::io::ErrorKind::InvalidInput
+            );
+            let err_create = store
+                .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "élodie")
+                .unwrap_err();
+            assert!(
+                format!("{err_create:#}").contains("conflict"),
+                "NTFS non-ASCII case alias must conflict: {err_create:#}"
+            );
+            let err_ov = store
+                .upload_sheet("élodie.pdf", &tpl_bytes, true)
+                .unwrap_err();
+            assert!(
+                format!("{err_ov:#}").contains("conflict"),
+                "NTFS overwrite on absent non-ASCII alias must conflict: {err_ov:#}"
+            );
+            assert!(!dir.join("élodie.pdf").exists());
+            assert_eq!(fs::read(&ntfs_sc).unwrap(), ntfs_bytes);
+            let listed_ntfs = store
+                .list_sheets()
+                .unwrap()
+                .into_iter()
+                .find(|s| s.path == "Élodie.pdf.pdf")
+                .unwrap();
+            assert!(listed_ntfs.has_state_sidecar);
+            assert_eq!(
+                listed_ntfs.character_name.as_deref(),
+                Some("Élodie NTFS Owner")
+            );
+            assert_eq!(listed_ntfs.level.as_deref(), Some("12"));
+
+            // Distinct filename resolving to no shared file still succeeds and reports a
+            // distinct 128-bit FileIdInfo.
+            let distinct = store
+                .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "ÉlodieOther")
+                .unwrap();
+            assert_eq!(distinct.path, "ÉlodieOther.pdf");
+            assert!(!distinct.has_state_sidecar);
+            assert_ne!(
+                file_identity(&dir.join("Élodie.pdf.pdf")).unwrap(),
+                file_identity(&dir.join("ÉlodieOther.pdf")).unwrap(),
+                "distinct files must report distinct 128-bit FileIdInfo"
+            );
+        }
+        #[cfg(unix)]
+        {
+            store
+                .upload_sheet("AliasOwner.pdf", &tpl_bytes, false)
+                .unwrap();
+            let owner_sc = dir.join("AliasOwner.pdf.state.json");
+            let owner_sc_bytes = serde_json::to_vec_pretty(&json!({
+                "pdfSha256": tpl.sha256,
+                "character": { "name": "Inode Alias Owner", "level": "15" }
+            }))
+            .unwrap();
+            fs::write(&owner_sc, &owner_sc_bytes).unwrap();
+            // Hard-link a differently named sidecar path to the exact same `(dev, ino)`
+            // to exercise case-insensitive-mount aliasing deterministically on Linux ext4.
+            let aliased_sc = dir.join("AliasTarget.pdf.state.json");
+            fs::hard_link(&owner_sc, &aliased_sc).unwrap();
+            assert_eq!(
+                file_identity(&owner_sc).unwrap(),
+                file_identity(&aliased_sc).unwrap()
+            );
+            let err_create = store
+                .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "AliasTarget")
+                .unwrap_err();
+            assert!(
+                format!("{err_create:#}").contains("conflict"),
+                "same-inode sidecar alias must conflict: {err_create:#}"
+            );
+            let err_ov = store
+                .upload_sheet("AliasTarget.pdf", &tpl_bytes, true)
+                .unwrap_err();
+            assert!(
+                format!("{err_ov:#}").contains("conflict"),
+                "overwrite on absent same-inode alias must conflict: {err_ov:#}"
+            );
+            assert!(!dir.join("AliasTarget.pdf").exists());
+            assert_eq!(fs::read(&owner_sc).unwrap(), owner_sc_bytes);
+            let listed_owner = store
+                .list_sheets()
+                .unwrap()
+                .into_iter()
+                .find(|s| s.path == "AliasOwner.pdf")
+                .unwrap();
+            assert!(listed_owner.has_state_sidecar);
+            assert_eq!(
+                listed_owner.character_name.as_deref(),
+                Some("Inode Alias Owner")
+            );
+            assert_eq!(listed_owner.level.as_deref(), Some("15"));
+
+            // Distinct filename with no aliased sidecar still succeeds and has distinct ID.
+            let distinct = store
+                .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "DistinctTarget")
+                .unwrap();
+            assert_eq!(distinct.path, "DistinctTarget.pdf");
+            assert!(!distinct.has_state_sidecar);
+            assert_ne!(
+                file_identity(&dir.join("AliasOwner.pdf")).unwrap(),
+                file_identity(&dir.join("DistinctTarget.pdf")).unwrap()
+            );
+        }
+
+        // 7. Hard-linked sibling PDFs (`HardHero.pdf` and `HardHero.pdf.pdf` sharing one
+        //    underlying file identity) remain distinct directory entries:
+        //    - `sidecar_claimed_by_other_pdf` must NOT skip `HardHero.pdf.pdf` when
+        //      checking writes for `HardHero.pdf`; writing `HardHero.pdf`'s sidecar must
+        //      fail with conflict and leave `HardHero.pdf.pdf`'s legacy sidecar bytes intact.
+        //    - `owner_name_matches_pdf` must NOT treat a hard-linked sibling as the stamped
+        //      sheet in Library listing (in either stamp direction).
+        {
+            store
+                .upload_sheet("HardHero.pdf.pdf", &tpl_bytes, false)
+                .unwrap();
+            fs::hard_link(dir.join("HardHero.pdf.pdf"), dir.join("HardHero.pdf")).unwrap();
+            assert_eq!(
+                file_identity(&dir.join("HardHero.pdf.pdf")).unwrap(),
+                file_identity(&dir.join("HardHero.pdf")).unwrap(),
+                "fixture expects HardHero.pdf and HardHero.pdf.pdf to share FileId"
+            );
+            let shared_sc = dir.join("HardHero.pdf.state.json");
+            let sibling_sc_bytes = serde_json::to_vec_pretty(&json!({
+                "pdfFileName": "HardHero.pdf.pdf",
+                "pdfSha256": tpl.sha256,
+                "character": { "name": "Hard-Linked Sibling Owner", "level": "19" }
+            }))
+            .unwrap();
+            fs::write(&shared_sc, &sibling_sc_bytes).unwrap();
+
+            // Library attributes the sidecar ONLY to `HardHero.pdf.pdf`, not `HardHero.pdf`.
+            let listed = store.list_sheets().unwrap();
+            let listed_dbl = listed
+                .iter()
+                .find(|s| s.path == "HardHero.pdf.pdf")
+                .unwrap();
+            assert!(listed_dbl.has_state_sidecar);
+            assert_eq!(
+                listed_dbl.character_name.as_deref(),
+                Some("Hard-Linked Sibling Owner")
+            );
+            assert_eq!(listed_dbl.level.as_deref(), Some("19"));
+            let listed_single = listed.iter().find(|s| s.path == "HardHero.pdf").unwrap();
+            assert!(!listed_single.has_state_sidecar);
+            assert_eq!(listed_single.character_name, None);
+
+            // Writing a sidecar for `HardHero.pdf` must fail with conflict and preserve
+            // `HardHero.pdf.pdf`'s original sidecar bytes verbatim.
+            let sc_err = store
+                .write_sidecar_atomic(
+                    "HardHero.pdf",
+                    &tpl.sha256,
+                    &json!({ "character": { "name": "Clobber Attempt", "level": "1" } }),
+                )
+                .unwrap_err();
+            assert!(
+                sc_err
+                    .chain()
+                    .any(|c| c.downcast_ref::<SidecarConflictError>().is_some()),
+                "hard-linked sibling sidecar write must fail with SidecarConflictError: {sc_err:#}"
+            );
+            assert_eq!(fs::read(&shared_sc).unwrap(), sibling_sc_bytes);
+
+            let save_err = store
+                .save_sheet_atomic(
+                    "HardHero.pdf",
+                    &tpl_bytes,
+                    Some(&tpl.sha256),
+                    Some(&json!({ "character": { "name": "Clobber Save", "level": "2" } })),
+                    false,
+                )
+                .unwrap_err();
+            assert!(
+                save_err
+                    .chain()
+                    .any(|c| c.downcast_ref::<SidecarConflictError>().is_some()),
+                "save_sheet_atomic on hard-linked sibling must reject clobbering sidecar: {save_err:#}"
+            );
+            assert_eq!(fs::read(&shared_sc).unwrap(), sibling_sc_bytes);
+
+            // Reverse stamp direction: stamped for `HardHero.pdf`, `HardHero.pdf.pdf` must
+            // NOT adopt `HardHero.pdf`'s metadata even though both share one PDF FileId.
+            let single_sc_bytes = serde_json::to_vec_pretty(&json!({
+                "pdfFileName": "HardHero.pdf",
+                "pdfSha256": tpl.sha256,
+                "character": { "name": "Hard-Linked Primary Owner", "level": "7" }
+            }))
+            .unwrap();
+            fs::write(&shared_sc, &single_sc_bytes).unwrap();
+            let listed_rev = store.list_sheets().unwrap();
+            let listed_rev_single = listed_rev
+                .iter()
+                .find(|s| s.path == "HardHero.pdf")
+                .unwrap();
+            assert!(listed_rev_single.has_state_sidecar);
+            assert_eq!(
+                listed_rev_single.character_name.as_deref(),
+                Some("Hard-Linked Primary Owner")
+            );
+            let listed_rev_dbl = listed_rev
+                .iter()
+                .find(|s| s.path == "HardHero.pdf.pdf")
+                .unwrap();
+            assert!(!listed_rev_dbl.has_state_sidecar);
+            assert_eq!(listed_rev_dbl.character_name, None);
+        }
+
+        // 8. Primary-owned-by-another-sheet falls back to valid legacy sidecar in listing:
+        //    `Chain.pdf.pdf` owns `Chain.pdf.state.json` (legacy), while `Chain.pdf.pdf.pdf`
+        //    owns `Chain.pdf.pdf.state.json` (which is also `Chain.pdf.pdf`'s primary path).
+        {
+            store
+                .upload_sheet("Chain.pdf.pdf", &tpl_bytes, false)
+                .unwrap();
+            store
+                .upload_sheet("Chain.pdf.pdf.pdf", &tpl_bytes, false)
+                .unwrap();
+            let chain_legacy_sc = dir.join("Chain.pdf.state.json");
+            let chain_triple_sc = dir.join("Chain.pdf.pdf.state.json");
+            fs::write(
+                &chain_legacy_sc,
+                serde_json::to_vec_pretty(&json!({
+                    "pdfFileName": "Chain.pdf.pdf",
+                    "pdfSha256": tpl.sha256,
+                    "character": { "name": "Chain Legacy Owner", "level": "9" }
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            fs::write(
+                &chain_triple_sc,
+                serde_json::to_vec_pretty(&json!({
+                    "pdfFileName": "Chain.pdf.pdf.pdf",
+                    "pdfSha256": tpl.sha256,
+                    "character": { "name": "Chain Triple Owner", "level": "14" }
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            let listed_chain = store.list_sheets().unwrap();
+            let dbl = listed_chain
+                .iter()
+                .find(|s| s.path == "Chain.pdf.pdf")
+                .unwrap();
+            assert!(
+                dbl.has_state_sidecar,
+                "Chain.pdf.pdf must fall back to its valid legacy sidecar when its primary belongs to Chain.pdf.pdf.pdf"
+            );
+            assert_eq!(dbl.character_name.as_deref(), Some("Chain Legacy Owner"));
+            assert_eq!(dbl.level.as_deref(), Some("9"));
+            let triple = listed_chain
+                .iter()
+                .find(|s| s.path == "Chain.pdf.pdf.pdf")
+                .unwrap();
+            assert!(triple.has_state_sidecar);
+            assert_eq!(triple.character_name.as_deref(), Some("Chain Triple Owner"));
+            assert_eq!(triple.level.as_deref(), Some("14"));
+        }
+
+        // 9. Resolved template directory classification (guards against directory aliases
+        //    like Windows 8.3 short names or Linux ext4 casefold `templateſ`, while keeping
+        //    ordinary character subdirectories usable and failing closed on identity error).
+        {
+            // Ordinary subdirectory remains usable for creation and is not classified as template.
+            fs::create_dir_all(dir.join("campaigns")).unwrap();
+            assert!(!store
+                .is_template_resolved_path("campaigns/Bryn.pdf")
+                .unwrap());
+            let bryn = store
+                .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "campaigns/Bryn")
+                .unwrap();
+            assert_eq!(bryn.path, "campaigns/Bryn.pdf");
+            assert!(!bryn.is_template);
+
+            // Indeterminate top-level directory identity fails closed.
+            let camp_guard = fail_file_identity_for_path(canon_dir.join("campaigns"));
+            assert!(store
+                .is_template_resolved_path("campaigns/Bryn.pdf")
+                .is_err());
+            drop(camp_guard);
+
+            // Non-regular primary sidecar path (directory) is rejected BEFORE publishing
+            // in the shared create-only path even when no startup edits occur.
+            fs::create_dir_all(dir.join("NonRegSc.pdf.state.json")).unwrap();
+            let nonreg_err = store
+                .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "NonRegSc")
+                .unwrap_err();
+            assert!(
+                format!("{nonreg_err:#}").contains("not a regular file"),
+                "create-only with nonregular primary sidecar path must fail: {nonreg_err:#}"
+            );
+            assert!(!dir.join("NonRegSc.pdf").exists());
+            let nonreg_pub_err = store
+                .publish_new_sheet_bytes("NonRegSc.pdf", &tpl_bytes)
+                .unwrap_err();
+            assert!(
+                format!("{nonreg_pub_err:#}").contains("not a regular file"),
+                "publish_new_sheet_bytes with nonregular primary sidecar path must fail: {nonreg_pub_err:#}"
+            );
+            assert!(!dir.join("NonRegSc.pdf").exists());
+
+            // On Linux casefold filesystems where `templateſ` (U+017F) resolves to `templates`,
+            // verify both direct-open classification and create-to-missing-file are blocked,
+            // and verify NFC/NFD normalization with a hard-linked sibling (`Backup.pdf`).
+            #[cfg(unix)]
+            {
+                let long_s_tpl = dir.join("template\u{017f}");
+                if matches!(
+                    (file_identity(&long_s_tpl), file_identity(&dir.join("templates"))),
+                    (Ok(a), Ok(b)) if a == b
+                ) {
+                    assert!(store
+                        .is_template_resolved_path("template\u{017f}/MPMB-2024-Blank.pdf")
+                        .unwrap());
+                    let err_create = store
+                        .create_sheet_from_template(
+                            "templates/MPMB-2024-Blank.pdf",
+                            "template\u{017f}/AliasEscape",
+                        )
+                        .unwrap_err();
+                    assert!(format!("{err_create:#}").contains("inside templates/"));
+                    assert!(!dir.join("templates/AliasEscape.pdf").exists());
+                    assert_eq!(
+                        fs::read(dir.join("templates/MPMB-2024-Blank.pdf")).unwrap(),
+                        tpl_bytes
+                    );
+
+                    // Casefold NFC/NFD + hard-linked sibling (`Élodie.pdf` + `Backup.pdf`):
+                    // saving via decomposed NFD stamps the actual on-disk NFC entry name,
+                    // an existing NFD-stamped sidecar still resolves to NFC `Élodie.pdf`,
+                    // and `Backup.pdf` is still rejected as a distinct directory entry.
+                    let nfc_name = "\u{00c9}lodie.pdf";
+                    let nfd_name = "E\u{0301}lodie.pdf";
+                    store.upload_sheet(nfc_name, &tpl_bytes, false).unwrap();
+                    fs::hard_link(dir.join(nfc_name), dir.join("Backup.pdf")).unwrap();
+                    store
+                        .write_sidecar_atomic(
+                            nfd_name,
+                            &tpl.sha256,
+                            &json!({ "character": { "name": "Casefold NFC Hero", "level": "11" } }),
+                        )
+                        .unwrap();
+                    let stamped_raw: Value = serde_json::from_slice(
+                        &fs::read(dir.join(format!("{nfc_name}.state.json"))).unwrap(),
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        stamped_raw["pdfFileName"].as_str(),
+                        Some(nfc_name),
+                        "sidecar saved via NFD spelling must stamp actual on-disk NFC entry name"
+                    );
+                    // Even when an external sidecar carries the NFD spelling directly AND
+                    // is hard-linked at `Backup.pdf.state.json` (giving `Backup.pdf` a real
+                    // primary sidecar candidate with matching PDF hash and FileId), Library
+                    // must attribute it ONLY to `Élodie.pdf` and reject `Backup.pdf`.
+                    let nfd_sc_bytes = serde_json::to_vec_pretty(&json!({
+                        "pdfFileName": nfd_name,
+                        "pdfSha256": tpl.sha256,
+                        "character": { "name": "External NFD Stamp", "level": "16" }
+                    }))
+                    .unwrap();
+                    let nfc_sc_path = dir.join(format!("{nfc_name}.state.json"));
+                    fs::write(&nfc_sc_path, &nfd_sc_bytes).unwrap();
+                    fs::hard_link(&nfc_sc_path, dir.join("Backup.pdf.state.json")).unwrap();
+                    let listed_cf = store.list_sheets().unwrap();
+                    let listed_elodie = listed_cf.iter().find(|s| s.path == nfc_name).unwrap();
+                    assert!(listed_elodie.has_state_sidecar);
+                    assert_eq!(
+                        listed_elodie.character_name.as_deref(),
+                        Some("External NFD Stamp")
+                    );
+                    assert_eq!(listed_elodie.level.as_deref(), Some("16"));
+                    let listed_backup = listed_cf.iter().find(|s| s.path == "Backup.pdf").unwrap();
+                    assert!(!listed_backup.has_state_sidecar);
+                    assert_eq!(listed_backup.character_name, None);
+                }
+            }
+
+            // On Windows, if the volume assigns an 8.3 short alias to `templates`, verify
+            // both direct-open classification and create-to-missing-file under that alias are blocked.
+            #[cfg(windows)]
+            {
+                use std::os::windows::ffi::{OsStrExt, OsStringExt};
+                #[link(name = "kernel32")]
+                extern "system" {
+                    fn GetShortPathNameW(
+                        lpsz_short_path: *const u16,
+                        lpsz_long_path: *mut u16,
+                        cch_buffer: u32,
+                    ) -> u32;
+                }
+                let tpl_dir = dir.join("templates");
+                let wide: Vec<u16> = tpl_dir
+                    .as_os_str()
+                    .encode_wide()
+                    .chain(std::iter::once(0))
+                    .collect();
+                let mut buf = vec![0u16; 512];
+                let len =
+                    unsafe { GetShortPathNameW(wide.as_ptr(), buf.as_mut_ptr(), buf.len() as u32) };
+                if len > 0 && (len as usize) < buf.len() {
+                    let short_path =
+                        PathBuf::from(std::ffi::OsString::from_wide(&buf[..len as usize]));
+                    if let Some(short_name) = short_path.file_name().and_then(|s| s.to_str()) {
+                        if !short_name.eq_ignore_ascii_case("templates") {
+                            let existing_alias = format!("{short_name}/MPMB-2024-Blank.pdf");
+                            let new_alias = format!("{short_name}/AliasEscape");
+                            assert!(
+                                store.is_template_resolved_path(&existing_alias).unwrap(),
+                                "Windows 8.3 alias {existing_alias} must classify as template"
+                            );
+                            let err_create = store
+                                .create_sheet_from_template(
+                                    "templates/MPMB-2024-Blank.pdf",
+                                    &new_alias,
+                                )
+                                .unwrap_err();
+                            assert!(
+                                format!("{err_create:#}").contains("inside templates/"),
+                                "Windows 8.3 alias destination {new_alias} must be rejected: {err_create:#}"
+                            );
+                            assert!(!dir.join("templates/AliasEscape.pdf").exists());
+                            assert_eq!(
+                                fs::read(dir.join("templates/MPMB-2024-Blank.pdf")).unwrap(),
+                                tpl_bytes
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // Indeterminate file identity on an existing sidecar must fail closed.
+        let indet_sc = dir.join("IndetHero.pdf.state.json");
+        let indet_bytes = serde_json::to_vec_pretty(&json!({
+            "pdfSha256": tpl.sha256,
+            "character": { "name": "Indeterminate Owner" }
+        }))
+        .unwrap();
+        fs::write(&indet_sc, &indet_bytes).unwrap();
+        let indet_guard = fail_file_identity_for_path(canon_dir.join("IndetHero.pdf.state.json"));
+        let indet_err = store
+            .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "IndetHero")
+            .unwrap_err();
+        assert!(
+            format!("{indet_err:#}").contains("failed to determine file identity"),
+            "indeterminate sidecar identity must fail closed: {indet_err:#}"
+        );
+        assert!(!dir.join("IndetHero.pdf").exists());
+        assert_eq!(fs::read(&indet_sc).unwrap(), indet_bytes);
+        drop(indet_guard);
+        let indet_ok = store
+            .create_sheet_from_template("templates/MPMB-2024-Blank.pdf", "IndetHero")
+            .unwrap();
+        assert_eq!(indet_ok.path, "IndetHero.pdf");
+        assert!(!indet_ok.has_state_sidecar);
+        assert!(!indet_sc.exists());
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

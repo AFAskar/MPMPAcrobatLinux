@@ -293,6 +293,8 @@ pub struct PublicInteraction {
     pub id: String,
     #[serde(rename = "serverInstanceId", default)]
     pub server_instance_id: String,
+    #[serde(rename = "stateSeq", default)]
+    pub state_seq: u64,
     pub kind: String,
     pub request: Value,
 }
@@ -441,6 +443,7 @@ impl InteractionBridge {
         let public = PublicInteraction {
             id,
             server_instance_id: self.server_instance_id.clone(),
+            state_seq: self.next_state_seq(),
             kind: kind.to_owned(),
             request: request.clone(),
         };
@@ -495,6 +498,16 @@ enum WorkerCommand {
         gate: JobGate,
         done: watch::Sender<Option<JobOutcome>>,
         rel_path: String,
+        force: bool,
+        discard: Option<DiscardTarget>,
+        expected_session: Option<String>,
+    },
+    CreateFromTemplate {
+        job_id: u64,
+        gate: JobGate,
+        done: watch::Sender<Option<JobOutcome>>,
+        template: String,
+        name: String,
         force: bool,
         discard: Option<DiscardTarget>,
         expected_session: Option<String>,
@@ -625,6 +638,30 @@ struct SheetWorker {
     capabilities: HostCapabilities,
     active: Option<ActiveSheet>,
     last_save_conflict: Option<SaveResult>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum JobErrorMapping {
+    Legacy,
+    TypedCreate,
+}
+
+fn map_create_sheet_error_status(err: &anyhow::Error) -> StatusCode {
+    if err.chain().any(|c| {
+        c.downcast_ref::<crate::storage::TemplateNotFoundError>()
+            .is_some()
+    }) {
+        StatusCode::NOT_FOUND
+    } else if err.chain().any(|c| {
+        c.downcast_ref::<crate::storage::SheetAlreadyExistsError>()
+            .is_some()
+            || c.downcast_ref::<crate::storage::SidecarConflictError>()
+                .is_some()
+    }) {
+        StatusCode::CONFLICT
+    } else {
+        StatusCode::BAD_REQUEST
+    }
 }
 
 impl SheetWorker {
@@ -835,6 +872,26 @@ impl SheetWorker {
                     )
                 });
             }
+            WorkerCommand::CreateFromTemplate {
+                job_id,
+                gate,
+                done,
+                template,
+                name,
+                force,
+                discard,
+                expected_session,
+            } => {
+                self.run_job_with_mapping(job_id, gate, done, JobErrorMapping::TypedCreate, |w| {
+                    w.create_and_open_from_template(
+                        &template,
+                        &name,
+                        force,
+                        discard.as_ref(),
+                        expected_session.as_deref(),
+                    )
+                });
+            }
             WorkerCommand::Edit {
                 job_id,
                 gate,
@@ -968,6 +1025,19 @@ impl SheetWorker {
     ) where
         F: FnOnce(&mut Self) -> Result<Value>,
     {
+        self.run_job_with_mapping(job_id, gate, done, JobErrorMapping::Legacy, f);
+    }
+
+    fn run_job_with_mapping<F>(
+        &mut self,
+        job_id: u64,
+        gate: JobGate,
+        done: watch::Sender<Option<JobOutcome>>,
+        error_mapping: JobErrorMapping,
+        f: F,
+    ) where
+        F: FnOnce(&mut Self) -> Result<Value>,
+    {
         if !gate.try_start() {
             // Cancelled before execution (e.g. rejected with 409 because an earlier
             // job opened a modal interaction while this job was queued).
@@ -1002,10 +1072,28 @@ impl SheetWorker {
                     "type": "error",
                     "message": msg,
                 }));
-                let status = if msg.contains("conflict") || msg.contains("changed externally") {
-                    StatusCode::CONFLICT
-                } else {
-                    StatusCode::BAD_REQUEST
+                let status = match error_mapping {
+                    JobErrorMapping::TypedCreate => map_create_sheet_error_status(&err),
+                    JobErrorMapping::Legacy => {
+                        if err
+                            .downcast_ref::<crate::storage::TemplateNotFoundError>()
+                            .is_some()
+                        {
+                            StatusCode::NOT_FOUND
+                        } else if err.chain().any(|c| {
+                            c.downcast_ref::<crate::storage::SheetAlreadyExistsError>()
+                                .is_some()
+                                || c.downcast_ref::<crate::storage::SidecarConflictError>()
+                                    .is_some()
+                        }) || msg.contains("conflict")
+                            || msg.contains("changed externally")
+                            || msg.contains("already exists")
+                        {
+                            StatusCode::CONFLICT
+                        } else {
+                            StatusCode::BAD_REQUEST
+                        }
+                    }
                 };
                 Err((status, json!({"error": msg})))
             }
@@ -1172,12 +1260,158 @@ impl SheetWorker {
         discard: Option<&DiscardTarget>,
         expected_session: Option<&str>,
     ) -> Result<Value> {
+        let (norm, _) = self.store.resolve_safe_pdf_path(rel_path)?;
+        if self.store.is_template_resolved_path(&norm)? {
+            bail!(
+                "template sheets cannot be opened directly; create a new character from this template instead"
+            );
+        }
         if let Some(conflict) =
             self.check_discard_guard("opening another sheet", force, discard, expected_session)
         {
             return Ok(conflict);
         }
-        self.open_sheet_unchecked(rel_path)
+        self.open_sheet_unchecked(&norm)
+    }
+
+    fn create_and_open_from_template(
+        &mut self,
+        template_rel: &str,
+        character_name: &str,
+        force: bool,
+        discard: Option<&DiscardTarget>,
+        expected_session: Option<&str>,
+    ) -> Result<Value> {
+        if let Some(conflict) = self.check_discard_guard(
+            "creating and opening a new character",
+            force,
+            discard,
+            expected_session,
+        ) {
+            return Ok(conflict);
+        }
+        // Validate template + destination and fast-fail if the destination already exists
+        // BEFORE running startup scripts or publishing anything to disk.
+        let (dest_norm, dest_abs, bytes, sha) = self
+            .store
+            .prepare_template_copy(template_rel, character_name)?;
+
+        // Run PDF parse, QuickJS startup, readiness check, and initial state extraction
+        // completely in memory BEFORE publishing the file to disk. That way failed
+        // startup or aborted dialogs never leave an orphaned file on disk and never need
+        // conditional rollback (avoiding any same-content concurrent-writer deletion race).
+        let pdf = Arc::new(Pdf::open_bytes(dest_abs, &bytes)?);
+        let rt = Runtime::new_with_capabilities(
+            &pdf,
+            vec![],
+            vec![],
+            true,
+            None,
+            None,
+            Some(self.bridge.clone()),
+            self.capabilities,
+        )?;
+        rt.ready()?;
+        let revision = rt
+            .eval("__host.revision")
+            .ok()
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let Value::Object(extracted_obj) = rt.eval(EXTRACT_STATE_JS)? else {
+            bail!("state extraction did not return an object");
+        };
+        let startup_dirty = revision > 0;
+
+        // If startup dialogs/scripts mutated persistent document state and autosave is
+        // enabled, project the updated PDF bytes IN MEMORY before atomic create-only
+        // publication so the file on disk immediately contains those edits without
+        // needing a fallible post-commit write.
+        let (publish_bytes, disk_sha256, projected, initial_dirty_since_save, startup_sidecar) =
+            if startup_dirty && self.autosave {
+                let snap = rt.snapshot()?;
+                let projected_bytes = pdf.project(&snap)?;
+                let projected_sha = crate::storage::sha256_hex(&projected_bytes);
+                let sidecar = build_state_sidecar(
+                    &dest_norm,
+                    &Value::Object(extracted_obj.clone()),
+                    &projected_sha,
+                );
+                (
+                    projected_bytes.clone(),
+                    projected_sha,
+                    Some((revision, projected_bytes)),
+                    false,
+                    Some(sidecar),
+                )
+            } else {
+                (bytes, sha, None, startup_dirty, None)
+            };
+
+        // Only now atomically publish with create-only semantics (O_CREAT|O_EXCL).
+        // `publish_new_sheet_bytes` validates sidecar conflicts and rejects any
+        // non-regular primary sidecar path (regardless of whether startup edits
+        // produced `startup_sidecar`) before publishing, so another writer's file
+        // is never touched and future saves/Git sync can never be blocked by a
+        // directory or symlink at `<name>.pdf.state.json`.
+        let mut entry = self
+            .store
+            .publish_new_sheet_bytes(&dest_norm, &publish_bytes)?;
+
+        // Everything below this point is infallible so a committed sheet + session
+        // swap can never be reported to the client as a failed creation.
+        let mut sidecar_dirty = false;
+        if let Some(sidecar) = startup_sidecar {
+            match self
+                .store
+                .write_sidecar_atomic(&entry.path, &disk_sha256, &sidecar)
+            {
+                Ok(()) => {
+                    entry.has_state_sidecar = true;
+                    let str_opt = |v: &Value| {
+                        v.as_str()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_owned)
+                    };
+                    if let Some(ch) = extracted_obj.get("character") {
+                        entry.character_name = str_opt(&ch["name"]);
+                        entry.class_and_levels = str_opt(&ch["classAndLevels"]);
+                        entry.level = str_opt(&ch["level"]);
+                    }
+                }
+                Err(err) => {
+                    eprintln!(
+                        "WARN: sidecar write after startup-edit template creation failed: {err:#}"
+                    );
+                    sidecar_dirty = true;
+                }
+            }
+        }
+        self.session_seq += 1;
+        let session_id = format!("{}-s{}", self.server_instance_id, self.session_seq);
+        let active_sheet = ActiveSheet {
+            rel_path: entry.path.clone(),
+            session_id,
+            pdf,
+            rt,
+            disk_sha256,
+            revision,
+            dirty_since_save: initial_dirty_since_save,
+            sidecar_dirty,
+            last_tick: Instant::now(),
+            projected,
+            page_pngs: BTreeMap::new(),
+            page_sizes: BTreeMap::new(),
+        };
+        self.last_save_conflict = None;
+        self.sync_tracker.mark_dirty();
+        let state = self.assemble_active_state_payload(&active_sheet, extracted_obj);
+        self.active = Some(active_sheet);
+        Ok(json!({
+            "status": "ok",
+            "sheet": entry,
+            "state": state,
+        }))
     }
 
     fn open_sheet_unchecked(&mut self, rel_path: &str) -> Result<Value> {
@@ -1206,33 +1440,46 @@ impl SheetWorker {
             .ok()
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
+        let Value::Object(extracted_obj) = rt.eval(EXTRACT_STATE_JS)? else {
+            bail!("state extraction did not return an object");
+        };
+        let startup_dirty = revision > 0;
         self.session_seq += 1;
         let session_id = format!("{}-s{}", self.server_instance_id, self.session_seq);
-        self.active = Some(ActiveSheet {
+        let active_sheet = ActiveSheet {
             rel_path: norm,
             session_id,
             pdf,
             rt,
             disk_sha256: sha,
             revision,
-            dirty_since_save: false,
+            dirty_since_save: startup_dirty,
             sidecar_dirty: false,
             last_tick: Instant::now(),
             projected: None,
             page_pngs: BTreeMap::new(),
             page_sizes: BTreeMap::new(),
-        });
+        };
         self.last_save_conflict = None;
-        let state = self.build_state_payload()?;
+        self.active = Some(active_sheet);
+        if startup_dirty && self.autosave {
+            if let Err(err) = self.persist_active(false) {
+                eprintln!("WARN: autosave after startup edits failed: {err:#}");
+            }
+        }
+        let state = self.assemble_active_state_payload(
+            self.active.as_ref().expect("active sheet was just set"),
+            extracted_obj,
+        );
         Ok(json!({"status": "ok", "state": state}))
     }
 
     fn build_state_payload(&self) -> Result<Value> {
-        let git = self.store.git_status()?;
-        let active_interaction = self.bridge.active_public();
-        let state_seq = self.bridge.next_state_seq();
-        let dirty_since_sync = self.sync_tracker.is_dirty();
         let Some(sh) = &self.active else {
+            let git = self.store.git_status_best_effort();
+            let active_interaction = self.bridge.active_public();
+            let state_seq = self.bridge.next_state_seq();
+            let dirty_since_sync = self.sync_tracker.is_dirty();
             return Ok(json!({
                 "open": false,
                 "serverInstanceId": self.server_instance_id,
@@ -1243,11 +1490,22 @@ impl SheetWorker {
                 "activeInteraction": active_interaction,
             }));
         };
-        let mut extracted = sh.rt.eval(EXTRACT_STATE_JS)?;
+        let Value::Object(extracted_obj) = sh.rt.eval(EXTRACT_STATE_JS)? else {
+            bail!("state extraction did not return an object");
+        };
+        Ok(self.assemble_active_state_payload(sh, extracted_obj))
+    }
+
+    fn assemble_active_state_payload(
+        &self,
+        sh: &ActiveSheet,
+        mut obj: serde_json::Map<String, Value>,
+    ) -> Value {
+        let git = self.store.git_status_best_effort();
+        let active_interaction = self.bridge.active_public();
+        let state_seq = self.bridge.next_state_seq();
+        let dirty_since_sync = self.sync_tracker.is_dirty();
         let diagnostics = sh.rt.diagnostics().unwrap_or(Value::Null);
-        let obj = extracted
-            .as_object_mut()
-            .ok_or_else(|| anyhow!("state extraction did not return an object"))?;
         obj.insert("open".into(), json!(true));
         obj.insert("serverInstanceId".into(), json!(self.server_instance_id));
         obj.insert("sessionId".into(), json!(sh.session_id));
@@ -1257,16 +1515,13 @@ impl SheetWorker {
         obj.insert("dirtySinceSave".into(), json!(sh.dirty_since_save));
         obj.insert("dirtySinceSync".into(), json!(dirty_since_sync));
         obj.insert("diagnostics".into(), diagnostics);
-        obj.insert("git".into(), serde_json::to_value(&git)?);
+        obj.insert("git".into(), json!(git));
         obj.insert("pdfium".into(), json!(self.renderer.is_some()));
-        obj.insert(
-            "activeInteraction".into(),
-            serde_json::to_value(&active_interaction)?,
-        );
+        obj.insert("activeInteraction".into(), json!(active_interaction));
         if let Some(conflict) = &self.last_save_conflict {
-            obj.insert("saveConflict".into(), serde_json::to_value(conflict)?);
+            obj.insert("saveConflict".into(), json!(conflict));
         }
-        Ok(extracted)
+        Value::Object(obj)
     }
 
     fn inspect_field(&self, name: &str) -> Result<Value> {
@@ -2138,6 +2393,27 @@ struct OpenRequest {
     session: Option<String>,
 }
 
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateFromTemplateRequest {
+    template: String,
+    name: String,
+    #[serde(default = "default_true")]
+    open: bool,
+    #[serde(default)]
+    overwrite: bool,
+    #[serde(default)]
+    force: bool,
+    #[serde(default)]
+    discard: Option<DiscardTarget>,
+    #[serde(default)]
+    session: Option<String>,
+}
+
 #[derive(Deserialize)]
 struct FieldQuery {
     name: String,
@@ -2267,6 +2543,7 @@ fn build_router(state: AppState) -> Router {
         .route("/icon.svg", get(handle_icon))
         .route("/ws", get(handle_ws))
         .route("/api/sheets", get(handle_list_sheets))
+        .route("/api/sheets/new", post(handle_create_from_template))
         .route(
             "/api/sheets/upload",
             post(handle_upload_sheet).layer(DefaultBodyLimit::max(crate::storage::MAX_PDF_BYTES)),
@@ -2436,8 +2713,15 @@ async fn handle_list_sheets(
     let store = Arc::clone(&state.store);
     match tokio::task::spawn_blocking(move || -> Result<Value> {
         let sheets = store.list_sheets()?;
-        let git = store.git_status()?;
-        Ok(json!({"sheets": sheets, "git": git}))
+        let templates: Vec<_> = sheets.iter().filter(|s| s.is_template).cloned().collect();
+        let characters: Vec<_> = sheets.iter().filter(|s| !s.is_template).cloned().collect();
+        let git = store.git_status_best_effort();
+        Ok(json!({
+            "sheets": sheets,
+            "templates": templates,
+            "characters": characters,
+            "git": git,
+        }))
     })
     .await
     {
@@ -2445,6 +2729,60 @@ async fn handle_list_sheets(
         Ok(Err(e)) => err_response(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")),
         Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
+}
+
+async fn handle_create_from_template(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<CreateFromTemplateRequest>,
+) -> Response {
+    if !state.check_auth(&headers, None) {
+        return err_response(StatusCode::UNAUTHORIZED, "unauthorized");
+    }
+    if req.overwrite {
+        return err_response(
+            StatusCode::BAD_REQUEST,
+            "creating a new character from a template is create-only and does not support overwrite=true; choose a new character name or use /api/sheets/upload",
+        );
+    }
+    if !req.open {
+        let store = Arc::clone(&state.store);
+        let sync_tracker = Arc::clone(&state.sync_tracker);
+        let template = req.template;
+        let name = req.name;
+        return match tokio::task::spawn_blocking(move || -> Result<_> {
+            let entry = store.create_sheet_from_template(&template, &name)?;
+            // Mark dirty inside the blocking task immediately after commit so a
+            // client disconnect dropping the handler future never skips Git sync.
+            sync_tracker.mark_dirty();
+            Ok(entry)
+        })
+        .await
+        {
+            Ok(Ok(entry)) => (
+                StatusCode::CREATED,
+                Json(json!({"status": "ok", "sheet": entry})),
+            )
+                .into_response(),
+            Ok(Err(e)) => {
+                let msg = format!("{e:#}");
+                err_response(map_create_sheet_error_status(&e), msg)
+            }
+            Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        };
+    }
+    state
+        .dispatch_job(|job_id, gate, done| WorkerCommand::CreateFromTemplate {
+            job_id,
+            gate,
+            done,
+            template: req.template,
+            name: req.name,
+            force: req.force,
+            discard: req.discard,
+            expected_session: req.session,
+        })
+        .await
 }
 
 async fn handle_upload_sheet(
@@ -2504,19 +2842,41 @@ async fn handle_upload_sheet(
     }
 
     let store = Arc::clone(&state.store);
+    let sync_tracker = Arc::clone(&state.sync_tracker);
     let overwrite = q.overwrite;
-    match tokio::task::spawn_blocking(move || store.commit_staged_upload(&norm, staged, overwrite))
-        .await
+    match tokio::task::spawn_blocking(move || -> Result<_> {
+        let entry = store.commit_staged_upload(&norm, staged, overwrite)?;
+        // Mark dirty inside the blocking task immediately after commit so a client
+        // disconnect dropping the handler future never skips idle Git sync.
+        sync_tracker.mark_dirty();
+        Ok(entry)
+    })
+    .await
     {
-        Ok(Ok(entry)) => {
-            state.sync_tracker.mark_dirty();
-            (StatusCode::CREATED, Json(json!({"sheet": entry}))).into_response()
-        }
+        Ok(Ok(entry)) => (StatusCode::CREATED, Json(json!({"sheet": entry}))).into_response(),
         Ok(Err(e)) => {
             let msg = format!("{e:#}");
-            let status = if msg.contains("already exists") {
-                StatusCode::CONFLICT
-            } else if msg.contains("exceeds 64 MiB") {
+            if e.chain().any(|c| {
+                c.downcast_ref::<crate::storage::SheetAlreadyExistsError>()
+                    .is_some()
+            }) {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(json!({"error": msg, "code": "already_exists"})),
+                )
+                    .into_response();
+            }
+            if e.chain().any(|c| {
+                c.downcast_ref::<crate::storage::SidecarConflictError>()
+                    .is_some()
+            }) {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(json!({"error": msg, "code": "sidecar_conflict"})),
+                )
+                    .into_response();
+            }
+            let status = if msg.contains("exceeds 64 MiB") {
                 StatusCode::PAYLOAD_TOO_LARGE
             } else {
                 StatusCode::BAD_REQUEST
@@ -2605,6 +2965,7 @@ async fn handle_session_state(
                 "open": true,
                 "busy": true,
                 "serverInstanceId": state.server_instance_id,
+                "stateSeq": inter.state_seq,
                 "activeInteraction": inter,
                 "git": git,
             })),
@@ -2635,6 +2996,7 @@ async fn handle_session_state(
                         "open": true,
                         "busy": true,
                         "serverInstanceId": state.server_instance_id,
+                        "stateSeq": inter.state_seq,
                         "activeInteraction": inter,
                         "git": git,
                     })),
@@ -6169,6 +6531,1549 @@ mod tests {
         assert_eq!(st, StatusCode::OK);
         assert_eq!(st3["dirtySinceSync"], true);
         assert_eq!(st3["git"]["head_backed_up"], false);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn templates_are_protected_and_new_character_from_template_honors_guards() {
+        let base = std::env::temp_dir().join(format!(
+            "mpmb-serve-templates-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(base.join("templates")).unwrap();
+        make_scripted_hp_pdf(&base.join("templates/MPMB-2024-Blank.pdf"), "10", "", None);
+        make_scripted_hp_pdf(&base.join("existing.pdf"), "20", "", None);
+
+        let cfg = ServeConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            store: StoreConfig {
+                root: base.clone(),
+                git: None,
+            },
+            auth_token: None,
+            allow_unauthenticated: false,
+            git_auto_sync_secs: 0,
+            autosave: false,
+            default_sheet: None,
+        };
+        let state = AppState::start(&cfg).unwrap();
+        let app = build_router(state);
+
+        // 1. /api/sheets splits templates vs characters and marks is_template.
+        let (st, list) = get_json(&app, "/api/sheets").await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(list["templates"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            list["templates"][0]["path"],
+            "templates/MPMB-2024-Blank.pdf"
+        );
+        assert_eq!(list["templates"][0]["is_template"], true);
+        assert_eq!(list["characters"].as_array().unwrap().len(), 1);
+        assert_eq!(list["characters"][0]["path"], "existing.pdf");
+        assert_eq!(list["characters"][0]["is_template"], false);
+
+        // 2. Direct open of a template is rejected.
+        let (st, err) = post_json(
+            &app,
+            "/api/session/open",
+            json!({"path": "templates/MPMB-2024-Blank.pdf"}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        assert!(err["error"]
+            .as_str()
+            .unwrap()
+            .contains("template sheets cannot be opened directly"));
+
+        // 3. Creating a new character from template copies + opens it immediately.
+        let (st, created) = post_json(
+            &app,
+            "/api/sheets/new",
+            json!({
+                "template": "templates/MPMB-2024-Blank.pdf",
+                "name": "Aelar Stormwind",
+                "open": true
+            }),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK, "unexpected create response: {created}");
+        assert_eq!(created["sheet"]["path"], "Aelar Stormwind.pdf");
+        assert_eq!(created["sheet"]["is_template"], false);
+        assert_eq!(created["state"]["open"], true);
+        assert_eq!(created["state"]["path"], "Aelar Stormwind.pdf");
+        assert!(base.join("Aelar Stormwind.pdf").is_file());
+
+        // 4. Duplicate name fails with 409 Conflict.
+        let (st, dup) = post_json(
+            &app,
+            "/api/sheets/new",
+            json!({
+                "template": "templates/MPMB-2024-Blank.pdf",
+                "name": "Aelar Stormwind",
+                "open": true
+            }),
+        )
+        .await;
+        assert_eq!(st, StatusCode::CONFLICT, "unexpected dup response: {dup}");
+
+        // 5. With unsaved edits in --no-autosave mode, POST /api/sheets/new (open: true)
+        //    returns 409 unsaved_edits WITHOUT creating an orphaned file on disk.
+        let (st, _) = post_json(
+            &app,
+            "/api/session/edit",
+            json!({"field": "HP Current", "value": "15", "sheet": "Aelar Stormwind.pdf"}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+
+        let (st, conflict) = post_json(
+            &app,
+            "/api/sheets/new",
+            json!({
+                "template": "templates/MPMB-2024-Blank.pdf",
+                "name": "Bryn",
+                "open": true
+            }),
+        )
+        .await;
+        assert_eq!(st, StatusCode::CONFLICT);
+        assert_eq!(conflict["code"], "unsaved_edits");
+        assert!(
+            !base.join("Bryn.pdf").exists(),
+            "rejected create+open must not leave an orphaned file on disk"
+        );
+
+        // Confirming with the exact discardTarget creates and opens Bryn.pdf.
+        let target = conflict["discardTarget"].clone();
+        let (st, ok_bryn) = post_json(
+            &app,
+            "/api/sheets/new",
+            json!({
+                "template": "templates/MPMB-2024-Blank.pdf",
+                "name": "Bryn",
+                "open": true,
+                "force": true,
+                "discard": target
+            }),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK, "unexpected forced create: {ok_bryn}");
+        assert_eq!(ok_bryn["state"]["path"], "Bryn.pdf");
+        assert!(base.join("Bryn.pdf").is_file());
+
+        // 6. If opening the newly created character fails (e.g. broken template script),
+        //    nothing is published to disk so retries never hit a stale duplicate.
+        make_scripted_hp_pdf(
+            &base.join("templates/Broken-Startup.pdf"),
+            "10",
+            "throw new Error('broken template startup');",
+            None,
+        );
+        let (st, fail1) = post_json(
+            &app,
+            "/api/sheets/new",
+            json!({
+                "template": "templates/Broken-Startup.pdf",
+                "name": "Cora",
+                "open": true
+            }),
+        )
+        .await;
+        assert_eq!(
+            st,
+            StatusCode::BAD_REQUEST,
+            "expected open failure: {fail1}"
+        );
+        assert!(
+            !base.join("Cora.pdf").exists(),
+            "failed create+open must not publish Cora.pdf to disk"
+        );
+        let (st, fail2) = post_json(
+            &app,
+            "/api/sheets/new",
+            json!({
+                "template": "templates/Broken-Startup.pdf",
+                "name": "Cora",
+                "open": true
+            }),
+        )
+        .await;
+        assert_eq!(
+            st,
+            StatusCode::BAD_REQUEST,
+            "retry after failed startup must not fail with duplicate 409: {fail2}"
+        );
+
+        // 7. POST /api/sheets/new is unconditionally create-only: overwrite:true is rejected
+        //    with 400 BEFORE touching disk or active session, for both open:true and open:false,
+        //    preserving preexisting PDF bytes and sidecars intact.
+        let existing_bytes_before = std::fs::read(base.join("existing.pdf")).unwrap();
+        let sidecar_path = base.join("existing.pdf.state.json");
+        let sidecar_before = serde_json::to_vec_pretty(&json!({
+            "schema": 1,
+            "character": {"name": "Existing Hero", "level": "5"}
+        }))
+        .unwrap();
+        std::fs::write(&sidecar_path, &sidecar_before).unwrap();
+
+        // Open existing.pdf so we also verify the active session stays intact.
+        let (st, _) = post_json(&app, "/api/session/open", json!({"path": "existing.pdf"})).await;
+        assert_eq!(st, StatusCode::OK);
+
+        for open_mode in [true, false] {
+            let (st, reject_ow) = post_json(
+                &app,
+                "/api/sheets/new",
+                json!({
+                    "template": "templates/Broken-Startup.pdf",
+                    "name": "existing",
+                    "overwrite": true,
+                    "open": open_mode
+                }),
+            )
+            .await;
+            assert_eq!(
+                st,
+                StatusCode::BAD_REQUEST,
+                "overwrite:true (open={open_mode}) must be rejected: {reject_ow}"
+            );
+            assert!(
+                reject_ow["error"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("create-only"),
+                "expected create-only rejection message: {reject_ow}"
+            );
+            assert_eq!(
+                std::fs::read(base.join("existing.pdf")).unwrap(),
+                existing_bytes_before,
+                "existing.pdf bytes must remain unchanged for open={open_mode}"
+            );
+            assert_eq!(
+                std::fs::read(&sidecar_path).unwrap(),
+                sidecar_before,
+                "existing.pdf.state.json sidecar must remain unchanged for open={open_mode}"
+            );
+        }
+
+        // overwrite:true on a non-existent destination is also rejected without creating a file.
+        let (st, reject_ow_new) = post_json(
+            &app,
+            "/api/sheets/new",
+            json!({
+                "template": "templates/MPMB-2024-Blank.pdf",
+                "name": "NeverCreated",
+                "overwrite": true,
+                "open": true
+            }),
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST, "{reject_ow_new}");
+        assert!(!base.join("NeverCreated.pdf").exists());
+
+        // open:false against an existing character (without overwrite) returns 409 and preserves PDF + sidecar.
+        let (st, dup_closed) = post_json(
+            &app,
+            "/api/sheets/new",
+            json!({
+                "template": "templates/MPMB-2024-Blank.pdf",
+                "name": "existing",
+                "open": false
+            }),
+        )
+        .await;
+        assert_eq!(st, StatusCode::CONFLICT, "{dup_closed}");
+        assert_eq!(
+            std::fs::read(base.join("existing.pdf")).unwrap(),
+            existing_bytes_before
+        );
+        assert_eq!(std::fs::read(&sidecar_path).unwrap(), sidecar_before);
+
+        // 8. If EXTRACT_STATE_JS fails AFTER rt.ready() succeeds, nothing is published to disk
+        //    and the previous active session (existing.pdf) remains intact.
+        make_scripted_hp_pdf(
+            &base.join("templates/Broken-Extract.pdf"),
+            "10",
+            "globalThis.getField = function() { throw new Error('extract boom'); };",
+            None,
+        );
+        let (st, fail_extract) = post_json(
+            &app,
+            "/api/sheets/new",
+            json!({
+                "template": "templates/Broken-Extract.pdf",
+                "name": "Dax",
+                "open": true
+            }),
+        )
+        .await;
+        assert_eq!(
+            st,
+            StatusCode::BAD_REQUEST,
+            "expected state extraction failure: {fail_extract}"
+        );
+        assert!(
+            !base.join("Dax.pdf").exists(),
+            "failed post-ready state extraction must not publish Dax.pdf"
+        );
+        let (st, after_state) = get_json(&app, "/api/session/state").await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(
+            after_state["path"], "existing.pdf",
+            "previous active session existing.pdf must be preserved after failed open"
+        );
+        assert!(base.join("existing.pdf").is_file());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn template_create_does_not_publish_before_startup_and_protects_concurrent_same_content_writer(
+    ) {
+        let base = std::env::temp_dir().join(format!(
+            "mpmb-serve-template-race-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(base.join("templates")).unwrap();
+        make_scripted_hp_pdf(&base.join("baseline.pdf"), "20", "", None);
+        make_scripted_hp_pdf(
+            &base.join("templates/Dialog-Then-Fail.pdf"),
+            "10",
+            "app.alert('pause-fail'); throw new Error('startup failed after dialog');",
+            None,
+        );
+        make_scripted_hp_pdf(
+            &base.join("templates/Dialog-Then-Ok.pdf"),
+            "10",
+            "app.alert('pause-ok');",
+            None,
+        );
+
+        let cfg = ServeConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            store: StoreConfig {
+                root: base.clone(),
+                git: None,
+            },
+            auth_token: None,
+            allow_unauthenticated: false,
+            git_auto_sync_secs: 0,
+            autosave: false,
+            default_sheet: None,
+        };
+        let state = AppState::start(&cfg).unwrap();
+        let app = build_router(state);
+
+        // Open baseline.pdf first so we verify active session preservation across both races.
+        let (st, _) = post_json(&app, "/api/session/open", json!({"path": "baseline.pdf"})).await;
+        assert_eq!(st, StatusCode::OK);
+
+        // A. Same-content replacement during pending startup that subsequently fails:
+        //    1) Start POST /api/sheets/new -> pauses on app.alert (202 Accepted) WITHOUT
+        //       publishing RaceFail.pdf to disk yet.
+        let (st, paused_fail) = post_json(
+            &app,
+            "/api/sheets/new",
+            json!({
+                "template": "templates/Dialog-Then-Fail.pdf",
+                "name": "RaceFail",
+                "open": true
+            }),
+        )
+        .await;
+        assert_eq!(
+            st,
+            StatusCode::ACCEPTED,
+            "expected 202 dialog pause: {paused_fail}"
+        );
+        assert!(
+            !base.join("RaceFail.pdf").exists(),
+            "destination must NOT be published before template startup finishes"
+        );
+
+        //    2) While startup is paused, a second authorized writer uploads RaceFail.pdf
+        //       with IDENTICAL template bytes.
+        let same_bytes = std::fs::read(base.join("templates/Dialog-Then-Fail.pdf")).unwrap();
+        let upload_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sheets/upload?name=RaceFail.pdf&overwrite=false")
+                    .header("content-type", "application/pdf")
+                    .body(Body::from(same_bytes.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(upload_resp.status(), StatusCode::CREATED);
+
+        //    3) Resume the startup dialog so the first job fails startup. Because it never
+        //       published RaceFail.pdf and performs no blind SHA-based delete, the second
+        //       writer's identical-bytes RaceFail.pdf survives intact!
+        let fail_id = paused_fail["interaction"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let (st, fail_res) = post_json(
+            &app,
+            &format!("/api/session/interaction/{fail_id}"),
+            json!({"button": 1}),
+        )
+        .await;
+        assert_eq!(
+            st,
+            StatusCode::BAD_REQUEST,
+            "expected startup failure: {fail_res}"
+        );
+        assert!(base.join("RaceFail.pdf").is_file());
+        assert_eq!(
+            std::fs::read(base.join("RaceFail.pdf")).unwrap(),
+            same_bytes,
+            "second writer's identical-content file must survive failed startup"
+        );
+
+        // B. Competing writer during pending startup that subsequently succeeds:
+        //    1) Start POST /api/sheets/new -> pauses on app.alert (202 Accepted), no file yet.
+        let (st, paused_ok) = post_json(
+            &app,
+            "/api/sheets/new",
+            json!({
+                "template": "templates/Dialog-Then-Ok.pdf",
+                "name": "RaceOk",
+                "open": true
+            }),
+        )
+        .await;
+        assert_eq!(
+            st,
+            StatusCode::ACCEPTED,
+            "expected 202 dialog pause: {paused_ok}"
+        );
+        assert!(!base.join("RaceOk.pdf").exists());
+
+        //    2) Second authorized writer uploads RaceOk.pdf while startup is paused.
+        let writer2_bytes = std::fs::read(base.join("baseline.pdf")).unwrap();
+        let upload_resp2 = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sheets/upload?name=RaceOk.pdf&overwrite=false")
+                    .header("content-type", "application/pdf")
+                    .body(Body::from(writer2_bytes.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(upload_resp2.status(), StatusCode::CREATED);
+
+        //    3) Resume startup dialog -> atomic create-only publish fails with 409 Conflict
+        //       without overwriting writer 2's RaceOk.pdf or switching away from baseline.pdf!
+        let ok_id = paused_ok["interaction"]["id"].as_str().unwrap().to_owned();
+        let (st, ok_conflict) = post_json(
+            &app,
+            &format!("/api/session/interaction/{ok_id}"),
+            json!({"button": 1}),
+        )
+        .await;
+        assert_eq!(
+            st,
+            StatusCode::CONFLICT,
+            "atomic create-only publish must reject racing file with 409: {ok_conflict}"
+        );
+        assert_eq!(
+            std::fs::read(base.join("RaceOk.pdf")).unwrap(),
+            writer2_bytes,
+            "second writer's RaceOk.pdf must not be overwritten"
+        );
+        let (st, active_state) = get_json(&app, "/api/session/state").await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(active_state["path"], "baseline.pdf");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn template_create_succeeds_with_graceful_git_status_when_git_index_is_corrupt() {
+        let base = std::env::temp_dir().join(format!(
+            "mpmb-serve-corrupt-git-index-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let bare = base.join("remote.git");
+        let data_dir = base.join("sheets");
+        std::fs::create_dir_all(&bare).unwrap();
+        std::fs::create_dir_all(&data_dir).unwrap();
+        assert!(std::process::Command::new("git")
+            .args(["init", "--bare", "-b", "main"])
+            .arg(&bare)
+            .status()
+            .unwrap()
+            .success());
+
+        let cfg = ServeConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            store: StoreConfig {
+                root: data_dir.clone(),
+                git: Some(GitConfig::new(bare.to_string_lossy().into_owned())),
+            },
+            auth_token: None,
+            allow_unauthenticated: false,
+            git_auto_sync_secs: 0,
+            autosave: false,
+            default_sheet: None,
+        };
+        let state = AppState::start(&cfg).unwrap();
+        let store_ref = Arc::clone(&state.store);
+        let app = build_router(state);
+
+        std::fs::create_dir_all(data_dir.join("templates")).unwrap();
+        make_scripted_hp_pdf(
+            &data_dir.join("templates/MPMB-2024-Blank.pdf"),
+            "10",
+            "",
+            None,
+        );
+        make_scripted_hp_pdf(&data_dir.join("baseline.pdf"), "20", "", None);
+
+        // Baseline git sync so .git/index exists and is populated, then open baseline.pdf.
+        let (st, _) = post_json(&app, "/api/git/sync", json!({"message": "seed"})).await;
+        assert_eq!(st, StatusCode::OK);
+        let (st, _) = post_json(&app, "/api/session/open", json!({"path": "baseline.pdf"})).await;
+        assert_eq!(st, StatusCode::OK);
+
+        // Corrupt .git/index so real `git status --porcelain` fails.
+        std::fs::write(data_dir.join(".git/index"), b"CORRUPT_GIT_INDEX_BYTES").unwrap();
+        assert!(
+            store_ref.git_status().is_err(),
+            "corrupted .git/index must cause real git_status() to fail"
+        );
+
+        // POST /api/sheets/new must still succeed with 200 OK, keep file + active session
+        // consistent, and report graceful Git-status error metadata instead of failing post-commit.
+        let (st, created) = post_json(
+            &app,
+            "/api/sheets/new",
+            json!({
+                "template": "templates/MPMB-2024-Blank.pdf",
+                "name": "CorruptGitHero",
+                "open": true
+            }),
+        )
+        .await;
+        assert_eq!(
+            st,
+            StatusCode::OK,
+            "post-commit git status failure must not fail creation: {created}"
+        );
+        assert!(data_dir.join("CorruptGitHero.pdf").is_file());
+        assert_eq!(created["sheet"]["path"], "CorruptGitHero.pdf");
+        assert_eq!(created["state"]["open"], true);
+        assert_eq!(created["state"]["path"], "CorruptGitHero.pdf");
+        assert_eq!(created["state"]["git"]["enabled"], true);
+        assert!(
+            created["state"]["git"]["last_error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("git status unavailable"),
+            "expected graceful git status error metadata: {created}"
+        );
+
+        let (st, follow_state) = get_json(&app, "/api/session/state").await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(follow_state["path"], "CorruptGitHero.pdf");
+        assert!(follow_state["git"]["last_error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("git status unavailable"));
+
+        // GET /api/sheets must ALSO degrade gracefully via git_status_best_effort() so
+        // refreshLibrary() still shows the newly created character instead of returning 500.
+        let (st_lib, lib_body) = get_json(&app, "/api/sheets").await;
+        assert_eq!(
+            st_lib,
+            StatusCode::OK,
+            "GET /api/sheets must not fail with 500 on corrupt .git/index: {lib_body}"
+        );
+        assert!(lib_body["characters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["path"] == "CorruptGitHero.pdf"));
+        assert_eq!(lib_body["git"]["enabled"], true);
+        assert!(lib_body["git"]["last_error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("git status unavailable"));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn template_create_missing_template_returns_404_in_both_modes_and_ignores_orphan_sidecars(
+    ) {
+        let base = std::env::temp_dir().join(format!(
+            "mpmb-serve-template-404-orphans-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(base.join("templates")).unwrap();
+        let tpl_path = base.join("templates/MPMB-2024-Blank.pdf");
+        make_scripted_hp_pdf(&tpl_path, "12", "", None);
+
+        let cfg = ServeConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            store: StoreConfig {
+                root: base.clone(),
+                git: None,
+            },
+            auth_token: None,
+            allow_unauthenticated: false,
+            git_auto_sync_secs: 0,
+            autosave: false,
+            default_sheet: None,
+        };
+        let app = build_router(AppState::start(&cfg).unwrap());
+
+        // 1. Missing template returns 404 Not Found for BOTH open:false and open:true.
+        let (st_no_open, body_no_open) = post_json(
+            &app,
+            "/api/sheets/new",
+            json!({
+                "template": "templates/Missing.pdf",
+                "name": "UnusedOne",
+                "open": false
+            }),
+        )
+        .await;
+        assert_eq!(
+            st_no_open,
+            StatusCode::NOT_FOUND,
+            "open:false missing template should return 404: {body_no_open}"
+        );
+
+        let (st_open, body_open) = post_json(
+            &app,
+            "/api/sheets/new",
+            json!({
+                "template": "templates/Missing.pdf",
+                "name": "UnusedTwo",
+                "open": true
+            }),
+        )
+        .await;
+        assert_eq!(
+            st_open,
+            StatusCode::NOT_FOUND,
+            "open:true missing template should return 404: {body_open}"
+        );
+
+        // Separate /api/session/open contract for missing sheets remains 400 Bad Request.
+        let (st_session_open, _) =
+            post_json(&app, "/api/session/open", json!({ "path": "missing.pdf" })).await;
+        assert_eq!(st_session_open, StatusCode::BAD_REQUEST);
+
+        // 2. Orphaned primary and legacy sidecars matching the template SHA-256 do not
+        //    attach stale character metadata to newly created characters.
+        let (st_list, list_before) = get_json(&app, "/api/sheets").await;
+        assert_eq!(st_list, StatusCode::OK);
+        let tpl_sha = list_before["templates"][0]["sha256"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        std::fs::write(
+            base.join("OrphanPrimary.pdf.state.json"),
+            serde_json::to_vec_pretty(&json!({
+                "schema": "mpmb-sheet-state-v1",
+                "pdfSha256": tpl_sha,
+                "character": { "name": "Old Primary", "classAndLevels": "Cleric 8", "level": "8" }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            base.join("OrphanLegacy.state.json"),
+            serde_json::to_vec_pretty(&json!({
+                "pdfSha256": tpl_sha,
+                "character": { "name": "Old Legacy", "classAndLevels": "Paladin 6", "level": "6" }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let (st_p, created_p) = post_json(
+            &app,
+            "/api/sheets/new",
+            json!({
+                "template": "templates/MPMB-2024-Blank.pdf",
+                "name": "OrphanPrimary",
+                "open": true
+            }),
+        )
+        .await;
+        assert_eq!(
+            st_p,
+            StatusCode::OK,
+            "create over primary orphan failed: {created_p}"
+        );
+        assert_eq!(created_p["sheet"]["has_state_sidecar"], false);
+        assert!(created_p["sheet"]["character_name"].is_null());
+        assert!(created_p["sheet"]["level"].is_null());
+
+        let (st_l, created_l) = post_json(
+            &app,
+            "/api/sheets/new",
+            json!({
+                "template": "templates/MPMB-2024-Blank.pdf",
+                "name": "OrphanLegacy",
+                "open": false
+            }),
+        )
+        .await;
+        assert_eq!(
+            st_l,
+            StatusCode::CREATED,
+            "create over legacy orphan failed: {created_l}"
+        );
+        assert_eq!(created_l["sheet"]["has_state_sidecar"], false);
+        assert!(created_l["sheet"]["character_name"].is_null());
+        assert!(created_l["sheet"]["level"].is_null());
+
+        let (st_after, list_after) = get_json(&app, "/api/sheets").await;
+        assert_eq!(st_after, StatusCode::OK);
+        for name in ["OrphanPrimary.pdf", "OrphanLegacy.pdf"] {
+            let entry = list_after["characters"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["path"] == name)
+                .unwrap();
+            assert_eq!(entry["has_state_sidecar"], false);
+            assert!(entry["character_name"].is_null());
+            assert!(entry["level"].is_null());
+        }
+
+        // 3. Double-extension ownership via HTTP API:
+        //    - Stamped `DoubleHero.pdf` -> creating `DoubleHero.pdf.pdf` succeeds, preserves
+        //      `DoubleHero.pdf.state.json` and `DoubleHero.pdf` metadata, and gives
+        //      `DoubleHero.pdf.pdf` clean metadata.
+        //    - Pre-PR unstamped `PrePrDouble.pdf` -> creating `PrePrDouble.pdf.pdf` conflicts
+        //      (409) in both open modes without hiding `PrePrDouble.pdf`'s metadata.
+        //    - Reverse: `RevDouble.pdf.pdf` with legacy `RevDouble.pdf.state.json` -> creating
+        //      `RevDouble` conflicts (409) in both open modes without deleting or clobbering
+        //      `RevDouble.pdf.state.json`.
+        let tpl_bytes = std::fs::read(&tpl_path).unwrap();
+        std::fs::write(base.join("DoubleHero.pdf"), &tpl_bytes).unwrap();
+        let double_primary_sc = base.join("DoubleHero.pdf.state.json");
+        let double_primary_bytes = serde_json::to_vec_pretty(&json!({
+            "schema": "mpmb-sheet-state/v1",
+            "pdfFileName": "DoubleHero.pdf",
+            "pdfSha256": tpl_sha,
+            "character": { "name": "Existing DoubleHero", "level": "10" }
+        }))
+        .unwrap();
+        std::fs::write(&double_primary_sc, &double_primary_bytes).unwrap();
+
+        let (st_dbl, created_dbl) = post_json(
+            &app,
+            "/api/sheets/new",
+            json!({
+                "template": "templates/MPMB-2024-Blank.pdf",
+                "name": "DoubleHero.pdf.pdf",
+                "open": false
+            }),
+        )
+        .await;
+        assert_eq!(
+            st_dbl,
+            StatusCode::CREATED,
+            "create DoubleHero.pdf.pdf failed: {created_dbl}"
+        );
+        assert_eq!(created_dbl["sheet"]["has_state_sidecar"], false);
+        assert!(created_dbl["sheet"]["character_name"].is_null());
+        assert_eq!(
+            std::fs::read(&double_primary_sc).unwrap(),
+            double_primary_bytes,
+            "DoubleHero.pdf.state.json bytes must remain untouched"
+        );
+
+        std::fs::write(base.join("PrePrDouble.pdf"), &tpl_bytes).unwrap();
+        let pre_pr_sc = base.join("PrePrDouble.pdf.state.json");
+        let pre_pr_bytes = serde_json::to_vec_pretty(&json!({
+            "schema": "mpmb-sheet-state/v1",
+            "pdfSha256": tpl_sha,
+            "character": { "name": "Pre-PR Unstamped Hero", "level": "11" }
+        }))
+        .unwrap();
+        std::fs::write(&pre_pr_sc, &pre_pr_bytes).unwrap();
+        for open_flag in [false, true] {
+            let (st_pre, body_pre) = post_json(
+                &app,
+                "/api/sheets/new",
+                json!({
+                    "template": "templates/MPMB-2024-Blank.pdf",
+                    "name": "PrePrDouble.pdf.pdf",
+                    "open": open_flag
+                }),
+            )
+            .await;
+            assert_eq!(
+                st_pre,
+                StatusCode::CONFLICT,
+                "pre-PR unstamped sidecar collision must return 409 (open={open_flag}): {body_pre}"
+            );
+        }
+        assert!(!base.join("PrePrDouble.pdf.pdf").exists());
+        assert_eq!(std::fs::read(&pre_pr_sc).unwrap(), pre_pr_bytes);
+
+        std::fs::write(base.join("RevDouble.pdf.pdf"), &tpl_bytes).unwrap();
+        let rev_legacy_sc = base.join("RevDouble.pdf.state.json");
+        let rev_legacy_bytes = serde_json::to_vec_pretty(&json!({
+            "pdfSha256": tpl_sha,
+            "character": { "name": "Existing RevDouble Legacy", "level": "15" }
+        }))
+        .unwrap();
+        std::fs::write(&rev_legacy_sc, &rev_legacy_bytes).unwrap();
+
+        for open_flag in [false, true] {
+            let (st_rev, body_rev) = post_json(
+                &app,
+                "/api/sheets/new",
+                json!({
+                    "template": "templates/MPMB-2024-Blank.pdf",
+                    "name": "RevDouble",
+                    "open": open_flag
+                }),
+            )
+            .await;
+            assert_eq!(
+                st_rev,
+                StatusCode::CONFLICT,
+                "creating RevDouble over RevDouble.pdf.pdf legacy sidecar must return 409 (open={open_flag}): {body_rev}"
+            );
+        }
+        assert!(!base.join("RevDouble.pdf").exists());
+        assert_eq!(
+            std::fs::read(&rev_legacy_sc).unwrap(),
+            rev_legacy_bytes,
+            "RevDouble.pdf.state.json bytes must remain untouched"
+        );
+
+        // 4. Unremovable orphaned sidecar via HTTP API keeps disk, listing, and active
+        //    session consistent, AND retrying the same name succeeds once unlocked.
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_SHARE_READ: u32 = 0x0000_0001;
+            const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+            let locked_sc = base.join("LockedApiOrphan.pdf.state.json");
+            let locked_sc_bytes = serde_json::to_vec_pretty(&json!({
+                "pdfSha256": tpl_sha,
+                "character": { "name": "Locked API Hero" }
+            }))
+            .unwrap();
+            std::fs::write(&locked_sc, &locked_sc_bytes).unwrap();
+            // Hold a real Windows handle denying FILE_SHARE_DELETE (read/write sharing only)
+            // so `fs::remove_file` deterministically fails while the sidecar stays readable.
+            let lock_handle = std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                .open(&locked_sc)
+                .unwrap();
+
+            let (st_locked, body_locked) = post_json(
+                &app,
+                "/api/sheets/new",
+                json!({
+                    "template": "templates/MPMB-2024-Blank.pdf",
+                    "name": "LockedApiOrphan",
+                    "open": true
+                }),
+            )
+            .await;
+            assert_eq!(
+                st_locked,
+                StatusCode::BAD_REQUEST,
+                "unremovable orphan must fail cleanly: {body_locked}"
+            );
+            assert!(
+                body_locked["error"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("failed to remove stale sidecar"),
+                "expected orphan-removal failure message: {body_locked}"
+            );
+            assert!(!base.join("LockedApiOrphan.pdf").exists());
+            assert_eq!(std::fs::read(&locked_sc).unwrap(), locked_sc_bytes);
+            let (st_sess, sess) = get_json(&app, "/api/session/state").await;
+            assert_eq!(st_sess, StatusCode::OK);
+            assert_eq!(sess["path"], "OrphanPrimary.pdf");
+
+            drop(lock_handle);
+            let (st_retry, retry_body) = post_json(
+                &app,
+                "/api/sheets/new",
+                json!({
+                    "template": "templates/MPMB-2024-Blank.pdf",
+                    "name": "LockedApiOrphan",
+                    "open": true
+                }),
+            )
+            .await;
+            assert_eq!(
+                st_retry,
+                StatusCode::OK,
+                "retry after unlocking orphan should succeed: {retry_body}"
+            );
+            assert_eq!(retry_body["sheet"]["has_state_sidecar"], false);
+            assert!(retry_body["sheet"]["character_name"].is_null());
+            assert!(!locked_sc.exists());
+        }
+        #[cfg(unix)]
+        {
+            // Inject failure specifically for this test's orphan sidecar path so staging
+            // succeeds and the HTTP test deterministically exercises `invalidate_sidecars_for`
+            // (even when running as root or concurrently with other tests).
+            let locked_sc = base.join("LockedApiOrphan.pdf.state.json");
+            let locked_sc_bytes = serde_json::to_vec_pretty(&json!({
+                "pdfSha256": tpl_sha,
+                "character": { "name": "Locked API Hero" }
+            }))
+            .unwrap();
+            std::fs::write(&locked_sc, &locked_sc_bytes).unwrap();
+            let canonical_locked_sc = base
+                .canonicalize()
+                .unwrap_or_else(|_| base.clone())
+                .join("LockedApiOrphan.pdf.state.json");
+            let fault_guard = crate::storage::fail_sidecar_remove_for_path(canonical_locked_sc);
+
+            let (st_locked, body_locked) = post_json(
+                &app,
+                "/api/sheets/new",
+                json!({
+                    "template": "templates/MPMB-2024-Blank.pdf",
+                    "name": "LockedApiOrphan",
+                    "open": true
+                }),
+            )
+            .await;
+            drop(fault_guard);
+
+            assert_eq!(
+                st_locked,
+                StatusCode::BAD_REQUEST,
+                "unremovable orphan must fail cleanly: {body_locked}"
+            );
+            assert!(
+                body_locked["error"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("failed to remove stale sidecar"),
+                "Unix HTTP test must fail at orphan removal, not staging: {body_locked}"
+            );
+            assert!(!base.join("LockedApiOrphan.pdf").exists());
+            assert_eq!(std::fs::read(&locked_sc).unwrap(), locked_sc_bytes);
+            let (st_sess, sess) = get_json(&app, "/api/session/state").await;
+            assert_eq!(st_sess, StatusCode::OK);
+            assert_eq!(sess["path"], "OrphanPrimary.pdf");
+
+            // Once orphan removal succeeds, retrying the exact same name succeeds cleanly.
+            let (st_retry, retry_body) = post_json(
+                &app,
+                "/api/sheets/new",
+                json!({
+                    "template": "templates/MPMB-2024-Blank.pdf",
+                    "name": "LockedApiOrphan",
+                    "open": true
+                }),
+            )
+            .await;
+            assert_eq!(
+                st_retry,
+                StatusCode::OK,
+                "retry after orphan becomes removable should succeed: {retry_body}"
+            );
+            assert_eq!(retry_body["sheet"]["has_state_sidecar"], false);
+            assert!(retry_body["sheet"]["character_name"].is_null());
+            assert!(!locked_sc.exists());
+        }
+
+        // Upload conflict responses distinguish existing PDFs (`already_exists`) from
+        // absent-PDF sidecar conflicts (`sidecar_conflict`) so the PWA only prompts to
+        // overwrite when the destination PDF actually exists.
+        let upload_sidecar_conflict_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sheets/upload?name=RevDouble.pdf&overwrite=false")
+                    .header("content-type", "application/pdf")
+                    .body(Body::from(tpl_bytes.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(upload_sidecar_conflict_resp.status(), StatusCode::CONFLICT);
+        let sidecar_conflict_json: Value = serde_json::from_slice(
+            &axum::body::to_bytes(upload_sidecar_conflict_resp.into_body(), 1024 * 1024)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(sidecar_conflict_json["code"], "sidecar_conflict");
+
+        let upload_exists_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sheets/upload?name=DoubleHero.pdf&overwrite=false")
+                    .header("content-type", "application/pdf")
+                    .body(Body::from(tpl_bytes.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(upload_exists_resp.status(), StatusCode::CONFLICT);
+        let exists_json: Value = serde_json::from_slice(
+            &axum::body::to_bytes(upload_exists_resp.into_body(), 1024 * 1024)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(exists_json["code"], "already_exists");
+
+        // User-controlled filenames containing "already exists" must still classify
+        // sidecar conflicts as `sidecar_conflict` (not `already_exists`).
+        std::fs::write(base.join("already exists.pdf.pdf"), &tpl_bytes).unwrap();
+        let tricked_sc = base.join("already exists.pdf.state.json");
+        let tricked_bytes = serde_json::to_vec_pretty(&json!({
+            "pdfSha256": tpl_sha,
+            "character": { "name": "Tricky Name Owner", "level": "8" }
+        }))
+        .unwrap();
+        std::fs::write(&tricked_sc, &tricked_bytes).unwrap();
+        let tricked_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sheets/upload?name=already%20exists.pdf&overwrite=false")
+                    .header("content-type", "application/pdf")
+                    .body(Body::from(tpl_bytes.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(tricked_resp.status(), StatusCode::CONFLICT);
+        let tricked_json: Value = serde_json::from_slice(
+            &axum::body::to_bytes(tricked_resp.into_body(), 1024 * 1024)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(tricked_json["code"], "sidecar_conflict");
+        assert!(!base.join("already exists.pdf").exists());
+        assert_eq!(std::fs::read(&tricked_sc).unwrap(), tricked_bytes);
+
+        // Invalid template source containing "conflict" in its filename must return
+        // 400 Bad Request (not 409) in BOTH create-only (open=false) and create-and-open (open=true).
+        for open_flag in [false, true] {
+            let (st_bad_tpl, body_bad_tpl) = post_json(
+                &app,
+                "/api/sheets/new",
+                json!({
+                    "template": "conflict.pdf",
+                    "name": "UnusedDestForBadTpl",
+                    "open": open_flag
+                }),
+            )
+            .await;
+            assert_eq!(
+                st_bad_tpl,
+                StatusCode::BAD_REQUEST,
+                "invalid template source 'conflict.pdf' with open={open_flag} must be 400, got {st_bad_tpl}: {body_bad_tpl}"
+            );
+            assert!(!base.join("UnusedDestForBadTpl.pdf").exists());
+        }
+
+        // On casefold filesystems where `templateſ` (U+017F) aliases `templates/`,
+        // verify HTTP direct-open AND create-to-missing-file are both rejected without
+        // mutating the template fixture bytes.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let tpl_meta = std::fs::symlink_metadata(base.join("templates")).ok();
+            let alias_meta = std::fs::symlink_metadata(base.join("template\u{017f}")).ok();
+            if let (Some(tm), Some(am)) = (tpl_meta, alias_meta) {
+                if tm.dev() == am.dev() && tm.ino() == am.ino() {
+                    let (st_open_alias, body_open_alias) = post_json(
+                        &app,
+                        "/api/session/open",
+                        json!({ "path": "template\u{017f}/MPMB-2024-Blank.pdf" }),
+                    )
+                    .await;
+                    assert_eq!(
+                        st_open_alias,
+                        StatusCode::BAD_REQUEST,
+                        "direct open via template alias must fail: {body_open_alias}"
+                    );
+                    for open_flag in [false, true] {
+                        let (st_create_alias, body_create_alias) = post_json(
+                            &app,
+                            "/api/sheets/new",
+                            json!({
+                                "template": "templates/MPMB-2024-Blank.pdf",
+                                "name": "template\u{017f}/AliasEscape",
+                                "open": open_flag
+                            }),
+                        )
+                        .await;
+                        assert_eq!(
+                            st_create_alias,
+                            StatusCode::BAD_REQUEST,
+                            "create under template alias with open={open_flag} must fail: {body_create_alias}"
+                        );
+                    }
+                    assert!(!base.join("templates/AliasEscape.pdf").exists());
+                    assert_eq!(
+                        std::fs::read(base.join("templates/MPMB-2024-Blank.pdf")).unwrap(),
+                        tpl_bytes
+                    );
+                }
+            }
+        }
+
+        // Upload with overwrite=true on absent RevDouble.pdf (colliding with RevDouble.pdf.pdf's
+        // legacy RevDouble.pdf.state.json) must return 409 Conflict via HTTP.
+        let upload_conflict_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sheets/upload?name=RevDouble.pdf&overwrite=true")
+                    .header("content-type", "application/pdf")
+                    .body(Body::from(tpl_bytes.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(upload_conflict_resp.status(), StatusCode::CONFLICT);
+        assert!(!base.join("RevDouble.pdf").exists());
+        assert_eq!(std::fs::read(&rev_legacy_sc).unwrap(), rev_legacy_bytes);
+
+        let (st_final, list_final) = get_json(&app, "/api/sheets").await;
+        assert_eq!(st_final, StatusCode::OK);
+        let chars_final = list_final["characters"].as_array().unwrap();
+        let double_orig = chars_final
+            .iter()
+            .find(|c| c["path"] == "DoubleHero.pdf")
+            .unwrap();
+        assert_eq!(double_orig["has_state_sidecar"], true);
+        assert_eq!(double_orig["character_name"], "Existing DoubleHero");
+        let double_new = chars_final
+            .iter()
+            .find(|c| c["path"] == "DoubleHero.pdf.pdf")
+            .unwrap();
+        assert_eq!(double_new["has_state_sidecar"], false);
+        assert!(double_new["character_name"].is_null());
+        let pre_pr_listed = chars_final
+            .iter()
+            .find(|c| c["path"] == "PrePrDouble.pdf")
+            .unwrap();
+        assert_eq!(pre_pr_listed["has_state_sidecar"], true);
+        assert_eq!(pre_pr_listed["character_name"], "Pre-PR Unstamped Hero");
+        let rev_dbl_listed = chars_final
+            .iter()
+            .find(|c| c["path"] == "RevDouble.pdf.pdf")
+            .unwrap();
+        assert_eq!(rev_dbl_listed["has_state_sidecar"], true);
+        assert_eq!(
+            rev_dbl_listed["character_name"],
+            "Existing RevDouble Legacy"
+        );
+        assert!(!chars_final
+            .iter()
+            .any(|c| c["path"] == "PrePrDouble.pdf.pdf" || c["path"] == "RevDouble.pdf"));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn startup_dialog_persistent_edits_are_tracked_or_autosaved_while_alert_only_stays_clean()
+    {
+        let base = std::env::temp_dir().join(format!(
+            "mpmb-serve-startup-dirty-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(base.join("templates")).unwrap();
+
+        let alert_only_js = r#"app.alert({cMsg: "Welcome banner only", nIcon: 3, nType: 0});"#;
+        let mutate_js = r#"
+            var r = app.alert({cMsg: "Apply startup character name?", nIcon: 2, nType: 2});
+            if (r === 4) {
+                getField("PC Name").value = "StartupHero";
+            }
+        "#;
+
+        make_scripted_hp_pdf(
+            &base.join("templates/AlertOnly.pdf"),
+            "10",
+            alert_only_js,
+            None,
+        );
+        make_scripted_hp_pdf(
+            &base.join("templates/StartupMutate.pdf"),
+            "10",
+            mutate_js,
+            None,
+        );
+        make_scripted_hp_pdf(
+            &base.join("ExistingAlertOnly.pdf"),
+            "10",
+            alert_only_js,
+            None,
+        );
+        make_scripted_hp_pdf(
+            &base.join("ExistingMutateNoAuto.pdf"),
+            "10",
+            mutate_js,
+            None,
+        );
+        make_scripted_hp_pdf(&base.join("ExistingMutateAuto.pdf"), "10", mutate_js, None);
+        make_scripted_hp_pdf(&base.join("OtherClean.pdf"), "20", "", None);
+
+        // Helper to read persisted PC Name directly from the PDF file on disk.
+        let disk_pc_name = |path: &std::path::Path| -> String {
+            let pdf = Pdf::open(path).unwrap();
+            pdf.fields["PC Name"]
+                .value
+                .as_str()
+                .unwrap_or("")
+                .to_owned()
+        };
+
+        // --- A. --no-autosave mode ---
+        let cfg_no_auto = ServeConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            store: StoreConfig {
+                root: base.clone(),
+                git: None,
+            },
+            auth_token: None,
+            allow_unauthenticated: false,
+            git_auto_sync_secs: 0,
+            autosave: false,
+            default_sheet: None,
+        };
+        let app_no_auto = build_router(AppState::start(&cfg_no_auto).unwrap());
+
+        // 1. Alert-only template create stays clean (no unsaved_edits on switch).
+        let (st, paused) = post_json(
+            &app_no_auto,
+            "/api/sheets/new",
+            json!({ "template": "templates/AlertOnly.pdf", "name": "AlertNew", "open": true }),
+        )
+        .await;
+        assert_eq!(st, StatusCode::ACCEPTED);
+        let id = paused["interaction"]["id"].as_str().unwrap().to_owned();
+        let (st, done) = post_json(
+            &app_no_auto,
+            &format!("/api/session/interaction/{id}"),
+            json!({"button": 1}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK, "alert-only create failed: {done}");
+        assert_eq!(done["state"]["dirtySinceSave"], false);
+        let (st, _) = post_json(
+            &app_no_auto,
+            "/api/session/open",
+            json!({"path": "OtherClean.pdf"}),
+        )
+        .await;
+        assert_eq!(
+            st,
+            StatusCode::OK,
+            "alert-only create must allow clean sheet switch"
+        );
+
+        // 2. Alert-only ordinary open also stays clean.
+        let (st, paused) = post_json(
+            &app_no_auto,
+            "/api/session/open",
+            json!({ "path": "ExistingAlertOnly.pdf" }),
+        )
+        .await;
+        assert_eq!(st, StatusCode::ACCEPTED);
+        let id = paused["interaction"]["id"].as_str().unwrap().to_owned();
+        let (st, done) = post_json(
+            &app_no_auto,
+            &format!("/api/session/interaction/{id}"),
+            json!({"button": 1}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(done["state"]["dirtySinceSave"], false);
+        let (st, _) = post_json(
+            &app_no_auto,
+            "/api/session/open",
+            json!({"path": "OtherClean.pdf"}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+
+        // 3. Persistent startup-dialog edit on template create with --no-autosave marks
+        //    dirtySinceSave=true, blocks silent discard with 409 unsaved_edits, and saves cleanly.
+        let (st, paused) = post_json(
+            &app_no_auto,
+            "/api/sheets/new",
+            json!({ "template": "templates/StartupMutate.pdf", "name": "MutateNewNoAuto", "open": true }),
+        )
+        .await;
+        assert_eq!(st, StatusCode::ACCEPTED);
+        let id = paused["interaction"]["id"].as_str().unwrap().to_owned();
+        let (st, done) = post_json(
+            &app_no_auto,
+            &format!("/api/session/interaction/{id}"),
+            json!({"button": 4}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(done["state"]["character"]["name"], "StartupHero");
+        assert_eq!(done["state"]["dirtySinceSave"], true);
+        let (st_sw, sw_body) = post_json(
+            &app_no_auto,
+            "/api/session/open",
+            json!({"path": "OtherClean.pdf"}),
+        )
+        .await;
+        assert_eq!(st_sw, StatusCode::CONFLICT);
+        assert_eq!(sw_body["code"], "unsaved_edits");
+        let (st_save, save_body) = post_json(&app_no_auto, "/api/session/save", json!({})).await;
+        assert_eq!(st_save, StatusCode::OK, "save failed: {save_body}");
+        assert_eq!(save_body["state"]["dirtySinceSave"], false);
+        assert_eq!(
+            disk_pc_name(&base.join("MutateNewNoAuto.pdf")),
+            "StartupHero"
+        );
+
+        // 4. Persistent startup-dialog edit on ordinary open with --no-autosave marks
+        //    dirtySinceSave=true and blocks silent discard with 409 unsaved_edits.
+        let (st, paused) = post_json(
+            &app_no_auto,
+            "/api/session/open",
+            json!({ "path": "ExistingMutateNoAuto.pdf" }),
+        )
+        .await;
+        assert_eq!(st, StatusCode::ACCEPTED);
+        let id = paused["interaction"]["id"].as_str().unwrap().to_owned();
+        let (st, done) = post_json(
+            &app_no_auto,
+            &format!("/api/session/interaction/{id}"),
+            json!({"button": 4}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(done["state"]["character"]["name"], "StartupHero");
+        assert_eq!(done["state"]["dirtySinceSave"], true);
+        let (st_sw, sw_body) = post_json(
+            &app_no_auto,
+            "/api/session/open",
+            json!({"path": "OtherClean.pdf"}),
+        )
+        .await;
+        assert_eq!(st_sw, StatusCode::CONFLICT);
+        assert_eq!(sw_body["code"], "unsaved_edits");
+        let (st_save, _) = post_json(&app_no_auto, "/api/session/save", json!({})).await;
+        assert_eq!(st_save, StatusCode::OK);
+        assert_eq!(
+            disk_pc_name(&base.join("ExistingMutateNoAuto.pdf")),
+            "StartupHero"
+        );
+
+        // --- B. autosave=true mode ---
+        let cfg_auto = ServeConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            store: StoreConfig {
+                root: base.clone(),
+                git: None,
+            },
+            auth_token: None,
+            allow_unauthenticated: false,
+            git_auto_sync_secs: 0,
+            autosave: true,
+            default_sheet: None,
+        };
+        let app_auto = build_router(AppState::start(&cfg_auto).unwrap());
+
+        // 5. Template create with startup-dialog persistent edit + autosave=true persists
+        //    the edited field into the published PDF immediately and reports clean.
+        let (st, paused) = post_json(
+            &app_auto,
+            "/api/sheets/new",
+            json!({ "template": "templates/StartupMutate.pdf", "name": "MutateNewAuto", "open": true }),
+        )
+        .await;
+        assert_eq!(st, StatusCode::ACCEPTED);
+        let id = paused["interaction"]["id"].as_str().unwrap().to_owned();
+        let (st, done) = post_json(
+            &app_auto,
+            &format!("/api/session/interaction/{id}"),
+            json!({"button": 4}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK, "autosave startup create failed: {done}");
+        assert_eq!(done["state"]["character"]["name"], "StartupHero");
+        assert_eq!(done["state"]["dirtySinceSave"], false);
+        assert_eq!(disk_pc_name(&base.join("MutateNewAuto.pdf")), "StartupHero");
+        let (st, _) = post_json(
+            &app_auto,
+            "/api/session/open",
+            json!({"path": "OtherClean.pdf"}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+
+        // 6. Ordinary open with startup-dialog persistent edit + autosave=true persists
+        //    the edited field to disk immediately and reports clean.
+        let (st, paused) = post_json(
+            &app_auto,
+            "/api/session/open",
+            json!({ "path": "ExistingMutateAuto.pdf" }),
+        )
+        .await;
+        assert_eq!(st, StatusCode::ACCEPTED);
+        let id = paused["interaction"]["id"].as_str().unwrap().to_owned();
+        let (st, done) = post_json(
+            &app_auto,
+            &format!("/api/session/interaction/{id}"),
+            json!({"button": 4}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK, "autosave startup open failed: {done}");
+        assert_eq!(done["state"]["character"]["name"], "StartupHero");
+        assert_eq!(done["state"]["dirtySinceSave"], false);
+        assert_eq!(
+            disk_pc_name(&base.join("ExistingMutateAuto.pdf")),
+            "StartupHero"
+        );
+        let (st, _) = post_json(
+            &app_auto,
+            "/api/session/open",
+            json!({"path": "OtherClean.pdf"}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+
+        // 7. A non-regular entry (e.g. a directory) at the primary sidecar path must
+        //    reject BEFORE publishing across ALL create paths:
+        //    - create-only (`open: false`),
+        //    - create-and-open with NO startup edits (`open: true`), and
+        //    - create-and-open WITH startup edits even if the directory appears while the
+        //      startup dialog is pending (caught at publish_new_sheet_bytes under lock).
+        let bad_create_only_dir = base.join("BadCreateOnlySidecar.pdf.state.json");
+        std::fs::create_dir_all(&bad_create_only_dir).unwrap();
+        let (st_co, body_co) = post_json(
+            &app_auto,
+            "/api/sheets/new",
+            json!({ "template": "templates/AlertOnly.pdf", "name": "BadCreateOnlySidecar", "open": false }),
+        )
+        .await;
+        assert_eq!(
+            st_co,
+            StatusCode::BAD_REQUEST,
+            "create-only nonregular sidecar must fail: {body_co}"
+        );
+        assert!(body_co["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("not a regular file"));
+        assert!(!base.join("BadCreateOnlySidecar.pdf").exists());
+        // Removing the blocking directory allows the exact same create-only request to succeed.
+        std::fs::remove_dir(&bad_create_only_dir).unwrap();
+        let (st_co_ok, body_co_ok) = post_json(
+            &app_auto,
+            "/api/sheets/new",
+            json!({ "template": "templates/AlertOnly.pdf", "name": "BadCreateOnlySidecar", "open": false }),
+        )
+        .await;
+        assert_eq!(
+            st_co_ok,
+            StatusCode::CREATED,
+            "create-only retry after removing nonregular sidecar dir must succeed: {body_co_ok}"
+        );
+
+        let bad_no_edit_dir = base.join("BadNoEditSidecar.pdf.state.json");
+        std::fs::create_dir_all(&bad_no_edit_dir).unwrap();
+        let (st_ne, body_ne) = post_json(
+            &app_auto,
+            "/api/sheets/new",
+            json!({ "template": "templates/AlertOnly.pdf", "name": "BadNoEditSidecar", "open": true }),
+        )
+        .await;
+        assert_eq!(
+            st_ne,
+            StatusCode::BAD_REQUEST,
+            "no-startup-edit create+open nonregular sidecar must fail: {body_ne}"
+        );
+        assert!(body_ne["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("not a regular file"));
+        assert!(!base.join("BadNoEditSidecar.pdf").exists());
+
+        // Directory created mid-flight while startup dialog is pending must still be
+        // rejected at publish_new_sheet_bytes before publishing the PDF.
+        let (st, paused) = post_json(
+            &app_auto,
+            "/api/sheets/new",
+            json!({ "template": "templates/StartupMutate.pdf", "name": "BadStartupSidecar", "open": true }),
+        )
+        .await;
+        assert_eq!(st, StatusCode::ACCEPTED);
+        let bad_sidecar_dir = base.join("BadStartupSidecar.pdf.state.json");
+        std::fs::create_dir_all(&bad_sidecar_dir).unwrap();
+        let id = paused["interaction"]["id"].as_str().unwrap().to_owned();
+        let (st, err_body) = post_json(
+            &app_auto,
+            &format!("/api/session/interaction/{id}"),
+            json!({"button": 4}),
+        )
+        .await;
+        assert_eq!(
+            st,
+            StatusCode::BAD_REQUEST,
+            "nonregular startup sidecar path must reject before publishing: {err_body}"
+        );
+        let err_text = err_body["error"].as_str().unwrap_or("");
+        assert!(
+            err_text.contains("BadStartupSidecar.pdf.state.json")
+                && err_text.contains("not a regular file"),
+            "error must name the nonregular sidecar path: {err_body}"
+        );
+        assert!(
+            !base.join("BadStartupSidecar.pdf").exists(),
+            "new character PDF must NOT be published when primary sidecar path is non-regular"
+        );
+        let (st_sess, sess) = get_json(&app_auto, "/api/session/state").await;
+        assert_eq!(st_sess, StatusCode::OK);
+        assert_eq!(sess["path"], "OtherClean.pdf");
 
         let _ = std::fs::remove_dir_all(&base);
     }

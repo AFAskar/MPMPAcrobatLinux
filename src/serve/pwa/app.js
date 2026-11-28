@@ -5,6 +5,8 @@
     token: localStorage.getItem('mpmb_auth_token') || '',
     sheet: null,
     sheets: [],
+    templates: [],
+    characters: [],
     git: null,
     page: 0,
     zoom: 1.0,
@@ -13,6 +15,8 @@
     pageLoadSeq: 0,
     lastServerInstanceId: null,
     retiredServerInstanceIds: new Set(),
+    authoritativeEpoch: 0,
+    wsAuthoritativeInstanceId: null,
     lastStateSeq: 0,
     sessionFetchSeq: 0,
     appliedSessionFetchSeq: 0,
@@ -178,12 +182,14 @@
     ws.onclose = () => {
       if (appState.ws !== ws) return;
       appState.wsConnected = false;
+      appState.wsAuthoritativeInstanceId = null;
       updateConnDot();
       setTimeout(connectWs, 2500);
     };
     ws.onerror = () => {
       if (appState.ws !== ws) return;
       appState.wsConnected = false;
+      appState.wsAuthoritativeInstanceId = null;
       updateConnDot();
     };
     ws.onmessage = (ev) => {
@@ -191,16 +197,19 @@
       try {
         const msg = JSON.parse(ev.data);
         if (msg.type === 'state_updated' && msg.state) {
-          applySessionState(msg.state);
+          applySessionState(msg.state, { allowAdoptNewInstance: true, fromWs: true });
         } else if (msg.type === 'resync_required') {
           refreshSession();
         } else if (msg.type === 'interaction_requested' && msg.interaction) {
           const inter = msg.serverInstanceId && !msg.interaction.serverInstanceId
             ? Object.assign({ serverInstanceId: msg.serverInstanceId }, msg.interaction)
             : msg.interaction;
-          openAcrobatInteraction(inter);
+          openAcrobatInteraction(inter, { allowAdoptNewInstance: true, fromWs: true });
         } else if (msg.type === 'interaction_cleared') {
-          if (msg.serverInstanceId && appState.retiredServerInstanceIds.has(msg.serverInstanceId)) {
+          if (
+            msg.serverInstanceId &&
+            !adoptServerInstance(msg.serverInstanceId, { allowAdoptNewInstance: true, fromWs: true })
+          ) {
             return;
           }
           closeAcrobatModal(msg.id || null, msg.serverInstanceId || null);
@@ -222,6 +231,8 @@
     btn.addEventListener('click', () => switchTab(btn.dataset.tab));
   });
   $('btn-go-library').addEventListener('click', () => switchTab('library'));
+  $('btn-empty-new-char').addEventListener('click', () => openNewCharModal());
+  $('btn-new-char').addEventListener('click', () => openNewCharModal());
 
   function switchTab(name) {
     document.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
@@ -242,6 +253,12 @@
       if (fetchSeq < appState.appliedLibraryFetchSeq) return;
       appState.appliedLibraryFetchSeq = fetchSeq;
       appState.sheets = data.sheets || [];
+      appState.templates = Array.isArray(data.templates)
+        ? data.templates
+        : appState.sheets.filter((s) => isTemplateSheet(s));
+      appState.characters = Array.isArray(data.characters)
+        ? data.characters
+        : appState.sheets.filter((s) => !isTemplateSheet(s));
       appState.git = data.git || null;
       renderSheets();
       renderGit();
@@ -257,10 +274,16 @@
 
   async function refreshSession() {
     const fetchSeq = ++appState.sessionFetchSeq;
+    const startAuthEpoch = appState.authoritativeEpoch;
     try {
       const state = await api('/api/session/state');
       if (!state || fetchSeq < appState.appliedSessionFetchSeq) return;
-      if (applySessionState(state)) {
+      // Never allow an HTTP session read that raced with an authoritative WebSocket
+      // event (or while WebSocket holds authority on another instance) to retire
+      // the authoritative WebSocket server instance.
+      const canAdoptNewInstance =
+        startAuthEpoch === appState.authoritativeEpoch && !appState.wsAuthoritativeInstanceId;
+      if (applySessionState(state, { allowAdoptNewInstance: canAdoptNewInstance })) {
         appState.appliedSessionFetchSeq = fetchSeq;
       }
     } catch (err) {
@@ -268,28 +291,111 @@
     }
   }
 
-  function applySessionState(state) {
+  function interactionServerInst(inter) {
+    return inter && typeof inter.serverInstanceId === 'string' ? inter.serverInstanceId : '';
+  }
+
+  function interactionSeq(inter) {
+    return inter && typeof inter.stateSeq === 'number' && inter.stateSeq > 0
+      ? inter.stateSeq
+      : null;
+  }
+
+  function adoptServerInstance(inst, { allowAdoptNewInstance = true, fromWs = false } = {}) {
+    if (typeof inst !== 'string' || !inst) return true;
+    if (appState.retiredServerInstanceIds.has(inst)) {
+      return false;
+    }
+    const switchingInstance =
+      !!appState.lastServerInstanceId && appState.lastServerInstanceId !== inst;
+    if (switchingInstance && !allowAdoptNewInstance) {
+      return false;
+    }
+    if (switchingInstance) {
+      appState.retiredServerInstanceIds.add(appState.lastServerInstanceId);
+      appState.lastStateSeq = 0;
+    }
+    if (appState.activeInteraction) {
+      const activeInst = interactionServerInst(appState.activeInteraction);
+      if (activeInst && activeInst !== inst) {
+        if (!allowAdoptNewInstance) {
+          return false;
+        }
+        appState.retiredServerInstanceIds.add(activeInst);
+        closeAcrobatModal();
+      }
+    }
+    appState.lastServerInstanceId = inst;
+    if (fromWs) {
+      appState.authoritativeEpoch += 1;
+      appState.wsAuthoritativeInstanceId = inst;
+    }
+    return true;
+  }
+
+  function applyHttpSessionState(state) {
     if (!state) return false;
-    if (typeof state.serverInstanceId === 'string' && state.serverInstanceId) {
-      if (appState.retiredServerInstanceIds.has(state.serverInstanceId)) {
-        return false;
-      }
-      if (appState.lastServerInstanceId && appState.lastServerInstanceId !== state.serverInstanceId) {
-        appState.retiredServerInstanceIds.add(appState.lastServerInstanceId);
-        appState.lastStateSeq = 0;
-      }
-      appState.lastServerInstanceId = state.serverInstanceId;
+    const nextInst =
+      typeof state.serverInstanceId === 'string' && state.serverInstanceId
+        ? state.serverInstanceId
+        : '';
+    if (
+      nextInst &&
+      !appState.retiredServerInstanceIds.has(nextInst) &&
+      appState.lastServerInstanceId &&
+      nextInst !== appState.lastServerInstanceId
+    ) {
+      refreshSession();
+      return false;
+    }
+    return applySessionState(state, { allowAdoptNewInstance: false });
+  }
+
+  function applySessionState(state, { allowAdoptNewInstance = true, fromWs = false } = {}) {
+    if (!state) return false;
+    const nextServerInst =
+      typeof state.serverInstanceId === 'string' && state.serverInstanceId
+        ? state.serverInstanceId
+        : '';
+    if (!adoptServerInstance(nextServerInst, { allowAdoptNewInstance, fromWs })) {
+      return false;
     }
     if (state.busy && !state.path) {
+      const busySeq =
+        typeof state.stateSeq === 'number' && state.stateSeq > 0
+          ? state.stateSeq
+          : interactionSeq(state.activeInteraction);
+      if (busySeq !== null) {
+        if (appState.activeInteraction) {
+          const activeInst = interactionServerInst(appState.activeInteraction);
+          const activeSeq = interactionSeq(appState.activeInteraction);
+          const sameInst = !nextServerInst || !activeInst || activeInst === nextServerInst;
+          if (sameInst && activeSeq !== null && busySeq < activeSeq) {
+            return false;
+          }
+        }
+        if (busySeq < appState.lastStateSeq) {
+          return false;
+        }
+      }
       if (state.git) {
         appState.git = state.git;
         renderGit();
       }
-      if (state.activeInteraction) openAcrobatInteraction(state.activeInteraction);
+      if (state.activeInteraction) {
+        openAcrobatInteraction(state.activeInteraction, {
+          allowAdoptNewInstance,
+          fromWs,
+          fromStateSnapshot: true,
+        });
+      }
       return true;
     }
     if (!state.open) {
-      if (typeof state.stateSeq === 'number' && state.stateSeq < appState.lastStateSeq) {
+      const prevLastStateSeq = appState.lastStateSeq;
+      const isDuplicateStateSeq =
+        typeof state.stateSeq === 'number' && state.stateSeq === prevLastStateSeq;
+      if (typeof state.stateSeq === 'number' && state.stateSeq < prevLastStateSeq) {
         return false;
       }
       if (typeof state.stateSeq === 'number') {
@@ -298,6 +404,22 @@
       closeFieldModal();
       appState.sheet = null;
       if (state.git) appState.git = state.git;
+      if (appState.activeInteraction) {
+        const activeInst = interactionServerInst(appState.activeInteraction);
+        const interSeq = interactionSeq(appState.activeInteraction);
+        const activeFromDifferentOrRetiredInst =
+          !!activeInst &&
+          (appState.retiredServerInstanceIds.has(activeInst) ||
+            (!!nextServerInst && activeInst !== nextServerInst));
+        const stateNewerThanInteraction =
+          activeFromDifferentOrRetiredInst ||
+          (!isDuplicateStateSeq &&
+            (interSeq === null ||
+              (typeof state.stateSeq === 'number' && state.stateSeq > interSeq)));
+        if (stateNewerThanInteraction) {
+          closeAcrobatModal();
+        }
+      }
       renderTopbar();
       renderPlay();
       renderGit();
@@ -307,7 +429,10 @@
     const prevPath = appState.sheet ? appState.sheet.path : null;
     const prevSessionId = appState.sheet ? (appState.sheet.sessionId || '') : '';
     const nextSessionId = state.sessionId || '';
-    if (typeof state.stateSeq === 'number' && state.stateSeq < appState.lastStateSeq) {
+    const prevLastStateSeq = appState.lastStateSeq;
+    const isDuplicateStateSeq =
+      typeof state.stateSeq === 'number' && state.stateSeq === prevLastStateSeq;
+    if (typeof state.stateSeq === 'number' && state.stateSeq < prevLastStateSeq) {
       return false;
     }
     if (
@@ -344,9 +469,28 @@
       showBanner('File changed externally on disk — pull latest or tap Force Save in the Git tab', 'warn', 0);
     }
     if (state.activeInteraction) {
-      openAcrobatInteraction(state.activeInteraction);
+      openAcrobatInteraction(state.activeInteraction, {
+        allowAdoptNewInstance,
+        fromWs,
+        fromStateSnapshot: true,
+      });
     } else if (appState.activeInteraction) {
-      closeAcrobatModal();
+      // Clear prompts from retired/different server instances unconditionally, and
+      // compare state sequences only within the same server instance.
+      const activeInst = interactionServerInst(appState.activeInteraction);
+      const interSeq = interactionSeq(appState.activeInteraction);
+      const activeFromDifferentOrRetiredInst =
+        !!activeInst &&
+        (appState.retiredServerInstanceIds.has(activeInst) ||
+          (!!nextServerInst && activeInst !== nextServerInst));
+      const stateNewerThanInteraction =
+        activeFromDifferentOrRetiredInst ||
+        (!isDuplicateStateSeq &&
+          (interSeq === null ||
+            (typeof state.stateSeq === 'number' && state.stateSeq > interSeq)));
+      if (stateNewerThanInteraction) {
+        closeAcrobatModal();
+      }
     }
     const sheetTabActive = $('tab-sheet').classList.contains('active');
     if (sheetTabActive && (prevRev !== state.revision || sessionChanged)) {
@@ -870,10 +1014,10 @@
   async function handleActionResponse(res) {
     if (!res) return false;
     if (res.status === 'interaction_required' && res.interaction) {
-      return openAcrobatInteraction(res.interaction);
+      return openAcrobatInteraction(res.interaction, { allowAdoptNewInstance: false });
     }
     let applied = true;
-    if (res.state) applied = applySessionState(res.state);
+    if (res.state) applied = applyHttpSessionState(res.state);
     if (applied && res.message) showBanner(res.message, 'ok', 3000);
     return applied;
   }
@@ -1014,12 +1158,13 @@
     appState.retiredInteractionKeys.add(`${inst}:${id}`);
   }
 
-  function openAcrobatInteraction(interaction) {
+  function openAcrobatInteraction(
+    interaction,
+    { allowAdoptNewInstance = true, fromWs = false, fromStateSnapshot = false } = {},
+  ) {
     if (!interaction || !interaction.id) return false;
-    if (
-      interaction.serverInstanceId &&
-      appState.retiredServerInstanceIds.has(interaction.serverInstanceId)
-    ) {
+    const nextInst = interactionServerInst(interaction);
+    if (nextInst && appState.retiredServerInstanceIds.has(nextInst)) {
       return false;
     }
     const key = interactionKey(interaction);
@@ -1029,8 +1174,46 @@
     // Preserve in-progress user input if a duplicate delivery arrives for the
     // exact same active interaction ID (e.g. HTTP 202 arriving after WS).
     if (appState.activeInteraction && interactionKey(appState.activeInteraction) === key) {
+      adoptServerInstance(nextInst, { allowAdoptNewInstance, fromWs });
       $('acrobat-modal').classList.remove('hidden');
       return true;
+    }
+    const nextSeq = interactionSeq(interaction);
+    const sameAsWatermarkInst =
+      !nextInst || !appState.lastServerInstanceId || nextInst === appState.lastServerInstanceId;
+    // Reject stale direct/HTTP interaction replies below the same-instance stateSeq
+    // watermark (equal sequence is still allowed so duplicate delivery works).
+    if (!fromStateSnapshot && sameAsWatermarkInst && nextSeq !== null && nextSeq < appState.lastStateSeq) {
+      return false;
+    }
+    // Do not let a delayed HTTP interaction_required response from an unobserved
+    // server instance retire the current authoritative server or dismiss its prompt.
+    // Start a fresh session read so a live prompt on a restarted server is still
+    // recovered when WebSocket delivery is unavailable (and ignored if superseded).
+    if (
+      !allowAdoptNewInstance &&
+      nextInst &&
+      appState.lastServerInstanceId &&
+      nextInst !== appState.lastServerInstanceId
+    ) {
+      refreshSession();
+      return false;
+    }
+    if (appState.activeInteraction) {
+      const curInst = interactionServerInst(appState.activeInteraction);
+      const sameInst = !curInst || !nextInst || curInst === nextInst;
+      const curSeq = interactionSeq(appState.activeInteraction);
+      // Never let a delayed older interaction from the same server instance replace
+      // or retire a newer active prompt.
+      if (sameInst && curSeq !== null && nextSeq !== null && nextSeq <= curSeq) {
+        return false;
+      }
+    }
+    // Adopt the interaction's server instance consistently so an authoritative WS
+    // interaction from a new server retires the previous server before any delayed
+    // state response from the old server can arrive and retire the new one.
+    if (!adoptServerInstance(nextInst, { allowAdoptNewInstance, fromWs })) {
+      return false;
     }
     if (appState.activeInteraction) {
       retireInteraction(appState.activeInteraction.id, appState.activeInteraction.serverInstanceId);
@@ -1444,6 +1627,7 @@
     if (appState.inFlightInteractionKey === interKey) return;
     appState.inFlightInteractionKey = interKey;
     const wasUnopened = !appState.sheet || !appState.sheet.open;
+    const prevSessionId = appState.sheet?.sessionId || null;
     try {
       const res = await api(`/api/session/interaction/${encodeURIComponent(interId)}`, {
         method: 'POST',
@@ -1454,14 +1638,22 @@
       }
       if (res.status === 'interaction_required' && res.interaction) {
         retireInteraction(interId, interServerId);
-        openAcrobatInteraction(res.interaction);
+        openAcrobatInteraction(res.interaction, { allowAdoptNewInstance: false });
       } else {
         closeAcrobatModal(interId, interServerId);
         if (res.state) {
-          applySessionState(res.state);
-          if (wasUnopened && res.state.open) {
+          const switchedToNewSession = Boolean(
+            res.state.open && (wasUnopened || (res.state.sessionId && res.state.sessionId !== prevSessionId))
+          );
+          if (applyHttpSessionState(res.state) && switchedToNewSession) {
+            appState.page = 0;
             showBanner(`Loaded ${res.state.path}`, 'ok', 2500);
-            switchTab('play');
+            if (activeNewCharModalInstance === null) {
+              switchTab('play');
+              const destFocus = $('btn-classes');
+              if (destFocus && typeof destFocus.focus === 'function') destFocus.focus();
+            }
+            refreshLibrary();
           }
         }
       }
@@ -1531,47 +1723,317 @@
     summary.textContent = parts.join(' • ');
   }
 
-  function renderSheets() {
-    const list = $('sheets-list');
-    list.innerHTML = '';
-    if (!appState.sheets.length) {
-      list.innerHTML = '<div class="muted small-text">No PDF sheets in store yet. Tap "Upload PDF" to add one.</div>';
+  function isTemplateSheet(sh) {
+    return Boolean(sh && (sh.is_template || String(sh.path || '').toLowerCase().startsWith('templates/')));
+  }
+
+  function preferredDefaultTemplate() {
+    const tpls = appState.templates || [];
+    if (!tpls.length) return null;
+    return (
+      tpls.find((t) => /2024/i.test(t.name || t.path)) ||
+      tpls.find((t) => /v24/i.test(t.name || t.path)) ||
+      tpls[0]
+    );
+  }
+
+  function formatTemplateLabel(sh) {
+    return String(sh.name || sh.path || '').replace(/\.pdf$/i, '');
+  }
+
+  let newCharModalOpener = null;
+  let newCharModalOpenerTemplatePath = null;
+  let newCharModalInstanceSeq = 0;
+  let activeNewCharModalInstance = null;
+
+  function updateNewCharPreview() {
+    const preview = $('nc-preview');
+    const name = ($('nc-name').value || '').trim();
+    const tplPath = $('nc-template').value || '';
+    const tpl = (appState.templates || []).find((t) => t.path === tplPath);
+    if (!tpl) {
+      preview.textContent = 'Upload a blank MPMB PDF under Sheet Templates first.';
       return;
     }
-    const activePath = appState.sheet?.path;
-    appState.sheets.forEach((sh) => {
-      const row = document.createElement('div');
-      row.className = 'row-card';
-      const title = sh.character_name ? `${sh.character_name} (${sh.name})` : sh.name;
-      const meta = [
-        sh.class_and_levels || (sh.level ? `Lv ${sh.level}` : ''),
-        `${(sh.size_bytes / (1024 * 1024)).toFixed(2)} MB`,
-        sh.path,
-      ].filter(Boolean).join(' • ');
-      row.innerHTML = `
-        <div class="row-main">
-          <div class="row-title">${esc(title)}</div>
-          <div class="row-sub">${esc(meta)}</div>
-        </div>
-      `;
-      const actions = document.createElement('div');
-      actions.className = 'seg-group';
-      const dl = document.createElement('a');
-      const tokenQs = appState.token ? `?token=${encodeURIComponent(appState.token)}` : '';
-      dl.href = `/api/sheets/${encodeURIComponent(sh.path)}/download${tokenQs}`;
-      dl.className = 'btn small';
-      dl.textContent = '↓';
-      dl.title = 'Download PDF';
-      const openBtn = document.createElement('button');
-      openBtn.type = 'button';
-      openBtn.className = activePath === sh.path ? 'btn small accent' : 'btn small primary';
-      openBtn.textContent = activePath === sh.path ? 'Open ✓' : 'Open';
-      openBtn.addEventListener('click', () => openSheet(sh.path));
-      actions.appendChild(dl);
-      actions.appendChild(openBtn);
-      row.appendChild(actions);
-      list.appendChild(row);
+    const dest = name
+      ? (name.toLowerCase().endsWith('.pdf') ? name : `${name}.pdf`)
+      : '<Character Name>.pdf';
+    preview.textContent = `Creates ${dest} from ${tpl.name}`;
+  }
+
+  function openNewCharModal(preselectedTemplatePath = null) {
+    const tpls = appState.templates || [];
+    if (!tpls.length) {
+      showBanner('No templates yet — upload a blank MPMB PDF under Sheet Templates first', 'warn', 5000);
+      switchTab('library');
+      return;
+    }
+    newCharModalInstanceSeq += 1;
+    activeNewCharModalInstance = newCharModalInstanceSeq;
+    newCharModalOpener = document.activeElement || null;
+    newCharModalOpenerTemplatePath =
+      preselectedTemplatePath ||
+      (newCharModalOpener && newCharModalOpener.dataset && newCharModalOpener.dataset.templatePath) ||
+      null;
+    const sel = $('nc-template');
+    sel.innerHTML = '';
+    tpls.forEach((tpl) => {
+      const opt = document.createElement('option');
+      opt.value = tpl.path;
+      opt.textContent = formatTemplateLabel(tpl);
+      sel.appendChild(opt);
     });
+    const def = preselectedTemplatePath || preferredDefaultTemplate()?.path || tpls[0].path;
+    sel.value = def;
+    $('nc-name').value = '';
+    updateNewCharPreview();
+    $('new-char-modal').classList.remove('hidden');
+    if (typeof $('nc-name').focus === 'function') $('nc-name').focus();
+  }
+
+  function closeNewCharModal(restoreFocus = false, expectedInstance = undefined) {
+    if (expectedInstance !== undefined) {
+      if (expectedInstance === null || activeNewCharModalInstance !== expectedInstance) {
+        return;
+      }
+    }
+    activeNewCharModalInstance = null;
+    $('new-char-modal').classList.add('hidden');
+    const opener = newCharModalOpener;
+    const openerTemplatePath = newCharModalOpenerTemplatePath;
+    newCharModalOpener = null;
+    newCharModalOpenerTemplatePath = null;
+    if (restoreFocus) {
+      const openerConnected = opener && opener.isConnected !== false;
+      if (openerConnected && typeof opener.focus === 'function') {
+        opener.focus();
+      } else {
+        let fallback = null;
+        if (openerTemplatePath) {
+          const tplList = $('templates-list');
+          const btns =
+            tplList && typeof tplList.querySelectorAll === 'function'
+              ? Array.from(tplList.querySelectorAll('button'))
+              : [];
+          fallback =
+            btns.find((b) => b.dataset && b.dataset.templatePath === openerTemplatePath) || null;
+        }
+        if (!fallback) {
+          fallback = $('btn-new-char') || $('btn-empty-new-char');
+        }
+        if (fallback && typeof fallback.focus === 'function') {
+          fallback.focus();
+        }
+      }
+    }
+  }
+
+  async function createCharacterFromTemplate(
+    template,
+    name,
+    force = false,
+    discard = null,
+    modalInstance = activeNewCharModalInstance,
+  ) {
+    const trimmed = String(name || '').trim();
+    if (!trimmed) {
+      showBanner('Enter a character name first', 'warn', 3500);
+      return;
+    }
+    if (!template) {
+      showBanner('Select a sheet template first', 'warn', 3500);
+      return;
+    }
+    try {
+      showBanner(`Creating ${trimmed}…`, 'warn', 0);
+      const body = { template, name: trimmed, open: true, force };
+      if (discard) body.discard = discard;
+      const res = await api('/api/sheets/new', { method: 'POST', json: body });
+      closeNewCharModal(false, modalInstance);
+      const applied = await handleActionResponse(res);
+      const createdSessionRef = res && res.state && res.state.open
+        ? {
+            sheet: res.state.path || '',
+            session: res.state.sessionId || '',
+          }
+        : null;
+      await refreshLibrary();
+      if (
+        applied &&
+        res.status !== 'interaction_required' &&
+        createdSessionRef &&
+        isCurrentSession(createdSessionRef)
+      ) {
+        appState.page = 0;
+        const createdPath = res.sheet?.path || trimmed;
+        showBanner(`Created and opened ${createdPath}`, 'ok', 3000);
+        // Do not switch tabs or steal focus behind a newer New Character form.
+        const newerModalOpen =
+          activeNewCharModalInstance !== null &&
+          activeNewCharModalInstance !== modalInstance;
+        if (!newerModalOpen) {
+          switchTab('play');
+          const destFocus = $('btn-classes');
+          if (destFocus && typeof destFocus.focus === 'function') destFocus.focus();
+        }
+      }
+    } catch (err) {
+      if (err.status === 409 && err.data && err.data.status === 'interaction_required' && err.data.interaction) {
+        const opened = openAcrobatInteraction(err.data.interaction, { allowAdoptNewInstance: false });
+        if (opened) {
+          closeNewCharModal(false, modalInstance);
+          showBanner('Finish or cancel the active dialog before creating a new character', 'warn', 5000);
+        } else {
+          showBanner('The blocking dialog has already closed — you can retry creating this character', 'warn', 5000);
+        }
+        return;
+      }
+      const target = err.data && err.data.discardTarget;
+      if (err.status === 409 && !force && target) {
+        const originatingFormActive =
+          modalInstance === null
+            ? activeNewCharModalInstance === null
+            : activeNewCharModalInstance === modalInstance;
+        if (!originatingFormActive) {
+          showBanner(`Creation request for ${trimmed} is out of date`, 'warn', 5000);
+          return;
+        }
+        if (
+          confirm(`${err.message}\n\nDiscard unsaved edits on ${target.sheet} (rev ${target.revision}) and create ${trimmed}?`)
+        ) {
+          const stillActiveAfterConfirm =
+            modalInstance === null
+              ? activeNewCharModalInstance === null
+              : activeNewCharModalInstance === modalInstance;
+          if (!stillActiveAfterConfirm) {
+            showBanner(`Creation request for ${trimmed} is out of date`, 'warn', 5000);
+            return;
+          }
+          return createCharacterFromTemplate(template, trimmed, true, target, modalInstance);
+        }
+      }
+      if (err.status === 409 && force) {
+        refreshSession();
+      }
+      showBanner(err.message, 'err', 6000);
+    }
+  }
+
+  $('nc-close').addEventListener('click', () => closeNewCharModal(true));
+  $('nc-cancel').addEventListener('click', () => closeNewCharModal(true));
+  $('new-char-modal').addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') {
+      ev.preventDefault();
+      closeNewCharModal(true);
+    }
+  });
+  $('nc-name').addEventListener('input', updateNewCharPreview);
+  $('nc-template').addEventListener('change', updateNewCharPreview);
+  $('nc-name').addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      createCharacterFromTemplate($('nc-template').value, $('nc-name').value);
+    }
+  });
+  $('nc-create').addEventListener('click', () => {
+    createCharacterFromTemplate($('nc-template').value, $('nc-name').value);
+  });
+
+  function buildCharacterRow(sh, activePath) {
+    const row = document.createElement('div');
+    row.className = 'row-card';
+    const title = sh.character_name ? `${sh.character_name} (${sh.name})` : sh.name;
+    const meta = [
+      sh.class_and_levels || (sh.level ? `Lv ${sh.level}` : ''),
+      `${(sh.size_bytes / (1024 * 1024)).toFixed(2)} MB`,
+      sh.path,
+    ].filter(Boolean).join(' • ');
+    row.innerHTML = `
+      <div class="row-main">
+        <div class="row-title">${esc(title)}</div>
+        <div class="row-sub">${esc(meta)}</div>
+      </div>
+    `;
+    const actions = document.createElement('div');
+    actions.className = 'seg-group';
+    const dl = document.createElement('a');
+    const tokenQs = appState.token ? `?token=${encodeURIComponent(appState.token)}` : '';
+    dl.href = `/api/sheets/${encodeURIComponent(sh.path)}/download${tokenQs}`;
+    dl.className = 'btn small';
+    dl.textContent = '↓';
+    dl.title = 'Download PDF';
+    const openBtn = document.createElement('button');
+    openBtn.type = 'button';
+    openBtn.className = activePath === sh.path ? 'btn small accent' : 'btn small primary';
+    openBtn.textContent = activePath === sh.path ? 'Open ✓' : 'Open';
+    openBtn.addEventListener('click', () => openSheet(sh.path));
+    actions.appendChild(dl);
+    actions.appendChild(openBtn);
+    row.appendChild(actions);
+    return row;
+  }
+
+  function renderSheets() {
+    const list = $('sheets-list');
+    const tplList = $('templates-list');
+    const emptyChars = $('empty-chars-list');
+    list.innerHTML = '';
+    tplList.innerHTML = '';
+    emptyChars.innerHTML = '';
+
+    const activePath = appState.sheet?.path;
+    const chars = appState.characters || [];
+    const tpls = appState.templates || [];
+
+    if (!chars.length) {
+      list.innerHTML = tpls.length
+        ? '<div class="muted small-text">No characters yet. Tap "+ New Character" to start from a blank MPMB template.</div>'
+        : '<div class="muted small-text">No characters yet. Upload a blank template below or upload a PDF.</div>';
+      emptyChars.classList.add('hidden');
+    } else {
+      chars.forEach((sh) => {
+        list.appendChild(buildCharacterRow(sh, activePath));
+        emptyChars.appendChild(buildCharacterRow(sh, activePath));
+      });
+      emptyChars.classList.remove('hidden');
+    }
+
+    if (!tpls.length) {
+      tplList.innerHTML = '<div class="muted small-text">No sheet templates yet. Tap "Upload Template" to add a blank MPMB PDF.</div>';
+    } else {
+      tpls.forEach((tpl) => {
+        const row = document.createElement('div');
+        row.className = 'row-card';
+        const meta = [
+          `${(tpl.size_bytes / (1024 * 1024)).toFixed(2)} MB`,
+          tpl.path,
+        ].join(' • ');
+        row.innerHTML = `
+          <div class="row-main">
+            <div class="row-title">${esc(formatTemplateLabel(tpl))}</div>
+            <div class="row-sub">${esc(meta)}</div>
+          </div>
+        `;
+        const actions = document.createElement('div');
+        actions.className = 'seg-group';
+        const dl = document.createElement('a');
+        const tokenQs = appState.token ? `?token=${encodeURIComponent(appState.token)}` : '';
+        dl.href = `/api/sheets/${encodeURIComponent(tpl.path)}/download${tokenQs}`;
+        dl.className = 'btn small';
+        dl.textContent = '↓';
+        dl.title = 'Download Template PDF';
+        const useBtn = document.createElement('button');
+        useBtn.type = 'button';
+        useBtn.className = 'btn small primary';
+        useBtn.textContent = '+ New';
+        useBtn.dataset.templatePath = tpl.path;
+        useBtn.addEventListener('click', () => openNewCharModal(tpl.path));
+        actions.appendChild(dl);
+        actions.appendChild(useBtn);
+        row.appendChild(actions);
+        tplList.appendChild(row);
+      });
+    }
   }
 
   function renderHistory(commits) {
@@ -1608,8 +2070,14 @@
       }
     } catch (err) {
       if (err.status === 409 && err.data && err.data.status === 'interaction_required' && err.data.interaction) {
-        openAcrobatInteraction(err.data.interaction);
-        showBanner('Finish or cancel the active dialog before switching sheets', 'warn', 5000);
+        const opened = openAcrobatInteraction(err.data.interaction, { allowAdoptNewInstance: false });
+        showBanner(
+          opened
+            ? 'Finish or cancel the active dialog before switching sheets'
+            : 'The blocking dialog has already closed — you can retry opening this sheet',
+          'warn',
+          5000,
+        );
         return;
       }
       const target = err.data && err.data.discardTarget;
@@ -1637,11 +2105,11 @@
         method: 'POST',
         json: Object.assign({ force }, targetPayload(null)),
       });
-      if (res.state) applySessionState(res.state);
+      if (res.state) applyHttpSessionState(res.state);
       showBanner(res.message || 'Saved PDF to disk', 'ok', 3000);
       await refreshLibrary();
     } catch (err) {
-      if (err.data && err.data.state) applySessionState(err.data.state);
+      if (err.data && err.data.state) applyHttpSessionState(err.data.state);
       showBanner(err.message, 'err');
     }
   }
@@ -1652,7 +2120,7 @@
       const res = await api('/api/git/sync', { method: 'POST', json: { message } });
       $('git-commit-msg').value = '';
       if (res.git) appState.git = res.git;
-      if (res.state) applySessionState(res.state);
+      if (res.state) applyHttpSessionState(res.state);
       const kind = res.sync?.status === 'conflict_branch' ? 'warn' : 'ok';
       showBanner(res.sync?.message || 'Synced', kind, 6000);
       await refreshLibrary();
@@ -1667,11 +2135,11 @@
       const body = { force };
       if (discard) body.discard = discard;
       const res = await api('/api/git/pull', { method: 'POST', json: body });
-      if (res.state) applySessionState(res.state);
+      if (res.state) applyHttpSessionState(res.state);
       showBanner(res.pull?.message || 'Pull complete', res.pull?.dirty ? 'warn' : 'ok', 5000);
       await refreshLibrary();
     } catch (err) {
-      if (err.data && err.data.state) applySessionState(err.data.state);
+      if (err.data && err.data.state) applyHttpSessionState(err.data.state);
       const target = err.data && err.data.discardTarget;
       if (
         err.status === 409 &&
@@ -1693,22 +2161,23 @@
   $('btn-save-now').addEventListener('click', () => doSaveNow(false));
   $('btn-force-save').addEventListener('click', () => doSaveNow(true));
 
-  $('file-upload').addEventListener('change', async (ev) => {
-    const file = ev.target.files?.[0];
-    ev.target.value = '';
-    if (!file) return;
+  async function handlePdfUpload(file, targetName, label) {
     try {
-      showBanner(`Uploading ${file.name}…`, 'warn', 0);
+      showBanner(`Uploading ${label}…`, 'warn', 0);
       const buf = await file.arrayBuffer();
       try {
-        await api(`/api/sheets/upload?name=${encodeURIComponent(file.name)}&overwrite=false`, {
+        await api(`/api/sheets/upload?name=${encodeURIComponent(targetName)}&overwrite=false`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/pdf' },
           body: buf,
         });
       } catch (err) {
-        if (err.status === 409 && confirm(`A sheet named "${file.name}" already exists. Overwrite it?`)) {
-          await api(`/api/sheets/upload?name=${encodeURIComponent(file.name)}&overwrite=true`, {
+        const isAlreadyExists =
+          err.status === 409 &&
+          (err.data?.code === 'already_exists' ||
+            (!err.data?.code && /already exists/i.test(err.message || '')));
+        if (isAlreadyExists && confirm(`"${targetName}" already exists. Overwrite it?`)) {
+          await api(`/api/sheets/upload?name=${encodeURIComponent(targetName)}&overwrite=true`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/pdf' },
             body: buf,
@@ -1717,11 +2186,25 @@
           throw err;
         }
       }
-      showBanner(`Uploaded ${file.name}`, 'ok', 3000);
+      showBanner(`Uploaded ${label}`, 'ok', 3000);
       await refreshLibrary();
     } catch (err) {
       showBanner(err.message, 'err');
     }
+  }
+
+  $('file-upload').addEventListener('change', async (ev) => {
+    const file = ev.target.files?.[0];
+    ev.target.value = '';
+    if (!file) return;
+    await handlePdfUpload(file, file.name, file.name);
+  });
+
+  $('template-upload').addEventListener('change', async (ev) => {
+    const file = ev.target.files?.[0];
+    ev.target.value = '';
+    if (!file) return;
+    await handlePdfUpload(file, `templates/${file.name}`, `template ${file.name}`);
   });
 
   function isPlainObj(v) {

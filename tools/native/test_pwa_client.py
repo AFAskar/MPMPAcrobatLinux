@@ -16,19 +16,45 @@ PWA_HARNESS = textwrap.dedent(
 
     const source = fs.readFileSync(process.argv[process.argv.length - 1], 'utf8').replace(
       '  // Boot\n  updateConnDot();\n  connectWs();\n  refreshAll();',
-      '  globalThis.harness = { appState, applySessionState, openFieldEditorByName, enqueueStep, currentSessionRef, editField, activateField, openSheet, doGitPull, refreshSession, connectWs, openAcrobatInteraction, closeAcrobatModal, submitInteraction };'
+      '  globalThis.harness = { appState, applySessionState, openFieldEditorByName, enqueueStep, currentSessionRef, editField, activateField, openSheet, openNewCharModal, closeNewCharModal, createCharacterFromTemplate, handlePdfUpload, doGitPull, refreshSession, connectWs, openAcrobatInteraction, closeAcrobatModal, submitInteraction, handleActionResponse, renderSheets };'
     );
 
     const elements = new Map();
-    function element(id) {
+    function markDisconnected(node) {
+      if (!node || typeof node !== 'object') return;
+      node.isConnected = false;
+      if (Array.isArray(node.children)) {
+        node.children.forEach(markDisconnected);
+      }
+    }
+    function collectButtons(node, out) {
+      if (!node || typeof node !== 'object') return;
+      if (node.tagName === 'BUTTON') out.push(node);
+      if (Array.isArray(node.children)) {
+        node.children.forEach((c) => collectButtons(c, out));
+      }
+    }
+    function element(id, tagName = 'DIV') {
       if (!elements.has(id)) {
         const classes = new Set();
-        elements.set(id, {
+        let htmlVal = '';
+        const el = {
+          id,
+          tagName: String(tagName || 'DIV').toUpperCase(),
+          isConnected: true,
+          children: [],
           listeners: {},
           dataset: {},
           style: {},
           value: '',
           textContent: '',
+          get innerHTML() { return htmlVal; },
+          set innerHTML(v) {
+            htmlVal = String(v);
+            el.children.forEach(markDisconnected);
+            el.children = [];
+          },
+          focus() { context.document.activeElement = el; },
           classList: {
             toggle(c, force) {
               if (force === undefined) {
@@ -44,8 +70,22 @@ PWA_HARNESS = textwrap.dedent(
           addEventListener(type, fn) { this.listeners[type] = fn; },
           getAttribute() {},
           setAttribute() {},
-          appendChild() {},
-        });
+          appendChild(child) {
+            if (child && typeof child === 'object') {
+              child.isConnected = el.isConnected;
+              el.children.push(child);
+            }
+          },
+          querySelectorAll(sel) {
+            if (sel === 'button') {
+              const out = [];
+              el.children.forEach((c) => collectButtons(c, out));
+              return out;
+            }
+            return [];
+          },
+        };
+        elements.set(id, el);
       }
       return elements.get(id);
     }
@@ -72,11 +112,17 @@ PWA_HARNESS = textwrap.dedent(
       localStorage: { getItem() { return ''; }, setItem() {} },
       window: { addEventListener() {}, open() {}, innerWidth: 1000, devicePixelRatio: 1 },
       document: {
+        activeElement: null,
         getElementById: element,
         documentElement: element('root'),
         querySelector() { return null; },
-        querySelectorAll() { return []; },
-        createElement() { return element(Symbol()); },
+        querySelectorAll(sel) {
+          if (sel === '.tab-panel') {
+            return [element('tab-play'), element('tab-sheet'), element('tab-tools'), element('tab-library')];
+          }
+          return [];
+        },
+        createElement(tag) { return element(Symbol(), tag); },
         createTextNode(t) { return { textContent: t }; },
       },
       URLSearchParams,
@@ -101,12 +147,18 @@ PWA_HARNESS = textwrap.dedent(
       editField,
       activateField,
       openSheet,
+      openNewCharModal,
+      closeNewCharModal,
+      createCharacterFromTemplate,
+      handlePdfUpload,
       doGitPull,
       refreshSession,
       connectWs,
       openAcrobatInteraction,
       closeAcrobatModal,
       submitInteraction,
+      handleActionResponse,
+      renderSheets,
     } = context.harness;
 
     function jsonResp(payload, status = 200) {
@@ -417,6 +469,975 @@ PWA_HARNESS = textwrap.dedent(
       assert.equal(openInteractionConfirms, 0);
       assert.equal(appState.activeInteraction.id, 'srv-5-int-2');
       closeAcrobatModal('srv-5-int-2', 'srv-5');
+
+      // 10. New Character from Template prefers explicit 2024 before v24 fallback,
+      //     restores focus on cancel, carries discardTarget on 409, and reaches success state.
+      appState.templates = [
+        { path: 'templates/MPMB-2014-v24.2.0-Blank.pdf', name: 'MPMB-2014-v24.2.0-Blank.pdf', is_template: true, size_bytes: 100 },
+        { path: 'templates/MPMB-2024-Blank.pdf', name: 'MPMB-2024-Blank.pdf', is_template: true, size_bytes: 100 },
+      ];
+      const openerBtn = element('btn-new-char');
+      openerBtn.focus();
+      openNewCharModal();
+      assert.equal(element('nc-template').value, 'templates/MPMB-2024-Blank.pdf');
+      assert.equal(element('new-char-modal').classList.contains('hidden'), false);
+      assert.equal(context.document.activeElement, element('nc-name'));
+      closeNewCharModal(true);
+      assert.equal(element('new-char-modal').classList.contains('hidden'), true);
+      assert.equal(context.document.activeElement, openerBtn);
+
+      openNewCharModal();
+      const newCalls = [];
+      let newConfirms = 0;
+      confirmHandler = () => { newConfirms += 1; return true; };
+      fetchHandler = async (path, opts) => {
+        if (path === '/api/sheets/new') {
+          const body = JSON.parse(opts.body);
+          newCalls.push(body);
+          if (!body.force) {
+            return jsonResp({
+              status: 'conflict',
+              reason: 'unsaved_edits',
+              error: 'unsaved edits',
+              discardTarget: { sheet: 'Alpha.pdf', sessionId: 'srv-5-s1', revision: 4 },
+            }, 409);
+          }
+          return jsonResp({
+            status: 'ok',
+            sheet: { path: 'Aelar.pdf', name: 'Aelar.pdf', is_template: false, size_bytes: 100 },
+            state: { open: true, serverInstanceId: 'srv-5', sessionId: 'srv-5-s2', stateSeq: 20, path: 'Aelar.pdf', revision: 1, fields: [] },
+          });
+        }
+        if (path === '/api/sheets') {
+          return jsonResp({ sheets: appState.templates, templates: appState.templates, characters: [], git: null });
+        }
+        throw new Error('Unexpected template create fetch ' + path);
+      };
+      await createCharacterFromTemplate('templates/MPMB-2024-Blank.pdf', 'Aelar');
+      assert.equal(newConfirms, 1);
+      assert.equal(newCalls.length, 2);
+      assert.equal(newCalls[0].force, false);
+      assert.equal(newCalls[1].force, true);
+      assert.deepEqual(newCalls[1].discard, { sheet: 'Alpha.pdf', sessionId: 'srv-5-s1', revision: 4 });
+      assert.equal(element('new-char-modal').classList.contains('hidden'), true);
+      assert.equal(element('banner').textContent, 'Created and opened Aelar.pdf');
+      assert.equal(element('banner').className, 'banner ok');
+      assert.equal(element('tab-play').classList.contains('active'), true);
+      assert.equal(context.document.activeElement, element('btn-classes'));
+
+      // 11. When creating a new character while another sheet is already open triggers a startup dialog,
+      //     completing the dialog switches from Library to Play for the new session.
+      element('tab-play').classList.remove('active');
+      element('tab-library').classList.add('active');
+      const startupInter = { ...alert77, id: 'srv-5-int-99', serverInstanceId: 'srv-5' };
+      fetchHandler = async (path) => {
+        if (path === '/api/sheets/new') {
+          return jsonResp({ status: 'interaction_required', interaction: startupInter }, 202);
+        }
+        if (path === '/api/session/interaction/srv-5-int-99') {
+          return jsonResp({
+            status: 'ok',
+            state: { open: true, serverInstanceId: 'srv-5', sessionId: 'srv-5-s3', stateSeq: 21, path: 'Bryn.pdf', revision: 1, fields: [] },
+          });
+        }
+        if (path === '/api/sheets') {
+          return jsonResp({ sheets: appState.templates, templates: appState.templates, characters: [], git: null });
+        }
+        throw new Error('Unexpected startup-dialog create fetch ' + path);
+      };
+      await createCharacterFromTemplate('templates/MPMB-2024-Blank.pdf', 'Bryn');
+      assert.equal(appState.activeInteraction.id, 'srv-5-int-99');
+      await submitInteraction({ button: 1, checked: false });
+      assert.equal(element('tab-play').classList.contains('active'), true);
+      assert.equal(element('banner').textContent, 'Loaded Bryn.pdf');
+
+      // 12. Obsolete New Character submission must NOT close a newer modal draft,
+      //     switch tabs behind it, or steal focus away from the newer form.
+      element('tab-play').classList.remove('active');
+      element('tab-library').classList.add('active');
+      openNewCharModal();
+      element('nc-name').value = 'FirstDraft';
+      let resolveFirstCreate = null;
+      fetchHandler = async (path) => {
+        if (path === '/api/sheets/new') {
+          return new Promise((resolve) => {
+            resolveFirstCreate = () => resolve(jsonResp({
+              status: 'ok',
+              sheet: { path: 'FirstDraft.pdf', name: 'FirstDraft.pdf', is_template: false, size_bytes: 100 },
+              state: { open: true, serverInstanceId: 'srv-5', sessionId: 'srv-5-s4', stateSeq: 22, path: 'FirstDraft.pdf', revision: 1, fields: [] },
+            }));
+          });
+        }
+        if (path === '/api/sheets') {
+          return jsonResp({ sheets: appState.templates, templates: appState.templates, characters: [], git: null });
+        }
+        throw new Error('Unexpected obsolete-form create fetch ' + path);
+      };
+      const firstCreatePromise = createCharacterFromTemplate('templates/MPMB-2024-Blank.pdf', 'FirstDraft');
+      assert.ok(resolveFirstCreate, 'first create POST should be in flight');
+      // User closes the first modal and opens a fresh one to type a second character draft.
+      closeNewCharModal(true);
+      openNewCharModal();
+      element('nc-name').value = 'SecondDraft';
+      assert.equal(context.document.activeElement, element('nc-name'));
+      resolveFirstCreate();
+      await firstCreatePromise;
+      assert.equal(
+        element('new-char-modal').classList.contains('hidden'),
+        false,
+        'obsolete create response must not close the newly opened modal',
+      );
+      assert.equal(element('nc-name').value, 'SecondDraft');
+      assert.equal(
+        context.document.activeElement,
+        element('nc-name'),
+        'obsolete create response must not steal focus from the newer creation form',
+      );
+      assert.equal(
+        element('tab-library').classList.contains('active'),
+        true,
+        'obsolete create response must not switch tabs behind the newer form',
+      );
+      assert.equal(element('tab-play').classList.contains('active'), false);
+      closeNewCharModal(false);
+
+      // 13. If another sheet/session becomes active while refreshLibrary() is pending
+      //     after createCharacterFromTemplate, stale completion must NOT reset appState.page,
+      //     overwrite the banner, switch tabs, or steal focus.
+      element('tab-play').classList.remove('active');
+      element('tab-sheet').classList.add('active');
+      const keepFocusBtn = element('btn-new-char');
+      keepFocusBtn.focus();
+      let resolveStaleLib = null;
+      fetchHandler = async (path) => {
+        if (path === '/api/sheets/new') {
+          return jsonResp({
+            status: 'ok',
+            sheet: { path: 'StaleHero.pdf', name: 'StaleHero.pdf', is_template: false, size_bytes: 100 },
+            state: { open: true, serverInstanceId: 'srv-5', sessionId: 'srv-5-s5', stateSeq: 23, path: 'StaleHero.pdf', revision: 1, fields: [] },
+          });
+        }
+        if (path === '/api/sheets') {
+          return new Promise((resolve) => {
+            resolveStaleLib = () => resolve(jsonResp({
+              sheets: appState.templates,
+              templates: appState.templates,
+              characters: [],
+              git: null,
+            }));
+          });
+        }
+        throw new Error('Unexpected stale-refresh create fetch ' + path);
+      };
+      openNewCharModal();
+      const staleCreatePromise = createCharacterFromTemplate('templates/MPMB-2024-Blank.pdf', 'StaleHero');
+      // Wait a microtask tick for /api/sheets/new -> handleActionResponse -> /api/sheets to start.
+      await new Promise((r) => setTimeout(r, 0));
+      assert.ok(resolveStaleLib, 'refreshLibrary fetch should be pending');
+      // While refreshLibrary is pending, another session becomes active on page 3.
+      applySessionState({
+        open: true,
+        serverInstanceId: 'srv-5',
+        sessionId: 'srv-5-s6',
+        stateSeq: 24,
+        path: 'NewerHero.pdf',
+        revision: 2,
+        pageCount: 6,
+        fields: [],
+      });
+      appState.page = 3;
+      element('banner').textContent = 'Loaded NewerHero.pdf';
+      element('banner').className = 'banner ok';
+      element('tab-play').classList.remove('active');
+      element('tab-sheet').classList.add('active');
+      keepFocusBtn.focus();
+      resolveStaleLib();
+      await staleCreatePromise;
+      assert.equal(appState.sheet.path, 'NewerHero.pdf');
+      assert.equal(appState.sheet.sessionId, 'srv-5-s6');
+      assert.equal(appState.page, 3, 'stale create completion must not reset active page');
+      assert.equal(element('banner').textContent, 'Loaded NewerHero.pdf');
+      assert.equal(element('tab-sheet').classList.contains('active'), true);
+      assert.equal(element('tab-play').classList.contains('active'), false);
+      assert.equal(context.document.activeElement, keepFocusBtn);
+
+      // 14. Obsolete New Character submission receiving 409 discardTarget after its form
+      //     was dismissed / replaced by a newer draft must NOT prompt to discard edits or retry.
+      openNewCharModal();
+      element('nc-name').value = 'DismissedHero';
+      let resolveDismissed409 = null;
+      let dismissedCalls = 0;
+      let dismissedConfirms = 0;
+      confirmHandler = () => { dismissedConfirms += 1; return true; };
+      fetchHandler = async (path) => {
+        if (path === '/api/sheets/new') {
+          dismissedCalls += 1;
+          return new Promise((resolve) => {
+            resolveDismissed409 = () => resolve(jsonResp({
+              status: 'conflict',
+              code: 'unsaved_edits',
+              error: 'unsaved edits on NewerHero.pdf',
+              discardTarget: { sheet: 'NewerHero.pdf', sessionId: 'srv-5-s6', revision: 2 },
+            }, 409));
+          });
+        }
+        throw new Error('Unexpected dismissed-409 fetch ' + path);
+      };
+      const dismissedPromise = createCharacterFromTemplate('templates/MPMB-2024-Blank.pdf', 'DismissedHero');
+      assert.ok(resolveDismissed409, 'dismissed create POST should be in flight');
+      closeNewCharModal(true);
+      openNewCharModal();
+      element('nc-name').value = 'ActiveReplacementDraft';
+      resolveDismissed409();
+      await dismissedPromise;
+      assert.equal(dismissedConfirms, 0, 'obsolete 409 must not open discard confirm prompt');
+      assert.equal(dismissedCalls, 1, 'obsolete 409 must not issue a forced retry');
+      assert.equal(element('new-char-modal').classList.contains('hidden'), false);
+      assert.equal(element('nc-name').value, 'ActiveReplacementDraft');
+      assert.equal(context.document.activeElement, element('nc-name'));
+      assert.ok(
+        element('banner').textContent.includes('out of date'),
+        'obsolete 409 should report that the request is out of date',
+      );
+      closeNewCharModal(false);
+
+      // 15. When submitInteraction() completes a startup dialog into a new session
+      //     while a newer New Character form is open, preserve the new form's tab and focus.
+      element('tab-play').classList.remove('active');
+      element('tab-library').classList.add('active');
+      const startupInter2 = { ...alert77, id: 'srv-5-int-150', serverInstanceId: 'srv-5', stateSeq: 25 };
+      let resolveInterReply = null;
+      fetchHandler = async (path) => {
+        if (path === '/api/session/interaction/srv-5-int-150') {
+          return new Promise((resolve) => {
+            resolveInterReply = () => resolve(jsonResp({
+              status: 'ok',
+              state: { open: true, serverInstanceId: 'srv-5', sessionId: 'srv-5-s7', stateSeq: 26, path: 'StartupLater.pdf', revision: 1, fields: [] },
+            }));
+          });
+        }
+        if (path === '/api/sheets') {
+          return jsonResp({ sheets: appState.templates, templates: appState.templates, characters: [], git: null });
+        }
+        throw new Error('Unexpected startup-focus fetch ' + path);
+      };
+      openAcrobatInteraction(startupInter2);
+      const interSubmitPromise = submitInteraction({ button: 1, checked: false });
+      assert.ok(resolveInterReply, 'interaction reply POST should be in flight');
+      // User opens a new creation form while the server is finishing the startup reply.
+      openNewCharModal();
+      element('nc-name').value = 'FreshModalDraft';
+      assert.equal(context.document.activeElement, element('nc-name'));
+      resolveInterReply();
+      await interSubmitPromise;
+      assert.equal(appState.sheet.path, 'StartupLater.pdf');
+      assert.equal(element('new-char-modal').classList.contains('hidden'), false);
+      assert.equal(
+        context.document.activeElement,
+        element('nc-name'),
+        'startup reply must not steal focus from a newer New Character form',
+      );
+      assert.equal(element('tab-library').classList.contains('active'), true);
+      assert.equal(element('tab-play').classList.contains('active'), false);
+      closeNewCharModal(false);
+
+      // 16. handlePdfUpload offers overwrite ONLY on already_exists 409, NOT on absent-PDF
+      //     sidecar_conflict 409.
+      const fakePdf = { arrayBuffer: async () => new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d]) };
+      let uploadCalls = [];
+      let uploadConfirms = 0;
+      confirmHandler = () => { uploadConfirms += 1; return true; };
+      fetchHandler = async (path) => {
+        uploadCalls.push(path);
+        if (path.startsWith('/api/sheets/upload?name=RevDouble.pdf&overwrite=false')) {
+          return jsonResp({
+            error: 'conflict: destination sidecar RevDouble.pdf.state.json belongs to another existing sheet',
+            code: 'sidecar_conflict',
+          }, 409);
+        }
+        if (path.startsWith('/api/sheets/upload?name=Existing.pdf&overwrite=false')) {
+          return jsonResp({
+            error: 'sheet already exists: Existing.pdf (pass overwrite=true to replace)',
+            code: 'already_exists',
+          }, 409);
+        }
+        if (path.startsWith('/api/sheets/upload?name=Existing.pdf&overwrite=true')) {
+          return jsonResp({ sheet: { path: 'Existing.pdf' } }, 201);
+        }
+        if (path === '/api/sheets') {
+          return jsonResp({ sheets: appState.templates, templates: appState.templates, characters: [], git: null });
+        }
+        throw new Error('Unexpected upload fetch ' + path);
+      };
+      await handlePdfUpload(fakePdf, 'RevDouble.pdf', 'RevDouble.pdf');
+      assert.equal(uploadConfirms, 0, 'sidecar_conflict 409 must not offer overwrite prompt');
+      assert.equal(uploadCalls.length, 1, 'sidecar_conflict 409 must not retry overwrite=true');
+      assert.ok(element('banner').textContent.includes('belongs to another existing sheet'));
+
+      uploadCalls = [];
+      await handlePdfUpload(fakePdf, 'Existing.pdf', 'Existing.pdf');
+      assert.equal(uploadConfirms, 1, 'already_exists 409 must offer overwrite prompt');
+      assert.ok(uploadCalls.some((p) => p.includes('overwrite=true')));
+
+      // 17. A late creation/state reply arriving after a newer Acrobat prompt was opened
+      //     must NOT dismiss or retire that prompt (both for duplicate stateSeq and when
+      //     the late reply has stateSeq < activeInteraction.stateSeq).
+      applySessionState({
+        open: true,
+        serverInstanceId: 'srv-5',
+        sessionId: 'srv-5-s8',
+        stateSeq: 30,
+        path: 'CreatedA.pdf',
+        revision: 1,
+        fields: [],
+      });
+      const newerPrompt = { ...alert77, id: 'srv-5-int-200', serverInstanceId: 'srv-5', stateSeq: 31 };
+      openAcrobatInteraction(newerPrompt);
+      assert.equal(appState.activeInteraction.id, 'srv-5-int-200');
+      // 17a: Duplicate HTTP replay of stateSeq 30 with activeInteraction=null must NOT close srv-5-int-200.
+      applySessionState({
+        open: true,
+        serverInstanceId: 'srv-5',
+        sessionId: 'srv-5-s8',
+        stateSeq: 30,
+        path: 'CreatedA.pdf',
+        revision: 1,
+        fields: [],
+      });
+      assert.equal(
+        appState.activeInteraction && appState.activeInteraction.id,
+        'srv-5-int-200',
+        'duplicate stateSeq reply must not dismiss newer Acrobat prompt',
+      );
+      // 17b: Even if stateSeq 30 arrives when lastStateSeq was behind (e.g. missed WS state_updated),
+      //      stateSeq 30 < activeInteraction.stateSeq (31) must NOT dismiss srv-5-int-200.
+      appState.lastStateSeq = 29;
+      applySessionState({
+        open: true,
+        serverInstanceId: 'srv-5',
+        sessionId: 'srv-5-s8',
+        stateSeq: 30,
+        path: 'CreatedA.pdf',
+        revision: 1,
+        fields: [],
+      });
+      assert.equal(
+        appState.activeInteraction && appState.activeInteraction.id,
+        'srv-5-int-200',
+        'earlier-sequenced state reply must not dismiss newer Acrobat prompt',
+      );
+      // 17c: A genuinely newer state snapshot (stateSeq 32 > 31) with no activeInteraction DOES close it.
+      applySessionState({
+        open: true,
+        serverInstanceId: 'srv-5',
+        sessionId: 'srv-5-s8',
+        stateSeq: 32,
+        path: 'CreatedA.pdf',
+        revision: 2,
+        fields: [],
+      });
+      assert.equal(appState.activeInteraction, null);
+
+      // 18: Server restart / instance switch clears old-server prompts even when the new
+      // server starts at a lower stateSeq (e.g. srv-5 prompt at 50 -> srv-6 state at 1),
+      // while still protecting newer same-server prompts against delayed snapshots.
+      openAcrobatInteraction({
+        id: 'srv-5-int-50',
+        serverInstanceId: 'srv-5',
+        stateSeq: 50,
+        kind: 'alert',
+        request: { cTitle: 'Old Server Prompt', cMsg: 'Before restart' },
+      });
+      assert.equal(appState.activeInteraction && appState.activeInteraction.id, 'srv-5-int-50');
+      assert.equal(
+        applySessionState({
+          open: true,
+          serverInstanceId: 'srv-6',
+          sessionId: 'srv-6-s1',
+          stateSeq: 1,
+          path: 'CreatedA.pdf',
+          revision: 1,
+          fields: [],
+        }),
+        true,
+      );
+      assert.equal(
+        appState.activeInteraction,
+        null,
+        'prompt from retired server instance must be cleared on instance switch',
+      );
+      assert.equal(
+        appState.retiredServerInstanceIds.has('srv-5'),
+        true,
+        'previous server instance must be marked retired',
+      );
+      // Delayed busy snapshot from retired server srv-5 must be rejected.
+      assert.equal(
+        applySessionState({
+          open: true,
+          busy: true,
+          serverInstanceId: 'srv-5',
+          stateSeq: 51,
+          activeInteraction: {
+            id: 'srv-5-int-51',
+            serverInstanceId: 'srv-5',
+            stateSeq: 51,
+            kind: 'alert',
+            request: { cTitle: 'Zombie Prompt', cMsg: 'Retired server' },
+          },
+        }),
+        false,
+      );
+      assert.equal(appState.activeInteraction, null);
+
+      // 19: Delayed busy snapshot on the SAME server instance must never replace or retire
+      // a newer displayed Acrobat prompt, while duplicate delivery of the same prompt still works.
+      openAcrobatInteraction({
+        id: 'srv-6-int-20',
+        serverInstanceId: 'srv-6',
+        stateSeq: 20,
+        kind: 'alert',
+        request: { cTitle: 'Prompt B', cMsg: 'Newer active prompt' },
+      });
+      assert.equal(appState.activeInteraction && appState.activeInteraction.id, 'srv-6-int-20');
+      assert.equal(
+        applySessionState({
+          open: true,
+          busy: true,
+          serverInstanceId: 'srv-6',
+          stateSeq: 10,
+          activeInteraction: {
+            id: 'srv-6-int-10',
+            serverInstanceId: 'srv-6',
+            stateSeq: 10,
+            kind: 'alert',
+            request: { cTitle: 'Prompt A', cMsg: 'Stale busy prompt' },
+          },
+        }),
+        false,
+        'delayed busy snapshot older than active prompt must be ignored',
+      );
+      assert.equal(
+        appState.activeInteraction && appState.activeInteraction.id,
+        'srv-6-int-20',
+        'newer prompt B must remain displayed',
+      );
+      assert.equal(
+        appState.retiredInteractionKeys.has('srv-6:srv-6-int-20'),
+        false,
+        'newer prompt B must NOT be retired by delayed older busy snapshot',
+      );
+      // Direct openAcrobatInteraction with older same-server prompt also refuses to replace B.
+      assert.equal(
+        openAcrobatInteraction({
+          id: 'srv-6-int-10',
+          serverInstanceId: 'srv-6',
+          stateSeq: 10,
+          kind: 'alert',
+          request: { cTitle: 'Prompt A', cMsg: 'Stale direct prompt' },
+        }),
+        false,
+      );
+      assert.equal(appState.activeInteraction && appState.activeInteraction.id, 'srv-6-int-20');
+      // Redelivery of prompt B itself (same key) is still accepted cleanly.
+      assert.equal(
+        applySessionState({
+          open: true,
+          busy: true,
+          serverInstanceId: 'srv-6',
+          stateSeq: 20,
+          activeInteraction: {
+            id: 'srv-6-int-20',
+            serverInstanceId: 'srv-6',
+            stateSeq: 20,
+            kind: 'alert',
+            request: { cTitle: 'Prompt B', cMsg: 'Newer active prompt' },
+          },
+        }),
+        true,
+      );
+      assert.equal(appState.activeInteraction && appState.activeInteraction.id, 'srv-6-int-20');
+      // Same-server delayed open snapshot (stateSeq 19 < 20) still keeps prompt B open.
+      applySessionState({
+        open: true,
+        serverInstanceId: 'srv-6',
+        sessionId: 'srv-6-s1',
+        stateSeq: 19,
+        path: 'CreatedA.pdf',
+        revision: 2,
+        fields: [],
+      });
+      assert.equal(appState.activeInteraction && appState.activeInteraction.id, 'srv-6-int-20');
+      // Same-server genuinely newer open snapshot (stateSeq 21 > 20) closes prompt B.
+      applySessionState({
+        open: true,
+        serverInstanceId: 'srv-6',
+        sessionId: 'srv-6-s1',
+        stateSeq: 21,
+        path: 'CreatedA.pdf',
+        revision: 3,
+        fields: [],
+      });
+      assert.equal(appState.activeInteraction, null);
+
+      // 20: Restart ordering — client has lastServerInstanceId = srv-6 and no active modal,
+      // receives an authoritative interaction from new server srv-7 BEFORE srv-7's first state
+      // snapshot, then a delayed state snapshot from old server srv-6 arrives.
+      // Adopting srv-7 on interaction delivery must retire srv-6 so delayed state from srv-6
+      // is rejected and NEVER retires srv-7 or dismisses srv-7's prompt; subsequent srv-7
+      // state and answering srv-7's prompt must succeed cleanly.
+      assert.equal(appState.lastServerInstanceId, 'srv-6');
+      assert.equal(appState.activeInteraction, null);
+      assert.equal(
+        openAcrobatInteraction(
+          {
+            id: 'srv-7-int-2',
+            serverInstanceId: 'srv-7',
+            stateSeq: 2,
+            kind: 'alert',
+            request: { cTitle: 'Server B Prompt', cMsg: 'Arrived over WS before B state' },
+          },
+          { allowAdoptNewInstance: true },
+        ),
+        true,
+      );
+      assert.equal(appState.lastServerInstanceId, 'srv-7');
+      assert.equal(appState.retiredServerInstanceIds.has('srv-6'), true);
+      assert.equal(appState.retiredServerInstanceIds.has('srv-7'), false);
+      assert.equal(appState.activeInteraction && appState.activeInteraction.id, 'srv-7-int-2');
+
+      // Delayed GET /api/session/state from old server srv-6 must be rejected without retiring srv-7.
+      assert.equal(
+        applySessionState({
+          open: true,
+          serverInstanceId: 'srv-6',
+          sessionId: 'srv-6-s1',
+          stateSeq: 22,
+          path: 'CreatedA.pdf',
+          revision: 4,
+          fields: [],
+        }),
+        false,
+        'delayed state from retired server srv-6 must be ignored',
+      );
+      assert.equal(
+        appState.retiredServerInstanceIds.has('srv-7'),
+        false,
+        'delayed srv-6 state must NEVER retire new server srv-7',
+      );
+      assert.equal(
+        appState.activeInteraction && appState.activeInteraction.id,
+        'srv-7-int-2',
+        'delayed srv-6 state must NOT close srv-7 prompt',
+      );
+
+      // Subsequent legitimate state snapshot from srv-7 (stateSeq 1 < prompt 2) applies and keeps prompt open.
+      assert.equal(
+        applySessionState({
+          open: true,
+          serverInstanceId: 'srv-7',
+          sessionId: 'srv-7-s1',
+          stateSeq: 1,
+          path: 'ServerB.pdf',
+          revision: 1,
+          fields: [],
+        }),
+        true,
+      );
+      assert.equal(appState.sheet && appState.sheet.path, 'ServerB.pdf');
+      assert.equal(appState.activeInteraction && appState.activeInteraction.id, 'srv-7-int-2');
+
+      // Answering srv-7's prompt succeeds and applies srv-7's post-prompt state (stateSeq 3).
+      let answeredSrv7 = false;
+      fetchHandler = async (path, opts) => {
+        if (path === '/api/session/interaction/srv-7-int-2') {
+          const body = JSON.parse(opts.body);
+          assert.equal(body.button, 1);
+          answeredSrv7 = true;
+          return jsonResp({
+            status: 'ok',
+            state: {
+              open: true,
+              serverInstanceId: 'srv-7',
+              sessionId: 'srv-7-s1',
+              stateSeq: 3,
+              path: 'ServerB.pdf',
+              revision: 2,
+              fields: [],
+            },
+          });
+        }
+        if (path === '/api/sheets') {
+          return jsonResp({ sheets: [], templates: [], characters: [], git: null });
+        }
+        return jsonResp({ status: 'ok' });
+      };
+      await submitInteraction({ button: 1 });
+      assert.equal(answeredSrv7, true, 'srv-7 prompt answer must be submitted');
+      assert.equal(appState.activeInteraction, null);
+      assert.equal(appState.sheet && appState.sheet.sessionId, 'srv-7-s1');
+      assert.equal(appState.lastStateSeq, 3);
+
+      // 21: Direct HTTP `handleActionResponse` interaction ordering and instance protection:
+      // 21a: Stale same-instance HTTP interaction (stateSeq 2 < lastStateSeq 3) must be rejected.
+      assert.equal(
+        await handleActionResponse({
+          status: 'interaction_required',
+          interaction: {
+            id: 'srv-7-int-stale',
+            serverInstanceId: 'srv-7',
+            stateSeq: 2,
+            kind: 'alert',
+            request: { cTitle: 'Stale HTTP', cMsg: 'Below watermark' },
+          },
+        }),
+        false,
+        'stale direct HTTP interaction below same-instance lastStateSeq must be rejected',
+      );
+      assert.equal(appState.activeInteraction, null);
+
+      // 21b: Equal same-instance stateSeq (3 === 3) is still accepted.
+      assert.equal(
+        await handleActionResponse({
+          status: 'interaction_required',
+          interaction: {
+            id: 'srv-7-int-eq',
+            serverInstanceId: 'srv-7',
+            stateSeq: 3,
+            kind: 'alert',
+            request: { cTitle: 'Current HTTP', cMsg: 'Equal to watermark' },
+          },
+        }),
+        true,
+      );
+      assert.equal(appState.activeInteraction && appState.activeInteraction.id, 'srv-7-int-eq');
+
+      // 21c: Delayed HTTP interaction from an unobserved old server instance (`srv-unseen-old`)
+      // must NOT retire the current authoritative server (`srv-7`) or close its prompt.
+      // It triggers a fresh recovery session read which sees live `srv-7`.
+      fetchHandler = async (path) => {
+        if (path === '/api/session/state') {
+          return jsonResp({
+            open: true,
+            busy: true,
+            serverInstanceId: 'srv-7',
+            stateSeq: 3,
+            activeInteraction: {
+              id: 'srv-7-int-eq',
+              serverInstanceId: 'srv-7',
+              stateSeq: 3,
+              kind: 'alert',
+              request: { cTitle: 'Current HTTP', cMsg: 'Equal to watermark' },
+            },
+          });
+        }
+        return jsonResp({ status: 'ok' });
+      };
+      assert.equal(
+        await handleActionResponse({
+          status: 'interaction_required',
+          interaction: {
+            id: 'unseen-int-1',
+            serverInstanceId: 'srv-unseen-old',
+            stateSeq: 99,
+            kind: 'alert',
+            request: { cTitle: 'Stopped Server', cMsg: 'Delayed HTTP from unobserved instance' },
+          },
+        }),
+        false,
+        'HTTP interaction from unobserved instance must not retire current instance',
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      assert.equal(appState.lastServerInstanceId, 'srv-7');
+      assert.equal(appState.retiredServerInstanceIds.has('srv-7'), false);
+      assert.equal(appState.activeInteraction && appState.activeInteraction.id, 'srv-7-int-eq');
+      closeAcrobatModal();
+
+      // 22: Cancelling New Character modal after `renderSheets()` detaches the template-row
+      // opener button restores focus to the replacement row's `+ New` button (or `#btn-new-char`
+      // if that template is no longer listed).
+      appState.templates = [
+        { path: 'templates/MPMB-2024-Blank.pdf', name: 'MPMB-2024-Blank.pdf', size_bytes: 1024, is_template: true },
+      ];
+      appState.characters = [];
+      renderSheets();
+      const firstRowBtns = element('templates-list').querySelectorAll('button');
+      assert.equal(firstRowBtns.length, 1);
+      const origRowBtn = firstRowBtns[0];
+      assert.equal(origRowBtn.dataset.templatePath, 'templates/MPMB-2024-Blank.pdf');
+      origRowBtn.focus();
+      openNewCharModal('templates/MPMB-2024-Blank.pdf');
+      // Refreshing Library replaces the row DOM, detaching `origRowBtn`.
+      renderSheets();
+      assert.equal(origRowBtn.isConnected, false);
+      const replacementRowBtn = element('templates-list').querySelectorAll('button')[0];
+      assert.notEqual(replacementRowBtn, origRowBtn);
+      assert.equal(replacementRowBtn.isConnected, true);
+      closeNewCharModal(true);
+      assert.equal(
+        context.document.activeElement,
+        replacementRowBtn,
+        'cancelling after Library refresh must focus the replacement template row + New button',
+      );
+      // If the template itself is removed before cancelling, fall back to `#btn-new-char`.
+      replacementRowBtn.focus();
+      openNewCharModal('templates/MPMB-2024-Blank.pdf');
+      appState.templates = [];
+      renderSheets();
+      assert.equal(replacementRowBtn.isConnected, false);
+      closeNewCharModal(true);
+      assert.equal(
+        context.document.activeElement,
+        element('btn-new-char'),
+        'cancelling when template row no longer exists must fall back to #btn-new-char',
+      );
+
+      // 23: Delayed HTTP `refreshSession()` from an UNOBSERVED server instance (`srv-8-unseen`)
+      // must NOT retire a newer authoritative WebSocket server instance (`srv-9-live`).
+      connectWs();
+      const wsLive = sockets[sockets.length - 1];
+      wsLive.readyState = MockWebSocket.OPEN;
+      wsLive.onopen();
+      let resolveDelayedUnseenRead;
+      fetchHandler = (path) => {
+        if (path === '/api/session/state') {
+          return new Promise((resolve) => { resolveDelayedUnseenRead = resolve; });
+        }
+        return Promise.resolve(jsonResp({ status: 'ok' }));
+      };
+      const pendingUnseenRefresh = refreshSession();
+      // While the HTTP fetch to unobserved `srv-8-unseen` is still in flight, WS
+      // establishes `srv-9-live` as authoritative (retiring `srv-7`, NOT `srv-8-unseen`).
+      wsLive.onmessage({
+        data: JSON.stringify({
+          type: 'state_updated',
+          state: {
+            open: true,
+            serverInstanceId: 'srv-9-live',
+            sessionId: 'srv-9-s1',
+            stateSeq: 1,
+            path: 'LiveC.pdf',
+            revision: 1,
+            fields: [],
+          },
+        }),
+      });
+      assert.equal(appState.lastServerInstanceId, 'srv-9-live');
+      assert.equal(appState.retiredServerInstanceIds.has('srv-8-unseen'), false);
+      // Now delayed HTTP response from unobserved `srv-8-unseen` resolves: must be ignored!
+      resolveDelayedUnseenRead(jsonResp({
+        open: true,
+        serverInstanceId: 'srv-8-unseen',
+        sessionId: 'srv-8-s1',
+        stateSeq: 5,
+        path: 'StaleB.pdf',
+        revision: 1,
+        fields: [],
+      }));
+      await pendingUnseenRefresh;
+      assert.equal(
+        appState.lastServerInstanceId,
+        'srv-9-live',
+        'delayed HTTP session response from unobserved server must not displace authoritative WS instance',
+      );
+      assert.equal(
+        appState.retiredServerInstanceIds.has('srv-9-live'),
+        false,
+        'authoritative WS server instance must NEVER be retired by delayed HTTP response',
+      );
+      assert.equal(appState.sheet && appState.sheet.path, 'LiveC.pdf');
+      // Subsequent WS updates from `srv-9-live` continue applying cleanly.
+      wsLive.onmessage({
+        data: JSON.stringify({
+          type: 'state_updated',
+          state: {
+            open: true,
+            serverInstanceId: 'srv-9-live',
+            sessionId: 'srv-9-s1',
+            stateSeq: 2,
+            path: 'LiveC.pdf',
+            revision: 2,
+            fields: [],
+          },
+        }),
+      });
+      assert.equal(appState.lastStateSeq, 2);
+
+      // 24: Prompt recovery when WS is unavailable and server restarts (srv-9-live -> srv-10-no-ws):
+      // 24a: Mismatched HTTP 202 triggers fresh session read which discovers and opens srv-10's prompt.
+      wsLive.onclose();
+      assert.equal(appState.wsConnected, false);
+      let recoveryStateReads = 0;
+      fetchHandler = async (path) => {
+        if (path === '/api/session/state') {
+          recoveryStateReads += 1;
+          return jsonResp({
+            open: true,
+            busy: true,
+            serverInstanceId: 'srv-10-no-ws',
+            stateSeq: 1,
+            activeInteraction: {
+              id: 'srv-10-int-1',
+              serverInstanceId: 'srv-10-no-ws',
+              stateSeq: 1,
+              kind: 'alert',
+              request: { cTitle: 'Recovered Prompt', cMsg: 'Recovered via fresh session read' },
+            },
+          });
+        }
+        return jsonResp({ status: 'ok' });
+      };
+      const directHandled = await handleActionResponse({
+        status: 'interaction_required',
+        interaction: {
+          id: 'srv-10-int-1',
+          serverInstanceId: 'srv-10-no-ws',
+          stateSeq: 1,
+          kind: 'alert',
+          request: { cTitle: 'Recovered Prompt', cMsg: 'Direct HTTP 202' },
+        },
+      });
+      async function flushMicrotasks() {
+        for (let i = 0; i < 10; i += 1) {
+          await Promise.resolve();
+        }
+      }
+      assert.equal(directHandled, false, 'mismatched direct HTTP action response must still return false');
+      await flushMicrotasks();
+      assert.equal(recoveryStateReads, 1, 'mismatched HTTP interaction must start fresh session read');
+      assert.equal(appState.lastServerInstanceId, 'srv-10-no-ws');
+      assert.equal(appState.retiredServerInstanceIds.has('srv-9-live'), true);
+      assert.equal(
+        appState.activeInteraction && appState.activeInteraction.id,
+        'srv-10-int-1',
+        'fresh session read must recover and display the live prompt when WS is unavailable',
+      );
+      closeAcrobatModal();
+
+      // 24b: If a newer authoritative WS event from `srv-11-ws` supersedes the recovery read
+      // while it is in flight, the stale recovery read from `srv-10b-stale` must be ignored.
+      let resolveSupersededRecovery;
+      fetchHandler = (path) => {
+        if (path === '/api/session/state') {
+          return new Promise((resolve) => { resolveSupersededRecovery = resolve; });
+        }
+        return Promise.resolve(jsonResp({ status: 'ok' }));
+      };
+      assert.equal(
+        await handleActionResponse({
+          status: 'interaction_required',
+          interaction: {
+            id: 'srv-10b-int-1',
+            serverInstanceId: 'srv-10b-stale',
+            stateSeq: 1,
+            kind: 'alert',
+            request: { cTitle: 'Stale Recovery', cMsg: 'Should be superseded by WS' },
+          },
+        }),
+        false,
+      );
+      // WS reconnects and delivers authoritative state from `srv-11-ws` before recovery read returns.
+      connectWs();
+      const wsRecovered = sockets[sockets.length - 1];
+      wsRecovered.readyState = MockWebSocket.OPEN;
+      wsRecovered.onmessage({
+        data: JSON.stringify({
+          type: 'state_updated',
+          state: {
+            open: true,
+            serverInstanceId: 'srv-11-ws',
+            sessionId: 'srv-11-s1',
+            stateSeq: 1,
+            path: 'WsAuthoritative.pdf',
+            revision: 1,
+            fields: [],
+          },
+        }),
+      });
+      assert.equal(appState.lastServerInstanceId, 'srv-11-ws');
+      resolveSupersededRecovery(jsonResp({
+        open: true,
+        busy: true,
+        serverInstanceId: 'srv-10b-stale',
+        stateSeq: 1,
+        activeInteraction: {
+          id: 'srv-10b-int-1',
+          serverInstanceId: 'srv-10b-stale',
+          stateSeq: 1,
+          kind: 'alert',
+          request: { cTitle: 'Stale Recovery', cMsg: 'Must be ignored' },
+        },
+      }));
+      await flushMicrotasks();
+      assert.equal(appState.lastServerInstanceId, 'srv-11-ws');
+      assert.equal(appState.retiredServerInstanceIds.has('srv-11-ws'), false);
+      assert.equal(appState.activeInteraction, null);
+
+      // 25: Rejected create 409 carrying an obsolete/already-cleared prompt must keep the
+      // New Character form open with the user's draft intact and invite a retry.
+      appState.templates = [
+        { path: 'templates/MPMB-2024-Blank.pdf', name: 'MPMB-2024-Blank.pdf', size_bytes: 1024, is_template: true },
+      ];
+      // Retire `srv-11-int-old` via WS clear before the 409 arrives.
+      wsRecovered.onmessage({
+        data: JSON.stringify({
+          type: 'interaction_requested',
+          interaction: {
+            id: 'srv-11-int-old',
+            serverInstanceId: 'srv-11-ws',
+            stateSeq: 2,
+            kind: 'alert',
+            request: { cTitle: 'Blocking', cMsg: 'Soon cleared' },
+          },
+        }),
+      });
+      wsRecovered.onmessage({
+        data: JSON.stringify({
+          type: 'interaction_cleared',
+          id: 'srv-11-int-old',
+          serverInstanceId: 'srv-11-ws',
+        }),
+      });
+      assert.equal(appState.activeInteraction, null);
+      openNewCharModal('templates/MPMB-2024-Blank.pdf');
+      element('nc-name').value = 'Thalia Draft';
+      fetchHandler = async (path) => {
+        if (path === '/api/sheets/new') {
+          return jsonResp(
+            {
+              error: 'active interaction',
+              status: 'interaction_required',
+              interaction: {
+                id: 'srv-11-int-old',
+                serverInstanceId: 'srv-11-ws',
+                stateSeq: 2,
+                kind: 'alert',
+                request: { cTitle: 'Blocking', cMsg: 'Already cleared' },
+              },
+            },
+            409,
+          );
+        }
+        return jsonResp({ status: 'ok' });
+      };
+      await createCharacterFromTemplate('templates/MPMB-2024-Blank.pdf', 'Thalia Draft');
+      assert.equal(
+        element('new-char-modal').classList.contains('hidden'),
+        false,
+        'obsolete 409 prompt must keep New Character modal open',
+      );
+      assert.equal(
+        element('nc-name').value,
+        'Thalia Draft',
+        'obsolete 409 prompt must preserve user draft name',
+      );
+      assert.match(
+        element('banner').textContent,
+        /retry/i,
+        'banner must inform the user they can retry',
+      );
+      closeNewCharModal(false);
 
       console.log('PWA_CLIENT_REGRESSIONS_OK');
     })().catch((err) => {
